@@ -4,10 +4,10 @@ import react from "@vitejs/plugin-react";
 
 export default defineConfig({
   fmt: {
-    ignorePatterns: ["src/routeTree.gen.ts"],
+    ignorePatterns: ["src/routeTree.gen.ts", ".zcode", ".firecrawl"],
   },
   lint: {
-    ignorePatterns: ["src/routeTree.gen.ts"],
+    ignorePatterns: ["src/routeTree.gen.ts", ".zcode", ".firecrawl"],
   },
   test: {
     include: ["src/**/*.test.{ts,tsx}"],
