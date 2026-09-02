@@ -27,7 +27,7 @@
     "format": "vp fmt --write . && vp lint --fix .",
     "check": "pnpm sync && vp fmt --check . && vp lint . && tsc --noEmit",
     "changeset": "changeset",
-    "release-publish": "pnpm publish --no-git-checks"
+    "release-publish": "changeset publish"
   },
   "dependencies": {
     "@tanstack/react-router": "1.170.18",
