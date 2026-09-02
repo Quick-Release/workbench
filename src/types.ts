@@ -11,6 +11,10 @@ export const ticketStatuses = [
 
 export type TicketStatus = (typeof ticketStatuses)[number];
 
+export const ticketKinds = ["ledger", "plan-ticket", "external"] as const;
+
+export const serviceStatuses = ["connected", "skipped", "error"] as const;
+
 export type TicketRecord = {
   id: string;
   title: string;
@@ -23,7 +27,7 @@ export type TicketRecord = {
   summary: string;
   sourcePath: string;
   sourceUrl: string;
-  kind: "ledger" | "plan-ticket" | "external";
+  kind: (typeof ticketKinds)[number];
   externalSource?: string;
   progress: { done: number; total: number };
 };
@@ -73,7 +77,7 @@ export type ExternalServiceStatus = {
   id: string;
   type: string;
   label: string;
-  status: "connected" | "skipped" | "error";
+  status: (typeof serviceStatuses)[number];
   itemCount: number;
   message: string;
   sourcePath: string;

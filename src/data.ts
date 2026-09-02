@@ -1,3 +1,5 @@
-import { overviewData } from "./data.generated";
+import { overviewData as generatedData } from "./data.generated";
+import { parseOverviewData } from "./schema";
+import type { OverviewData } from "./types";
 
-export { overviewData };
+export const overviewData: OverviewData = parseOverviewData(generatedData);
