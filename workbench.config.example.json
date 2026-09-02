@@ -1,0 +1,44 @@
+{
+  "$schema": "./workbench.config.schema.json",
+  "projectName": "Your project",
+  "theme": {
+    "background": "#101715",
+    "surface": "#17211d",
+    "surfaceElevated": "#1d2b25",
+    "accent": "#c5e86c",
+    "accentMuted": "#344525",
+    "text": "#f1f3e9",
+    "textMuted": "#a5b0a4",
+    "textFaint": "#718076"
+  },
+  "services": [
+    {
+      "id": "asana-roadmap",
+      "type": "asana",
+      "label": "Asana roadmap",
+      "projectGid": "replace-with-asana-project-gid",
+      "tokenEnv": "ASANA_TOKEN",
+      "statusMap": {
+        "Ready": "ready-for-agent",
+        "In progress": "in-progress",
+        "Blocked": "blocked"
+      }
+    },
+    {
+      "id": "notion-tasks",
+      "type": "notion",
+      "label": "Notion tasks",
+      "dataSourceId": "replace-with-notion-data-source-id",
+      "tokenEnv": "NOTION_TOKEN",
+      "properties": {
+        "title": "Name",
+        "status": "Status",
+        "group": "Project",
+        "lane": "Area",
+        "id": "Ticket ID",
+        "dependencies": "Dependencies",
+        "summary": "Description"
+      }
+    }
+  ]
+}

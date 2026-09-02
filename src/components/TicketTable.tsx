@@ -18,8 +18,8 @@ export function TicketTable({
           </h2>
         </div>
         <p>
-          Every local implementation record in the planning corpus, with a canonical status ledger
-          kept distinct from plan-file status.
+          Every implementation record in the planning corpus plus read-only tasks from configured
+          services, with canonical status kept distinct from plan-file status.
         </p>
       </div>
       <div className="result-line" aria-live="polite">
@@ -30,7 +30,7 @@ export function TicketTable({
       </div>
       <div className="table-shell">
         <table className="signal-table ticket-table">
-          <caption className="sr-only">Local implementation tickets</caption>
+          <caption className="sr-only">Implementation tickets and external tasks</caption>
           <thead>
             <tr>
               <th scope="col">Ticket</th>
@@ -62,11 +62,19 @@ function TicketRow({ ticket }: Readonly<{ ticket: TicketRecord }>) {
     <tr>
       <td className="ticket-title-cell">
         <div className="ticket-meta">
-          <a className="ticket-id" href={ticket.sourceUrl} target="_blank" rel="noreferrer">
-            {ticket.id} <span aria-hidden="true">↗</span>
-          </a>
+          {ticket.sourceUrl ? (
+            <a className="ticket-id" href={ticket.sourceUrl} target="_blank" rel="noreferrer">
+              {ticket.id} <span aria-hidden="true">↗</span>
+            </a>
+          ) : (
+            <span className="ticket-id">{ticket.id}</span>
+          )}
           <span className="kind-label">
-            {ticket.kind === "ledger" ? "canonical ledger" : "plan ticket"}
+            {ticket.kind === "ledger"
+              ? "canonical ledger"
+              : ticket.kind === "plan-ticket"
+                ? "plan ticket"
+                : ticket.externalSource || "external task"}
           </span>
         </div>
         <strong>{ticket.title}</strong>

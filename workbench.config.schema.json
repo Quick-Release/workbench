@@ -1,0 +1,106 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Quick-Release/workbench/raw/main/workbench.config.schema.json",
+  "title": "Workbench configuration",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "$schema": { "type": "string" },
+    "projectName": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 100
+    },
+    "repositoryUrl": {
+      "type": "string",
+      "format": "uri",
+      "pattern": "^https?://"
+    },
+    "theme": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "text": { "$ref": "#/$defs/color" },
+        "textMuted": { "$ref": "#/$defs/color" },
+        "textFaint": { "$ref": "#/$defs/color" },
+        "background": { "$ref": "#/$defs/color" },
+        "surface": { "$ref": "#/$defs/color" },
+        "surfaceElevated": { "$ref": "#/$defs/color" },
+        "border": { "$ref": "#/$defs/color" },
+        "borderStrong": { "$ref": "#/$defs/color" },
+        "accent": { "$ref": "#/$defs/color" },
+        "accentMuted": { "$ref": "#/$defs/color" },
+        "warning": { "$ref": "#/$defs/color" },
+        "warningMuted": { "$ref": "#/$defs/color" },
+        "danger": { "$ref": "#/$defs/color" },
+        "dangerMuted": { "$ref": "#/$defs/color" },
+        "info": { "$ref": "#/$defs/color" },
+        "infoMuted": { "$ref": "#/$defs/color" }
+      }
+    },
+    "services": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/service" }
+    }
+  },
+  "$defs": {
+    "color": {
+      "type": "string",
+      "pattern": "^#[0-9a-fA-F]{3,8}$"
+    },
+    "service": {
+      "type": "object",
+      "required": ["id", "type"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "type": { "type": "string", "minLength": 1, "maxLength": 40 },
+        "label": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "enabled": { "type": "boolean" },
+        "tokenEnv": {
+          "type": "string",
+          "pattern": "^[A-Z][A-Z0-9_]*$"
+        },
+        "maxPages": { "type": "integer", "minimum": 1, "maximum": 100 },
+        "idPrefix": { "type": "string", "maxLength": 40 },
+        "group": { "type": "string", "maxLength": 100 },
+        "lane": { "type": "string", "maxLength": 100 },
+        "statusMap": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        },
+        "projectGid": { "type": "string", "minLength": 1 },
+        "dataSourceId": { "type": "string", "minLength": 1 },
+        "notionVersion": {
+          "type": "string",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+        },
+        "properties": {
+          "type": "object",
+          "additionalProperties": { "type": "string" },
+          "properties": {
+            "title": { "type": "string" },
+            "status": { "type": "string" },
+            "group": { "type": "string" },
+            "lane": { "type": "string" },
+            "id": { "type": "string" },
+            "dependencies": { "type": "string" },
+            "summary": { "type": "string" }
+          }
+        },
+        "filter": { "type": "object" },
+        "sorts": { "type": "array" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "type": { "const": "asana" } } },
+          "then": { "required": ["projectGid"] }
+        },
+        {
+          "if": { "properties": { "type": { "const": "notion" } } },
+          "then": { "required": ["dataSourceId"] }
+        }
+      ],
+      "additionalProperties": true
+    }
+  }
+}

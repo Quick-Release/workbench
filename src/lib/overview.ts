@@ -71,6 +71,7 @@ export const filterTickets = (
         ticket.dependencies,
         ticket.summary,
         ticket.sourcePath,
+        ticket.externalSource || "",
       ]
         .map(searchable)
         .some((value) => value.includes(needle));

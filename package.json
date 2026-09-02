@@ -7,7 +7,7 @@
     "sync": "node scripts/sync-data.mjs && vp fmt --write src/data.generated.ts",
     "build": "pnpm sync && vp build",
     "preview": "vp preview",
-    "test": "pnpm sync && vp test run",
+    "test": "pnpm sync && vp test run && node --test scripts/config.test.mjs scripts/services.test.mjs",
     "lint": "vp lint .",
     "format": "vp fmt --write . && vp lint --fix .",
     "check": "pnpm sync && vp fmt --check . && vp lint . && tsc --noEmit"

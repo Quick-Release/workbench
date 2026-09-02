@@ -28,6 +28,45 @@ Set `WORKBENCH_SOURCE_ROOT=/path/to/repository` when running the standalone
 repository against a different checkout. `WORKBENCH_PROJECT_NAME` and
 `WORKBENCH_REPOSITORY_URL` can override the detected project metadata.
 
+## Configuration
+
+Copy `workbench.config.example.json` to `workbench.config.json` in the host
+repository. The JSON schema is available at `workbench.config.schema.json`.
+The config controls project metadata, semantic theme colors, and read-only
+service snapshots:
+
+```json
+{
+  "$schema": "./apps/workbench/workbench.config.schema.json",
+  "projectName": "Example project",
+  "theme": {
+    "background": "#101715",
+    "accent": "#c5e86c"
+  },
+  "services": [
+    {
+      "id": "roadmap",
+      "type": "asana",
+      "projectGid": "123456789",
+      "tokenEnv": "ASANA_TOKEN"
+    },
+    {
+      "id": "tasks",
+      "type": "notion",
+      "dataSourceId": "00000000-0000-0000-0000-000000000000",
+      "tokenEnv": "NOTION_TOKEN"
+    }
+  ]
+}
+```
+
+Supported service adapters are currently `asana` (project tasks) and `notion`
+(data-source pages). Tokens are read only from the named environment variables
+while `sync` runs; they are never written to the config or bundled into the
+browser. Service failures are reported in the snapshot and do not hide local
+Markdown records. Add future providers behind the adapter seam in
+`scripts/services/` rather than adding arbitrary browser-side URLs.
+
 ## Sources
 
 `scripts/sync-data.mjs` reads local Markdown and produces the ignored,
@@ -42,6 +81,8 @@ Missing optional directories are valid, so the app can be used by repositories
 that adopt only part of the conventions. Status labels preserve the canonical
 engineering vocabulary when it appears in source Markdown.
 
-The app does not call GitHub, include credentials, query a ticket database, or
-mutate remote issues. Links point to the detected repository remote for source
+The browser app does not call GitHub, include credentials, query a ticket
+database, or mutate remote issues. During `sync`, only explicitly configured
+Asana or Notion read endpoints are contacted with tokens supplied through the
+shell environment. Links point to the detected repository remote for source
 reading only.

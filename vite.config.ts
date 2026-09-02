@@ -9,5 +9,8 @@ export default defineConfig({
   lint: {
     ignorePatterns: ["src/routeTree.gen.ts"],
   },
+  test: {
+    include: ["src/**/*.test.{ts,tsx}"],
+  },
   plugins: [tanstackRouter({ target: "react" }), react()],
 });

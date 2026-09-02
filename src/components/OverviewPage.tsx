@@ -253,8 +253,8 @@ export function OverviewPage({
           <h2>Useful context, without pretending it is live.</h2>
           <p>
             Snapshot <code>{data.meta.commit.slice(0, 8)}</code> on <code>{data.meta.branch}</code>.
-            The projection is intentionally read-only and local; it does not authenticate to GitHub
-            or mutate a remote issue.
+            The projection is intentionally read-only and local. The browser never receives service
+            credentials or mutates a remote task.
           </p>
         </div>
         <div className="source-list">
@@ -262,6 +262,14 @@ export function OverviewPage({
             data.meta.sources.map((source) => <SourceLine key={source.path} {...source} />)
           ) : (
             <p className="muted-copy">No supported source documents found.</p>
+          )}
+          {data.meta.services.length > 0 && (
+            <div className="service-statuses">
+              <p className="section-kicker">Service sync</p>
+              {data.meta.services.map((service) => (
+                <ServiceStatusRow key={service.id} service={service} />
+              ))}
+            </div>
           )}
         </div>
       </footer>
@@ -308,6 +316,23 @@ function SourceLine({ label, path }: Readonly<{ label: string; path: string }>) 
     <div className="source-line">
       <span>{label}</span>
       <code>{path}</code>
+    </div>
+  );
+}
+
+function ServiceStatusRow({
+  service,
+}: Readonly<{ service: OverviewData["meta"]["services"][number] }>) {
+  return (
+    <div className={`service-status service-status-${service.status}`}>
+      <span>
+        <i aria-hidden="true" />
+        {service.label}
+      </span>
+      <small>
+        {service.itemCount > 0 ? `${service.itemCount} tasks · ` : ""}
+        {service.message}
+      </small>
     </div>
   );
 }
