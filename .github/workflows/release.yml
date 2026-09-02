@@ -21,11 +21,11 @@ jobs:
         with:
           node-version: 24
           cache: pnpm
-      # pnpm only expands env-var credentials from user-level config, and the
-      # changesets action's generated .npmrc targets npmjs.org — so write the
-      # token into the user config directly, as pnpm itself recommends.
+      # The changesets action overrides user-level npm config with its own
+      # generated .npmrc, so put a literal (CI-only) token in the project
+      # .npmrc, which both npm and pnpm always honor.
       - name: Configure GitHub Packages auth
-        run: pnpm config set "//npm.pkg.github.com/:_authToken" "${{ secrets.GITHUB_TOKEN }}" --location global
+        run: echo "//npm.pkg.github.com/:_authToken=${{ secrets.GITHUB_TOKEN }}" >> .npmrc
       - run: pnpm install --frozen-lockfile
       - run: pnpm check
       - uses: changesets/action@v1
