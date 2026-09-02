@@ -21,7 +21,11 @@ jobs:
         with:
           node-version: 24
           cache: pnpm
-          registry-url: https://npm.pkg.github.com
+      # pnpm only expands env-var credentials from user-level config, and the
+      # changesets action's generated .npmrc targets npmjs.org — so write the
+      # token into the user config directly, as pnpm itself recommends.
+      - name: Configure GitHub Packages auth
+        run: pnpm config set "//npm.pkg.github.com/:_authToken" "${{ secrets.GITHUB_TOKEN }}" --location global
       - run: pnpm install --frozen-lockfile
       - run: pnpm check
       - uses: changesets/action@v1
@@ -30,6 +34,3 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NPM_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # setup-node writes the user-level ~/.npmrc auth line against this
-          # variable; pnpm expands env vars only from user-level config.
-          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
