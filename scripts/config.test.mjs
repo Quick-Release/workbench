@@ -50,6 +50,61 @@ test("normalizes semantic colors and service declarations", async () => {
   }
 });
 
+test("validates github and gitlab service declarations", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "workbench-config-"));
+  try {
+    await writeFile(
+      join(directory, "workbench.config.json"),
+      JSON.stringify({
+        services: [
+          { id: "gh", type: "github", repo: "example/project" },
+          {
+            id: "gl",
+            type: "gitlab",
+            projectPath: "group/project",
+            apiBaseUrl: "https://gitlab.example.com/api/v4/",
+          },
+        ],
+      }),
+    );
+    const config = await loadWorkbenchConfig(directory);
+    strictEqual(config.services[0].type, "github");
+    strictEqual(config.services[0].repo, "example/project");
+    strictEqual(config.services[1].projectPath, "group/project");
+    strictEqual(config.services[1].apiBaseUrl, "https://gitlab.example.com/api/v4");
+
+    await writeFile(
+      join(directory, "workbench.config.json"),
+      JSON.stringify({ services: [{ id: "gh", type: "github", repo: "not-a-repo" }] }),
+    );
+    await rejects(loadWorkbenchConfig(directory), /repo must be in owner\/name format/);
+
+    await writeFile(
+      join(directory, "workbench.config.json"),
+      JSON.stringify({ services: [{ id: "gl", type: "gitlab" }] }),
+    );
+    await rejects(loadWorkbenchConfig(directory), /projectId or a projectPath/);
+
+    await writeFile(
+      join(directory, "workbench.config.json"),
+      JSON.stringify({
+        services: [{ id: "gl", type: "gitlab", projectId: "not-numeric" }],
+      }),
+    );
+    await rejects(loadWorkbenchConfig(directory), /projectId must be a numeric/);
+
+    await writeFile(
+      join(directory, "workbench.config.json"),
+      JSON.stringify({
+        services: [{ id: "gh", type: "github", repo: "a/b", apiBaseUrl: "ftp://api.example.com" }],
+      }),
+    );
+    await rejects(loadWorkbenchConfig(directory), /apiBaseUrl must be an http\(s\) URL/);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("rejects inline service credentials and invalid colors", async () => {
   const directory = await mkdtemp(join(tmpdir(), "workbench-config-"));
   try {

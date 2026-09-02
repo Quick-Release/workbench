@@ -1,5 +1,49 @@
-import { StatusBadge } from "./StatusBadge";
+import { createColumnHelper, flexRender, useTable } from "@tanstack/react-table";
+
+import { statusSortFn, sortableTableFeatures } from "../lib/table";
 import type { TicketRecord } from "../types";
+import { StatusBadge } from "./StatusBadge";
+
+const ticketHelper = createColumnHelper<typeof sortableTableFeatures, TicketRecord>();
+
+const ticketColumns = ticketHelper.columns([
+  ticketHelper.accessor("id", {
+    id: "ticket",
+    header: "Ticket",
+    cell: ({ row }) => <TicketTitleCell ticket={row.original} />,
+  }),
+  ticketHelper.accessor("status", {
+    id: "status",
+    header: "Status",
+    sortFn: statusSortFn,
+    cell: ({ row }) => <TicketStatusCell ticket={row.original} />,
+  }),
+  ticketHelper.accessor("group", {
+    id: "stream",
+    header: "Stream / lane",
+    cell: ({ row }) => <TicketStreamCell ticket={row.original} />,
+  }),
+  ticketHelper.accessor("dependencies", {
+    id: "dependencies",
+    header: "Dependencies",
+    cell: ({ row }) => <TicketDependenciesCell ticket={row.original} />,
+  }),
+  ticketHelper.accessor(
+    (ticket) =>
+      ticket.progress.total > 0 ? ticket.progress.done / ticket.progress.total : undefined,
+    {
+      id: "progress",
+      header: "Progress",
+      sortFn: "basic",
+      sortUndefined: "last",
+      cell: ({ row }) => <TicketProgressCell ticket={row.original} />,
+    },
+  ),
+]);
+
+const cellClassNames: Partial<Record<string, string>> = {
+  ticket: "ticket-title-cell",
+};
 
 export function TicketTable({
   tickets,
@@ -8,6 +52,14 @@ export function TicketTable({
   tickets: readonly TicketRecord[];
   total: number;
 }>) {
+  const table = useTable({
+    features: sortableTableFeatures,
+    columns: ticketColumns,
+    data: tickets,
+    getRowId: (ticket) => ticket.id,
+  });
+  const rows = table.getRowModel().rows;
+
   return (
     <section className="content-section" id="tickets">
       <div className="section-heading">
@@ -32,23 +84,57 @@ export function TicketTable({
         <table className="signal-table ticket-table">
           <caption className="sr-only">Implementation tickets and external tasks</caption>
           <thead>
-            <tr>
-              <th scope="col">Ticket</th>
-              <th scope="col">Status</th>
-              <th scope="col">Stream / lane</th>
-              <th scope="col">Dependencies</th>
-              <th scope="col">Progress</th>
-            </tr>
+            {table.getHeaderGroups().map((headerGroup) => (
+              <tr key={headerGroup.id}>
+                {headerGroup.headers.map((header) => {
+                  const sorted = header.column.getIsSorted();
+                  return (
+                    <th
+                      key={header.id}
+                      scope="col"
+                      aria-sort={
+                        sorted === "asc"
+                          ? "ascending"
+                          : sorted === "desc"
+                            ? "descending"
+                            : undefined
+                      }
+                    >
+                      {header.isPlaceholder ? null : (
+                        <button
+                          type="button"
+                          className={sorted ? "th-sort sorted" : "th-sort"}
+                          onClick={header.column.getToggleSortingHandler()}
+                        >
+                          {flexRender(header.column.columnDef.header, header.getContext())}
+                          <span className="sort-mark" aria-hidden="true">
+                            {sorted === "asc" ? "▲" : sorted === "desc" ? "▼" : "↕"}
+                          </span>
+                        </button>
+                      )}
+                    </th>
+                  );
+                })}
+              </tr>
+            ))}
           </thead>
           <tbody>
-            {tickets.length === 0 ? (
+            {rows.length === 0 ? (
               <tr>
-                <td className="table-empty" colSpan={5}>
+                <td className="table-empty" colSpan={ticketColumns.length}>
                   No tickets match this lens. Clear the filters to restore the full ledger.
                 </td>
               </tr>
             ) : (
-              tickets.map((ticket) => <TicketRow key={ticket.id} ticket={ticket} />)
+              rows.map((row) => (
+                <tr key={row.id}>
+                  {row.getAllCells().map((cell) => (
+                    <td key={cell.id} className={cellClassNames[cell.column.id]}>
+                      {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                    </td>
+                  ))}
+                </tr>
+              ))
             )}
           </tbody>
         </table>
@@ -57,61 +143,72 @@ export function TicketTable({
   );
 }
 
-function TicketRow({ ticket }: Readonly<{ ticket: TicketRecord }>) {
+function TicketTitleCell({ ticket }: Readonly<{ ticket: TicketRecord }>) {
   return (
-    <tr>
-      <td className="ticket-title-cell">
-        <div className="ticket-meta">
-          {ticket.sourceUrl ? (
-            <a className="ticket-id" href={ticket.sourceUrl} target="_blank" rel="noreferrer">
-              {ticket.id} <span aria-hidden="true">↗</span>
-            </a>
-          ) : (
-            <span className="ticket-id">{ticket.id}</span>
-          )}
-          <span className="kind-label">
-            {ticket.kind === "ledger"
-              ? "canonical ledger"
-              : ticket.kind === "plan-ticket"
-                ? "plan ticket"
-                : ticket.externalSource || "external task"}
-          </span>
-        </div>
-        <strong>{ticket.title}</strong>
-        <p>{ticket.summary}</p>
-        <code className="source-path">{ticket.sourcePath}</code>
-      </td>
-      <td>
-        <StatusBadge status={ticket.status} label={ticket.statusLabel} />
-        {ticket.statusDetail && ticket.statusDetail !== ticket.statusLabel && (
-          <small className="status-detail">{ticket.statusDetail}</small>
-        )}
-      </td>
-      <td>
-        <strong className="stream-name">{ticket.group}</strong>
-        <small>{ticket.lane}</small>
-      </td>
-      <td>
-        <span className="dependency-text">{ticket.dependencies}</span>
-      </td>
-      <td>
-        {ticket.progress.total > 0 ? (
-          <div className="progress-cell">
-            <div className="progress-bar" aria-hidden="true">
-              <span
-                style={{
-                  width: `${Math.round((ticket.progress.done / ticket.progress.total) * 100)}%`,
-                }}
-              />
-            </div>
-            <small>
-              {ticket.progress.done}/{ticket.progress.total} checked
-            </small>
-          </div>
+    <>
+      <div className="ticket-meta">
+        {ticket.sourceUrl ? (
+          <a className="ticket-id" href={ticket.sourceUrl} target="_blank" rel="noreferrer">
+            {ticket.id} <span aria-hidden="true">↗</span>
+          </a>
         ) : (
-          <small className="muted-copy">No checklist</small>
+          <span className="ticket-id">{ticket.id}</span>
         )}
-      </td>
-    </tr>
+        <span className="kind-label">
+          {ticket.kind === "ledger"
+            ? "canonical ledger"
+            : ticket.kind === "plan-ticket"
+              ? "plan ticket"
+              : ticket.externalSource || "external task"}
+        </span>
+      </div>
+      <strong>{ticket.title}</strong>
+      <p>{ticket.summary}</p>
+      <code className="source-path">{ticket.sourcePath}</code>
+    </>
+  );
+}
+
+function TicketStatusCell({ ticket }: Readonly<{ ticket: TicketRecord }>) {
+  return (
+    <>
+      <StatusBadge status={ticket.status} label={ticket.statusLabel} />
+      {ticket.statusDetail && ticket.statusDetail !== ticket.statusLabel && (
+        <small className="status-detail">{ticket.statusDetail}</small>
+      )}
+    </>
+  );
+}
+
+function TicketStreamCell({ ticket }: Readonly<{ ticket: TicketRecord }>) {
+  return (
+    <>
+      <strong className="stream-name">{ticket.group}</strong>
+      <small>{ticket.lane}</small>
+    </>
+  );
+}
+
+function TicketDependenciesCell({ ticket }: Readonly<{ ticket: TicketRecord }>) {
+  return <span className="dependency-text">{ticket.dependencies}</span>;
+}
+
+function TicketProgressCell({ ticket }: Readonly<{ ticket: TicketRecord }>) {
+  if (ticket.progress.total === 0) {
+    return <small className="muted-copy">No checklist</small>;
+  }
+  return (
+    <div className="progress-cell">
+      <div className="progress-bar" aria-hidden="true">
+        <span
+          style={{
+            width: `${Math.round((ticket.progress.done / ticket.progress.total) * 100)}%`,
+          }}
+        />
+      </div>
+      <small>
+        {ticket.progress.done}/{ticket.progress.total} checked
+      </small>
+    </div>
   );
 }

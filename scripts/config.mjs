@@ -53,20 +53,38 @@ const stringValue = (value, name, { maxLength = 200 } = {}) => {
   return result;
 };
 
-const repositoryUrl = (value) => {
-  const result = stringValue(value, "repositoryUrl", { maxLength: 500 });
+const httpUrlValue = (value, name, { maxLength = 500 } = {}) => {
+  const result = stringValue(value, name, { maxLength });
   if (!result) return undefined;
   let url;
   try {
     url = new URL(result);
   } catch {
-    throw new Error("repositoryUrl must be an http(s) URL");
+    throw new Error(`${name} must be an http(s) URL`);
   }
   if (url.protocol !== "http:" && url.protocol !== "https:")
-    throw new Error("repositoryUrl must be an http(s) URL");
+    throw new Error(`${name} must be an http(s) URL`);
   if (url.username || url.password || url.hash)
-    throw new Error("repositoryUrl cannot contain credentials or a fragment");
+    throw new Error(`${name} cannot contain credentials or a fragment`);
   return result.replace(/\/+$/, "");
+};
+
+const repositoryUrl = (value) => httpUrlValue(value, "repositoryUrl");
+
+const repositoryName = (value, name) => {
+  const result = stringValue(value, name, { maxLength: 300 });
+  if (!result) return undefined;
+  if (!/^[A-Za-z0-9][A-Za-z0-9_.-]*\/[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(result))
+    throw new Error(`${name} must be in owner/name format`);
+  return result;
+};
+
+const projectPathValue = (value, name) => {
+  const result = stringValue(value, name, { maxLength: 300 });
+  if (!result) return undefined;
+  if (!/^[A-Za-z0-9][A-Za-z0-9_.-]*(\/[A-Za-z0-9][A-Za-z0-9_.-]*)+$/.test(result))
+    throw new Error(`${name} must be a project path like group/project`);
+  return result;
 };
 
 const normalizeTheme = (value) => {
@@ -120,17 +138,39 @@ const normalizeServices = (value) => {
       throw new Error(`services[${index}].projectGid must be a non-empty string`);
     if (serviceType === "notion" && !dataSourceId)
       throw new Error(`services[${index}].dataSourceId must be a non-empty string`);
+    const repo =
+      serviceType === "github"
+        ? repositoryName(service.repo, `services[${index}].repo`)
+        : undefined;
+    if (serviceType === "github" && !repo)
+      throw new Error(`services[${index}].repo must be in owner/name format`);
+    const projectId =
+      serviceType === "gitlab" && service.projectId !== undefined && service.projectId !== null
+        ? String(service.projectId).trim()
+        : undefined;
+    if (projectId !== undefined && !/^\d+$/.test(projectId))
+      throw new Error(`services[${index}].projectId must be a numeric GitLab project ID`);
+    const projectPath =
+      serviceType === "gitlab"
+        ? projectPathValue(service.projectPath, `services[${index}].projectPath`)
+        : undefined;
+    if (serviceType === "gitlab" && !projectId && !projectPath)
+      throw new Error(
+        `services[${index}] needs a numeric projectId or a projectPath like group/project`,
+      );
     if (
       service.notionVersion !== undefined &&
       (typeof service.notionVersion !== "string" ||
         !/^\d{4}-\d{2}-\d{2}$/.test(service.notionVersion))
     )
       throw new Error(`services[${index}].notionVersion must be an ISO date`);
+    const apiBaseUrl = httpUrlValue(service.apiBaseUrl, `services[${index}].apiBaseUrl`);
     return {
       ...service,
       id,
       type: serviceType,
       ...(tokenEnv ? { tokenEnv } : {}),
+      ...(apiBaseUrl ? { apiBaseUrl } : {}),
     };
   });
 };

@@ -70,6 +70,24 @@
         },
         "projectGid": { "type": "string", "minLength": 1 },
         "dataSourceId": { "type": "string", "minLength": 1 },
+        "repo": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 300,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9][A-Za-z0-9_.-]*$"
+        },
+        "projectId": { "type": ["string", "number"], "minLength": 1, "pattern": "^\\d+$" },
+        "projectPath": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 300,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*(/[A-Za-z0-9][A-Za-z0-9_.-]*)+$"
+        },
+        "apiBaseUrl": {
+          "type": "string",
+          "format": "uri",
+          "pattern": "^https?://"
+        },
         "notionVersion": {
           "type": "string",
           "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
@@ -98,6 +116,14 @@
         {
           "if": { "properties": { "type": { "const": "notion" } } },
           "then": { "required": ["dataSourceId"] }
+        },
+        {
+          "if": { "properties": { "type": { "const": "github" } } },
+          "then": { "required": ["repo"] }
+        },
+        {
+          "if": { "properties": { "type": { "const": "gitlab" } } },
+          "then": { "anyOf": [{ "required": ["projectId"] }, { "required": ["projectPath"] }] }
         }
       ],
       "additionalProperties": true

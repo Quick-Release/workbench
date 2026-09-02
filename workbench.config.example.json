@@ -39,6 +39,20 @@
         "dependencies": "Dependencies",
         "summary": "Description"
       }
+    },
+    {
+      "id": "github-issues",
+      "type": "github",
+      "label": "GitHub issues",
+      "repo": "replace-with-owner/replace-with-repo",
+      "tokenEnv": "GITHUB_TOKEN"
+    },
+    {
+      "id": "gitlab-issues",
+      "type": "gitlab",
+      "label": "GitLab issues",
+      "projectPath": "replace-with-group/replace-with-project",
+      "tokenEnv": "GITLAB_TOKEN"
     }
   ]
 }

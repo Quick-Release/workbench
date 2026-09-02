@@ -94,6 +94,18 @@ export const statusFromService = (service, value, completed = false) => {
   return statusFor(statusMap[value] ?? value, completed);
 };
 
+export const statusFromLabels = (service, labels, completed = false) => {
+  if (completed) return { status: "complete", statusLabel: "complete" };
+  const names = (Array.isArray(labels) ? labels : [])
+    .map((label) => stringValue(typeof label === "string" ? label : label?.name))
+    .filter(Boolean);
+  for (const name of names) {
+    const candidate = statusFromService(service, name, false);
+    if (candidate.status !== "planned") return candidate;
+  }
+  return { status: "planned", statusLabel: statusLabels.planned };
+};
+
 export const plainText = (value) =>
   stringValue(value)
     .replace(/<[^>]*>/g, " ")

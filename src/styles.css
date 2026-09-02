@@ -672,6 +672,39 @@ code {
   text-transform: uppercase;
 }
 
+.th-sort {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  letter-spacing: inherit;
+  text-align: inherit;
+  text-transform: inherit;
+}
+
+.th-sort:hover,
+.th-sort:focus-visible {
+  color: var(--acid);
+}
+
+.th-sort .sort-mark {
+  font-size: 0.5rem;
+  opacity: 0.4;
+}
+
+.th-sort.sorted {
+  color: var(--acid);
+}
+
+.th-sort.sorted .sort-mark {
+  opacity: 1;
+}
+
 .signal-table tbody tr:last-child td {
   border-bottom: 0;
 }

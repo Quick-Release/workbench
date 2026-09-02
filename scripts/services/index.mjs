@@ -1,10 +1,14 @@
 import { fetchAsana } from "./asana.mjs";
+import { fetchGitHub } from "./github.mjs";
+import { fetchGitLab } from "./gitlab.mjs";
 import { fetchNotion } from "./notion.mjs";
 import { isEnabled, serviceLabel, serviceStatus } from "./shared.mjs";
 
 const adapters = {
   asana: fetchAsana,
   notion: fetchNotion,
+  github: fetchGitHub,
+  gitlab: fetchGitLab,
 };
 
 const safeMessage = (error) => (error instanceof Error ? error.message : "unknown service error");
@@ -65,4 +69,4 @@ export const fetchConfiguredServices = async (
   return { records, statuses };
 };
 
-export { fetchAsana, fetchNotion };
+export { fetchAsana, fetchNotion, fetchGitHub, fetchGitLab };

@@ -1,5 +1,40 @@
-import { StatusBadge } from "./StatusBadge";
+import { createColumnHelper, flexRender, useTable } from "@tanstack/react-table";
+
+import { statusSortFn, sortableTableFeatures } from "../lib/table";
 import type { PlanRecord } from "../types";
+import { StatusBadge } from "./StatusBadge";
+
+const planHelper = createColumnHelper<typeof sortableTableFeatures, PlanRecord>();
+
+const planColumns = planHelper.columns([
+  planHelper.accessor("id", {
+    id: "source",
+    header: "Source",
+    cell: ({ row }) => <PlanSourceCell plan={row.original} />,
+  }),
+  planHelper.accessor("status", {
+    id: "status",
+    header: "Status",
+    sortFn: statusSortFn,
+    cell: ({ row }) => <PlanStatusCell plan={row.original} />,
+  }),
+  planHelper.accessor("ticketCount", {
+    id: "load",
+    header: "Ticket load",
+    sortFn: "basic",
+    cell: ({ row }) => <PlanLoadCell plan={row.original} />,
+  }),
+  planHelper.accessor("stream", {
+    id: "about",
+    header: "What it is about",
+    cell: ({ row }) => <PlanAboutCell plan={row.original} />,
+  }),
+]);
+
+const cellClassNames: Partial<Record<string, string>> = {
+  source: "plan-title-cell",
+  load: "plan-load-cell",
+};
 
 export function PlanTable({
   plans,
@@ -8,6 +43,14 @@ export function PlanTable({
   plans: readonly PlanRecord[];
   total: number;
 }>) {
+  const table = useTable({
+    features: sortableTableFeatures,
+    columns: planColumns,
+    data: plans,
+    getRowId: (plan) => plan.id,
+  });
+  const rows = table.getRowModel().rows;
+
   return (
     <section className="content-section" id="plans">
       <div className="section-heading">
@@ -32,22 +75,57 @@ export function PlanTable({
         <table className="signal-table plan-table">
           <caption className="sr-only">Local planning source documents</caption>
           <thead>
-            <tr>
-              <th scope="col">Source</th>
-              <th scope="col">Status</th>
-              <th scope="col">Ticket load</th>
-              <th scope="col">What it is about</th>
-            </tr>
+            {table.getHeaderGroups().map((headerGroup) => (
+              <tr key={headerGroup.id}>
+                {headerGroup.headers.map((header) => {
+                  const sorted = header.column.getIsSorted();
+                  return (
+                    <th
+                      key={header.id}
+                      scope="col"
+                      aria-sort={
+                        sorted === "asc"
+                          ? "ascending"
+                          : sorted === "desc"
+                            ? "descending"
+                            : undefined
+                      }
+                    >
+                      {header.isPlaceholder ? null : (
+                        <button
+                          type="button"
+                          className={sorted ? "th-sort sorted" : "th-sort"}
+                          onClick={header.column.getToggleSortingHandler()}
+                        >
+                          {flexRender(header.column.columnDef.header, header.getContext())}
+                          <span className="sort-mark" aria-hidden="true">
+                            {sorted === "asc" ? "▲" : sorted === "desc" ? "▼" : "↕"}
+                          </span>
+                        </button>
+                      )}
+                    </th>
+                  );
+                })}
+              </tr>
+            ))}
           </thead>
           <tbody>
-            {plans.length === 0 ? (
+            {rows.length === 0 ? (
               <tr>
-                <td className="table-empty" colSpan={4}>
+                <td className="table-empty" colSpan={planColumns.length}>
                   No plan sources match this lens.
                 </td>
               </tr>
             ) : (
-              plans.map((plan) => <PlanRow key={plan.id} plan={plan} />)
+              rows.map((row) => (
+                <tr key={row.id}>
+                  {row.getAllCells().map((cell) => (
+                    <td key={cell.id} className={cellClassNames[cell.column.id]}>
+                      {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                    </td>
+                  ))}
+                </tr>
+              ))
             )}
           </tbody>
         </table>
@@ -56,37 +134,50 @@ export function PlanTable({
   );
 }
 
-function PlanRow({ plan }: Readonly<{ plan: PlanRecord }>) {
+function PlanSourceCell({ plan }: Readonly<{ plan: PlanRecord }>) {
+  return (
+    <>
+      <a className="plan-id" href={plan.sourceUrl} target="_blank" rel="noreferrer">
+        {plan.id} <span aria-hidden="true">↗</span>
+      </a>
+      <strong>{plan.title}</strong>
+      <code className="source-path">{plan.sourcePath}</code>
+    </>
+  );
+}
+
+function PlanStatusCell({ plan }: Readonly<{ plan: PlanRecord }>) {
+  return (
+    <>
+      <StatusBadge status={plan.status} label={plan.statusLabel} />
+      {plan.statusDetail && plan.statusDetail !== plan.statusLabel && (
+        <small className="status-detail">{plan.statusDetail}</small>
+      )}
+    </>
+  );
+}
+
+function PlanLoadCell({ plan }: Readonly<{ plan: PlanRecord }>) {
   const progress =
     plan.ticketCount === 0 ? 0 : Math.round((plan.completeTicketCount / plan.ticketCount) * 100);
   return (
-    <tr>
-      <td className="plan-title-cell">
-        <a className="plan-id" href={plan.sourceUrl} target="_blank" rel="noreferrer">
-          {plan.id} <span aria-hidden="true">↗</span>
-        </a>
-        <strong>{plan.title}</strong>
-        <code className="source-path">{plan.sourcePath}</code>
-      </td>
-      <td>
-        <StatusBadge status={plan.status} label={plan.statusLabel} />
-        {plan.statusDetail && plan.statusDetail !== plan.statusLabel && (
-          <small className="status-detail">{plan.statusDetail}</small>
-        )}
-      </td>
-      <td className="plan-load-cell">
-        <strong>{plan.ticketCount}</strong>
-        <span>
-          {plan.openTicketCount} open / {plan.completeTicketCount} complete
-        </span>
-        <div className="progress-bar" aria-label={`${progress}% of plan tickets complete`}>
-          <span style={{ width: `${progress}%` }} />
-        </div>
-      </td>
-      <td>
-        <span className="stream-chip">{plan.stream}</span>
-        <p className="plan-summary">{plan.summary}</p>
-      </td>
-    </tr>
+    <>
+      <strong>{plan.ticketCount}</strong>
+      <span>
+        {plan.openTicketCount} open / {plan.completeTicketCount} complete
+      </span>
+      <div className="progress-bar" aria-label={`${progress}% of plan tickets complete`}>
+        <span style={{ width: `${progress}%` }} />
+      </div>
+    </>
+  );
+}
+
+function PlanAboutCell({ plan }: Readonly<{ plan: PlanRecord }>) {
+  return (
+    <>
+      <span className="stream-chip">{plan.stream}</span>
+      <p className="plan-summary">{plan.summary}</p>
+    </>
   );
 }
