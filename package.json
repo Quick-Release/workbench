@@ -1,0 +1,31 @@
+{
+  "name": "@banquinha/workbench",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "pnpm sync && vp dev --port 4051 --strictPort",
+    "sync": "node scripts/sync-data.mjs && vp fmt --write src/data.generated.ts",
+    "build": "pnpm sync && vp build",
+    "preview": "vp preview",
+    "test": "pnpm sync && vp test run",
+    "lint": "vp lint .",
+    "format": "vp fmt --write . && vp lint --fix .",
+    "check": "pnpm sync && vp fmt --check . && vp lint . && tsc --noEmit"
+  },
+  "dependencies": {
+    "@tanstack/react-router": "1.170.18",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@tanstack/router-plugin": "1.168.23",
+    "@types/react": "19.2.17",
+    "@types/react-dom": "19.2.3",
+    "@vitejs/plugin-react": "6.0.5",
+    "typescript": "6.0.3",
+    "vite": "catalog:",
+    "vite-plus": "catalog:",
+    "vitest": "catalog:"
+  }
+}

@@ -1,0 +1,6 @@
+node_modules/
+dist/
+.vite/
+
+# Generated from the host repository's local Markdown corpus.
+src/data.generated.ts
