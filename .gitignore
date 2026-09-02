@@ -7,3 +7,6 @@ workbench.config.json
 
 # Generated from the host repository's local Markdown corpus.
 src/data.generated.ts
+
+# Firecrawl tool session scratch.
+.firecrawl/
