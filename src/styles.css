@@ -402,7 +402,7 @@ code {
 
 .section-nav {
   position: sticky;
-  top: 95px;
+  top: calc(var(--header-height) + 8px);
   z-index: 8;
   justify-content: start;
   flex-wrap: wrap;
@@ -535,7 +535,7 @@ code {
 }
 
 .content-section {
-  scroll-margin-top: 160px;
+  scroll-margin-top: calc(var(--header-height) + 24px);
   margin-bottom: 78px;
 }
 
@@ -735,7 +735,7 @@ code {
   gap: 70px;
   padding-top: 25px;
   border-top: 1px solid var(--line);
-  scroll-margin-top: 150px;
+  scroll-margin-top: calc(var(--header-height) + 24px);
 }
 
 .site-footer h2 {

@@ -58,7 +58,6 @@ export function SessionsPage({
   onSearchChange: (next: Partial<SessionsSearch>) => void;
 }>) {
   const usage = data.sessions;
-  const projectName = data.meta.projectName || data.meta.repo || "Local project";
   const models = usage.perModel;
   const totals = useMemo(
     () => ({
@@ -77,32 +76,7 @@ export function SessionsPage({
   }, [usage.sessions, search.subagents]);
 
   return (
-    <main className="app-shell" id="top">
-      <div className="ambient ambient-one" />
-      <div className="ambient ambient-two" />
-      <header className="site-header">
-        <div className="topline">
-          <span className="eyebrow">{projectName.toLocaleUpperCase()} / AGENT SESSIONS</span>
-          <span className="snapshot">
-            USAGE AS OF <b>{usage.generatedAt.slice(0, 10)}</b>
-          </span>
-        </div>
-        <div className="brand-row">
-          <a className="brand" href="#top" aria-label="Workbench sessions">
-            <span className="brand-mark">W</span>
-            <span>
-              work<span>bench</span>
-            </span>
-          </a>
-          <div className="header-actions">
-            <span className="local-badge">
-              <i /> read-only / local
-            </span>
-            <a href="/">← ticket ledger</a>
-          </div>
-        </div>
-      </header>
-
+    <>
       {!usage.enabled && (
         <section className="content-section" aria-label="Sessions disabled">
           <Card className="rounded-none border-line bg-panel/90 p-6">
@@ -147,7 +121,7 @@ export function SessionsPage({
           />
         </>
       )}
-    </main>
+    </>
   );
 }
 

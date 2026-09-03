@@ -251,7 +251,6 @@ describe("rendered dashboard shell (shadcn rebuild)", () => {
     expect(html).toContain("border-t-info");
     expect(html).toContain("text-good");
     expect(html).toContain("text-warn");
-    expect(html).toContain("LOCAL SNAPSHOT");
   });
 
   it("renders the sessions page with charts and the session table", () => {

@@ -66,7 +66,6 @@ export function OverviewPage({
   resetSearch: () => void;
 }>) {
   const summary = summaryFor(data);
-  const projectName = data.meta.projectName || data.meta.repo || "Local project";
   const groups = uniqueGroups(data.tickets);
   const visibleTickets = useMemo(
     () => filterTickets(data.tickets, search.q, search.status, search.stream),
@@ -87,10 +86,6 @@ export function OverviewPage({
   const attentionTickets = data.tickets
     .filter((ticket) => ["gated", "blocked", "needs-development"].includes(ticket.status))
     .slice(0, 3);
-  const snapshot = new Intl.DateTimeFormat("en-GB", {
-    dateStyle: "medium",
-    timeStyle: "short",
-  }).format(new Date(data.meta.snapshot));
   const activeFilter =
     search.q.length > 0 ||
     search.status !== "all" ||
@@ -98,37 +93,7 @@ export function OverviewPage({
     search.stream !== "all";
 
   return (
-    <main className="app-shell" id="top">
-      <div className="ambient ambient-one" />
-      <div className="ambient ambient-two" />
-      <header className="site-header">
-        <div className="topline">
-          <span className="eyebrow">{projectName.toLocaleUpperCase()} / WORKBENCH</span>
-          <span className="snapshot">
-            LOCAL SNAPSHOT <b>{snapshot}</b>
-          </span>
-        </div>
-        <div className="brand-row">
-          <a className="brand" href="#top" aria-label="Workbench home">
-            <span className="brand-mark">W</span>
-            <span>
-              work<span>bench</span>
-            </span>
-          </a>
-          <div className="header-actions">
-            <span className="local-badge">
-              <i /> read-only / local
-            </span>
-            <a href="/sessions">agent sessions</a>
-            {data.meta.repositoryUrl && (
-              <a href={data.meta.repositoryUrl} target="_blank" rel="noreferrer">
-                repository ↗
-              </a>
-            )}
-          </div>
-        </div>
-      </header>
-
+    <>
       <nav className="section-nav" aria-label="Page sections">
         <a href="#tickets">
           Ticket ledger <b>{data.tickets.length}</b>
@@ -314,7 +279,7 @@ export function OverviewPage({
           )}
         </div>
       </footer>
-    </main>
+    </>
   );
 }
 
