@@ -138,31 +138,7 @@ html {
 body {
   min-width: 320px;
   margin: 0;
-  background:
-    radial-gradient(
-      circle at 92% 0%,
-      color-mix(in srgb, var(--acid) 20%, transparent) 0,
-      transparent 32rem
-    ),
-    radial-gradient(
-      circle at 2% 42%,
-      color-mix(in srgb, var(--blue) 19%, transparent) 0,
-      transparent 29rem
-    ),
-    var(--bg);
-}
-
-body::before {
-  position: fixed;
-  inset: 0;
-  z-index: -1;
-  pointer-events: none;
-  background-image:
-    linear-gradient(color-mix(in srgb, var(--ink) 2%, transparent) 1px, transparent 1px),
-    linear-gradient(90deg, color-mix(in srgb, var(--ink) 2%, transparent) 1px, transparent 1px);
-  background-size: 42px 42px;
-  content: "";
-  mask-image: linear-gradient(to bottom, #000 0, transparent 72%);
+  background: var(--bg);
 }
 
 a {
@@ -196,8 +172,6 @@ select:focus-visible {
 }
 
 code,
-.eyebrow,
-.snapshot,
 .section-kicker,
 .ticket-id,
 .plan-id,
@@ -225,48 +199,6 @@ code {
   border: 0;
 }
 
-.app-shell {
-  position: relative;
-  width: min(100% - 56px, 1540px);
-  margin: 0 auto;
-  padding: 0 0 80px;
-}
-
-.ambient {
-  position: absolute;
-  z-index: -1;
-  width: 310px;
-  height: 310px;
-  pointer-events: none;
-  border-radius: 50%;
-  opacity: 0.12;
-  filter: blur(75px);
-}
-
-.ambient-one {
-  top: 550px;
-  right: -120px;
-  background: var(--acid);
-}
-
-.ambient-two {
-  top: 1120px;
-  left: -150px;
-  background: var(--blue);
-}
-
-.site-header {
-  position: sticky;
-  top: 0;
-  z-index: 10;
-  padding: 21px 0 16px;
-  background: color-mix(in srgb, var(--bg) 91%, transparent);
-  box-shadow: 0 18px 32px color-mix(in srgb, var(--bg) 80%, transparent);
-  backdrop-filter: blur(14px);
-}
-
-.topline,
-.brand-row,
 .section-nav,
 .control-heading,
 .section-heading,
@@ -275,105 +207,6 @@ code {
   align-items: center;
   justify-content: space-between;
   gap: 20px;
-}
-
-.topline {
-  padding-bottom: 14px;
-  border-bottom: 1px solid var(--line);
-  color: var(--faint);
-  font-size: 0.67rem;
-  letter-spacing: 0.14em;
-}
-
-.snapshot {
-  color: var(--faint);
-  font-size: 0.65rem;
-  letter-spacing: 0.08em;
-  text-align: right;
-}
-
-.snapshot b {
-  margin-left: 8px;
-  color: var(--muted);
-  font-weight: 500;
-  letter-spacing: 0;
-}
-
-.brand-row {
-  padding: 17px 0 4px;
-}
-
-.brand {
-  display: inline-flex;
-  align-items: center;
-  gap: 11px;
-  color: var(--ink);
-  font-size: 1.42rem;
-  font-weight: 700;
-  letter-spacing: -0.05em;
-}
-
-.brand:hover {
-  color: var(--ink);
-  text-decoration: none;
-}
-
-.brand > span:last-child {
-  letter-spacing: -0.07em;
-}
-
-.brand > span:last-child span {
-  color: var(--acid);
-}
-
-.brand-mark {
-  display: inline-grid;
-  width: 34px;
-  height: 34px;
-  place-items: center;
-  border: 1px solid var(--acid);
-  color: var(--acid);
-  font-size: 1.35rem;
-  line-height: 1;
-}
-
-.header-actions {
-  display: flex;
-  align-items: center;
-  gap: 19px;
-  color: var(--muted);
-  font-size: 0.75rem;
-}
-
-.header-actions > a {
-  color: var(--muted);
-}
-
-.header-actions > a:hover {
-  color: var(--acid);
-}
-
-.local-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  padding: 5px 9px;
-  border: 1px solid var(--line-strong);
-  color: var(--muted);
-  font:
-    0.66rem "SFMono-Regular",
-    Consolas,
-    monospace;
-  letter-spacing: 0.03em;
-}
-
-.local-badge i {
-  display: inline-block;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--acid);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--acid) 11%, transparent);
 }
 
 .section-kicker {
@@ -846,44 +679,6 @@ code {
 }
 
 @media (max-width: 780px) {
-  .app-shell {
-    width: min(100% - 28px, 1540px);
-    padding-bottom: 50px;
-  }
-
-  .site-header {
-    padding-top: 14px;
-  }
-
-  .topline {
-    align-items: start;
-    flex-direction: column;
-    gap: 7px;
-  }
-
-  .snapshot {
-    text-align: left;
-  }
-
-  .snapshot b {
-    margin-left: 5px;
-  }
-
-  .brand-row {
-    align-items: start;
-    flex-direction: column;
-    gap: 14px;
-  }
-
-  .header-actions {
-    justify-content: space-between;
-    width: 100%;
-  }
-
-  .section-nav {
-    top: 132px;
-  }
-
   .metrics {
     grid-template-columns: repeat(2, 1fr);
     gap: 8px;
