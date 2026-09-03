@@ -7,6 +7,12 @@ type SiteHeaderProps = {
 };
 
 export function SiteHeader({ meta }: SiteHeaderProps) {
+  const projectName = meta.projectName || meta.repo || "Local project";
+  const snapshotLabel = new Intl.DateTimeFormat("en-GB", {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(new Date(meta.snapshot));
+
   return (
     <header
       data-slot="header"
@@ -14,10 +20,10 @@ export function SiteHeader({ meta }: SiteHeaderProps) {
     >
       <SidebarTrigger className="-ml-1" />
       <Separator orientation="vertical" className="mr-1 data-[orientation=vertical]:h-4" />
-      <span className="truncate text-sm font-semibold">{meta.projectName}</span>
+      <span className="truncate text-sm font-semibold">{projectName}</span>
       <div className="ml-auto flex items-center gap-4 text-xs">
         <span className="text-muted-foreground">
-          LOCAL SNAPSHOT <b className="text-foreground">{meta.snapshot}</b>
+          LOCAL SNAPSHOT <b className="text-foreground">{snapshotLabel}</b>
         </span>
         <span className="inline-flex items-center gap-1.5 rounded-md border border-border px-1.5 py-0.5 text-[0.67rem] tracking-widest text-muted-foreground uppercase">
           <i className="size-1.5 rounded-full bg-good" /> read-only / local

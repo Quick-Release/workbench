@@ -74,10 +74,14 @@
   --color-info-border: color-mix(in srgb, var(--blue) 55%, var(--line-strong));
 
   --color-field: color-mix(in srgb, var(--bg) 80%, var(--panel));
+  --shadow-panel: var(--shadow);
+}
+
+/* emitted as real custom properties so plain CSS can reference them too */
+@theme {
   --font-sans: "Avenir Next", "Segoe UI", sans-serif;
   --font-display: "Avenir Next", "Segoe UI", sans-serif;
   --font-mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
-  --shadow-panel: var(--shadow);
 }
 
 @layer base {
@@ -121,7 +125,7 @@
   --blue-dim: #203b43;
   --white-dim: #d4d8cf;
   --shadow: 0 20px 48px rgb(0 0 0 / 18%);
-  font-family: "Avenir Next", "Segoe UI", sans-serif;
+  font-family: var(--font-sans);
   color: var(--ink);
   background: var(--bg);
   font-synthesis: none;
@@ -179,7 +183,7 @@ code,
 .kind-label,
 .status-detail,
 .source-line code {
-  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-family: var(--font-mono);
 }
 
 code {

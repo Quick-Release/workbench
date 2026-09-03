@@ -91,6 +91,9 @@ export function SessionsPage({
 
       {usage.enabled && (
         <>
+          <p className="text-[0.67rem] tracking-[0.14em] text-faint uppercase">
+            usage as of <b className="text-muted">{usage.generatedAt.slice(0, 10)}</b>
+          </p>
           <section className="metrics" aria-label="Session usage summary">
             <MetricCard value={usage.sessions.length} label="tracked sessions" tone="info" />
             <MetricCard

@@ -76,7 +76,7 @@ describe("app shell (shadcn dashboard frame)", () => {
     expect(html).toContain("bench");
     expect(html).toContain("banquinha");
     expect(html).toContain("LOCAL SNAPSHOT");
-    expect(html).toContain("2026-08-29T15:11:41+01:00");
+    expect(html).toContain("29 Aug 2026");
     expect(html).toContain("read-only / local");
     expect(html).toContain("agent sessions");
     expect(html).toContain("repository ↗");
