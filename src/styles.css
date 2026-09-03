@@ -1,5 +1,7 @@
 @import "tailwindcss";
 @import "tw-animate-css";
+/* self-hosted Inter (variable), loaded locally — no CDN */
+@import "@fontsource-variable/inter";
 
 @custom-variant dark (&:is(.dark *));
 
@@ -79,9 +81,11 @@
 
 /* emitted as real custom properties so plain CSS can reference them too */
 @theme {
-  --font-sans: "Avenir Next", "Segoe UI", sans-serif;
-  --font-display: "Avenir Next", "Segoe UI", sans-serif;
-  --font-mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  /* single local typeface across sans, display, and mono roles; the legacy
+     stacks below stay as fallbacks in case the bundle fails to load */
+  --font-sans: "Inter Variable", "Avenir Next", "Segoe UI", sans-serif;
+  --font-display: "Inter Variable", "Avenir Next", "Segoe UI", sans-serif;
+  --font-mono: "Inter Variable", "Avenir Next", "Segoe UI", sans-serif;
 }
 
 @layer base {
@@ -98,34 +102,38 @@
   --header-height: 3.5rem;
   --content-padding: 1.5rem;
   /* sidebar tokens, derived from the legacy names so configured themes
-     re-tint them through the same runtime injection */
-  --sidebar: var(--panel);
+     re-tint them through the same runtime injection; the sidebar shares the
+     page background and its menu buttons stay flat on it — the active item
+     is marked by weight, not a fill */
+  --sidebar: var(--bg);
   --sidebar-foreground: var(--ink);
   --sidebar-primary: var(--acid);
   --sidebar-primary-foreground: var(--bg);
-  --sidebar-accent: var(--panel-hi);
+  --sidebar-accent: var(--bg);
   --sidebar-accent-foreground: var(--ink);
   --sidebar-border: var(--line);
   --sidebar-ring: var(--acid);
-  --ink: #f1f3e9;
-  --muted: #a5b0a4;
-  --faint: #718076;
-  --bg: #101715;
-  --panel: #17211d;
-  --panel-hi: #1d2b25;
-  --line: #2b3a32;
-  --line-strong: #45574b;
-  --acid: #c5e86c;
-  --acid-dim: #344525;
-  --amber: #f2bf68;
-  --amber-dim: #48371e;
-  --coral: #f18476;
-  --coral-dim: #4a2927;
-  --blue: #8bc6d8;
-  --blue-dim: #203b43;
-  --white-dim: #d4d8cf;
+  --ink: #ffffff;
+  --muted: #b9b9bb;
+  --faint: #8a8a8d;
+  --bg: #14151b;
+  --panel: #191a24;
+  --panel-hi: #1f202a;
+  --line: #212430;
+  --line-strong: #343848;
+  --acid: #c44900;
+  --acid-dim: #452413;
+  --amber: #dc975f;
+  --amber-dim: #46362c;
+  --coral: #e45b25;
+  --coral-dim: #4a271e;
+  --blue: #aa8f7c;
+  --blue-dim: #432534;
+  --white-dim: #dcdcdd;
   --shadow: 0 20px 48px rgb(0 0 0 / 18%);
   font-family: var(--font-sans);
+  /* tabular figures everywhere so numeric columns and metrics align */
+  font-variant-numeric: tabular-nums;
   color: var(--ink);
   background: var(--bg);
   font-synthesis: none;
@@ -153,6 +161,15 @@ a {
 a:hover {
   color: color-mix(in srgb, var(--acid) 65%, var(--ink));
   text-decoration: underline;
+}
+
+/* the unlayered anchor rules above beat the vendored sidebar's Tailwind
+   utilities, so nav links would stay accent-colored; sidebar links are plain
+   text — ink, with the elevated background alone marking hover/active */
+[data-slot="sidebar"] a,
+[data-slot="sidebar"] a:hover {
+  color: var(--sidebar-foreground);
+  text-decoration: none;
 }
 
 button,

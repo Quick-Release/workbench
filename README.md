@@ -99,8 +99,8 @@ metadata, semantic theme colors, and read-only service snapshots:
   "$schema": "./node_modules/@quick-release/workbench/workbench.config.schema.json",
   "projectName": "Example project",
   "theme": {
-    "background": "#101715",
-    "accent": "#c5e86c"
+    "background": "#14151b",
+    "accent": "#c44900"
   },
   "services": [
     {

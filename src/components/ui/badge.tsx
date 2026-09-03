@@ -19,11 +19,13 @@ const badgeVariants = cva(
         link: "text-primary underline-offset-4 [a&]:hover:underline",
       },
       tone: {
-        good: "border-good-border bg-good-dim text-good",
-        ready: "border-good-border bg-good-dim text-good",
-        warn: "border-warn-border bg-warn-dim text-warn",
-        hot: "border-hot-border bg-hot-dim text-hot",
-        info: "border-info-border bg-info-dim text-info",
+        // tone shows through the dim background + border; text is the shared
+        // mauve (--blue) so the small mono labels read without glowing white
+        good: "border-good-border bg-good-dim text-blue",
+        ready: "border-good-border bg-good-dim text-blue",
+        warn: "border-warn-border bg-warn-dim text-blue",
+        hot: "border-hot-border bg-hot-dim text-blue",
+        info: "border-info-border bg-info-dim text-blue",
         muted: "border-line-strong bg-panel-hi text-faint",
       },
     },

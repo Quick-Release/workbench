@@ -1,24 +1,27 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 
+// Dark neutral-charcoal theme: #14151b background, white #ffffff text, rust
+// #c44900 accent, violet-navy surfaces #191a24, plum #432534 anchors the info
+// triad. Dim variants mix each hue back over the background at ~25-30%.
 export const DEFAULT_THEME = Object.freeze({
-  ink: "#f1f3e9",
-  muted: "#a5b0a4",
-  faint: "#718076",
-  bg: "#101715",
-  panel: "#17211d",
-  "panel-hi": "#1d2b25",
-  line: "#2b3a32",
-  "line-strong": "#45574b",
-  acid: "#c5e86c",
-  "acid-dim": "#344525",
-  amber: "#f2bf68",
-  "amber-dim": "#48371e",
-  coral: "#f18476",
-  "coral-dim": "#4a2927",
-  blue: "#8bc6d8",
-  "blue-dim": "#203b43",
-  "white-dim": "#d4d8cf",
+  ink: "#ffffff",
+  muted: "#b9b9bb",
+  faint: "#8a8a8d",
+  bg: "#14151b",
+  panel: "#191a24",
+  "panel-hi": "#1f202a",
+  line: "#212430",
+  "line-strong": "#343848",
+  acid: "#c44900",
+  "acid-dim": "#452413",
+  amber: "#dc975f",
+  "amber-dim": "#46362c",
+  coral: "#e45b25",
+  "coral-dim": "#4a271e",
+  blue: "#aa8f7c",
+  "blue-dim": "#432534",
+  "white-dim": "#dcdcdd",
 });
 
 const themeAliases = {

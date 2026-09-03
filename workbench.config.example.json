@@ -5,14 +5,14 @@
   },
   "projectName": "Your project",
   "theme": {
-    "background": "#101715",
-    "surface": "#17211d",
-    "surfaceElevated": "#1d2b25",
-    "accent": "#c5e86c",
-    "accentMuted": "#344525",
-    "text": "#f1f3e9",
-    "textMuted": "#a5b0a4",
-    "textFaint": "#718076"
+    "background": "#14151b",
+    "surface": "#191a24",
+    "surfaceElevated": "#1f202a",
+    "accent": "#c44900",
+    "accentMuted": "#452413",
+    "text": "#ffffff",
+    "textMuted": "#b9b9bb",
+    "textFaint": "#8a8a8d"
   },
   "services": [
     {
