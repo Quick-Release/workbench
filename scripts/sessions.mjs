@@ -175,7 +175,10 @@ const aggregate = (database, sourceRoot) => {
       total.outputTokens += row.output_tokens || 0;
       total.modelMs += row.duration_ms || 0;
       const modelId = row.model_id || "";
-      total.modelTokens.set(modelId, (total.modelTokens.get(modelId) || 0) + (row.output_tokens || 0));
+      total.modelTokens.set(
+        modelId,
+        (total.modelTokens.get(modelId) || 0) + (row.output_tokens || 0),
+      );
     }
   }
 

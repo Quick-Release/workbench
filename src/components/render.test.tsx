@@ -102,9 +102,7 @@ const sessions = {
       modelMs: 5000,
     },
   ],
-  sessionsByDay: [
-    { day: "2026-09-01", sessions: 2 },
-  ],
+  sessionsByDay: [{ day: "2026-09-01", sessions: 2 }],
   sessions: [
     {
       id: "sess_root-1",

@@ -232,9 +232,7 @@ function UsageOverTime({
               const width = days.length * 44 + 20;
               const maxSessions = Math.max(
                 1,
-                ...days.map((day) =>
-                  sessionsByDay.find((row) => row.day === day)?.sessions ?? 0,
-                ),
+                ...days.map((day) => sessionsByDay.find((row) => row.day === day)?.sessions ?? 0),
               );
               const points = days
                 .map((day, index) => {
@@ -379,7 +377,9 @@ const sessionColumns = sessionHelper.columns([
     id: "model",
     header: "Dominant model",
     sortFn: "basic",
-    cell: ({ row }) => <span className="font-mono text-[0.75rem]">{row.original.model || "—"}</span>,
+    cell: ({ row }) => (
+      <span className="font-mono text-[0.75rem]">{row.original.model || "—"}</span>
+    ),
   }),
   sessionHelper.accessor("modelMs", {
     id: "modelTime",

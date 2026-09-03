@@ -1,10 +1,7 @@
 import { Progress } from "@/components/ui/progress";
 
 /** The workbench skin for the vendored Progress track: square, thin, acid fill. */
-export function ProgressBar({
-  value,
-  label,
-}: Readonly<{ value: number; label?: string }>) {
+export function ProgressBar({ value, label }: Readonly<{ value: number; label?: string }>) {
   return (
     <Progress
       value={value}

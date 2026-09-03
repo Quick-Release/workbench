@@ -11,8 +11,7 @@ export const sortableHeadClass =
 
 export const sortableBodyRowClass = "hover:bg-acid/3";
 
-export const sortableBodyCellClass =
-  "border-b-0 px-[15px] py-3.5 align-top whitespace-normal";
+export const sortableBodyCellClass = "border-b-0 px-[15px] py-3.5 align-top whitespace-normal";
 
 export const tableEmptyCellClass = "p-[35px] text-center text-muted-foreground";
 
