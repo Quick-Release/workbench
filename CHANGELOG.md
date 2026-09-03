@@ -1,5 +1,14 @@
 # @quick-release/workbench
 
+## 0.2.1
+
+### Patch Changes
+
+- 9604f0f: Deploy the telemetry ingest Worker and its D1 store with Alchemy (infrastructure-as-Effects): `alchemy.run.ts` is now the deploy surface (`pnpm worker:deploy` / `worker:dev` / `worker:tail`), `worker/schema.sql` moved to `worker/migrations/0001_init.sql` and is applied by deploys, and Effect moves to the v4 RC (`4.0.0-rc.112`). `worker/wrangler.jsonc` stays as the script-only escape hatch.
+- 48c0c82: Adopt a dark neutral-charcoal default theme: `#14151b` background (sidebar shares it), `#191a24` panels, white `#ffffff` text, rust `#c44900` accent, plum-anchored info triad. Sidebar nav links read as plain text on the sidebar background (active item marked by weight, not a fill); orange stays for highlights. Also fixes the vendored sidebar menu buttons matching their `data-active` styles regardless of state (presence-based selector vs React's `data-active="false"`). Host configs overriding `theme` keep working unchanged.
+- 48c0c82: Switch all typeface roles (sans, display, and the mono used by code/IDs/metric values) to self-hosted Inter Variable (`@fontsource-variable/inter`, bundled locally — no CDN), with tabular figures enabled globally so numeric columns and metric values align.
+- 61a51d3: Add the telemetry ingest worker (Cloudflare Worker + D1 schema, under `worker/`). It is internal company tooling for the repo and is not part of the published package.
+
 ## 0.2.0
 
 ### Minor Changes
