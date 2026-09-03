@@ -9,7 +9,7 @@ const TOKEN = "ingest-token";
 
 function createD1Double() {
   const db = new DatabaseSync(":memory:");
-  const schema = readFileSync(new URL("./schema.sql", import.meta.url), "utf8");
+  const schema = readFileSync(new URL("./migrations/0001_init.sql", import.meta.url), "utf8");
   db.exec(schema);
   return {
     db,

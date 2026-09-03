@@ -2,11 +2,11 @@ import { Schema } from "effect";
 
 import type { OverviewData } from "./types";
 import { serviceStatuses, ticketKinds, ticketStatuses } from "./types";
-export const TicketStatusSchema = Schema.Literal(...ticketStatuses);
+export const TicketStatusSchema = Schema.Literals(ticketStatuses);
 
-export const TicketKindSchema = Schema.Literal(...ticketKinds);
+export const TicketKindSchema = Schema.Literals(ticketKinds);
 
-export const ServiceStatusSchema = Schema.Literal(...serviceStatuses);
+export const ServiceStatusSchema = Schema.Literals(serviceStatuses);
 
 export const TicketRecordSchema = Schema.Struct({
   id: Schema.String,

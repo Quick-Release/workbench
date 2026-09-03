@@ -2,6 +2,9 @@ node_modules/
 dist/
 .vite/
 
+# Alchemy local deploy state (per-stage, never committed).
+.alchemy/
+
 # Project-specific configuration belongs to the host repository.
 workbench.config.json
 

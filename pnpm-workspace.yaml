@@ -1,6 +1,12 @@
 packages:
   - .
 
+allowBuilds:
+  # alchemy's local dev runtime (workerd) and its state serializer need
+  # postinstall scripts; both are transitive deps of alchemy.
+  msgpackr-extract: true
+  workerd: true
+
 catalog:
   vite: npm:@voidzero-dev/vite-plus-core@0.2.8
   vitest: 4.1.9

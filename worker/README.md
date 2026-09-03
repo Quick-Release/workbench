@@ -19,13 +19,45 @@ shared ingest secret (set as the `TELEMETRY_INGEST_TOKEN` secret here and
 baked into the workbench package, whose GitHub Packages registry is the
 company boundary).
 
-## One-time deploy
+## Deploy (Alchemy, from the repo root)
 
-From this directory:
+The Worker and its D1 store are defined in `alchemy.run.ts`
+(ADR 0003); deploys run plan → apply and D1 migrations in
+`worker/migrations/` are applied in order on every deploy. State lives in
+`.alchemy/` (gitignored) locally.
+
+- Routine prod deploy (needs `TELEMETRY_INGEST_TOKEN` in the environment —
+  the same value baked into the package, so the secret reconciles
+  unchanged): `pnpm worker:deploy`
+- Local dev Worker (workerd + local D1 simulator, hot reload):
+  `pnpm worker:dev`
+- Tail prod logs (replaces `wrangler tail`): `pnpm worker:tail`
+- Tear down a stage: `pnpm worker:destroy`
+
+### First prod run only — adopt the existing resources
+
+The live Worker and database predate Alchemy, so the first prod deploy must
+take them over:
+
+```sh
+TELEMETRY_INGEST_TOKEN=<current token> \
+  pnpm exec alchemy deploy --stage prod --adopt
+```
+
+`--adopt` is needed once, until Alchemy's state records ownership.
+
+### Escape hatch
+
+`worker/wrangler.jsonc` still works for a script-only deploy
+(`npx wrangler deploy` from this directory). Schema changes do **not** flow
+through wrangler anymore — `schema.sql` moved to
+`worker/migrations/0001_init.sql` and is applied by Alchemy deploys.
+
+## Legacy manual runbook (superseded by the above)
 
 1. `npx wrangler d1 create workbench-telemetry` — put the returned
    `database_id` into `wrangler.jsonc`.
-2. `npx wrangler d1 execute workbench-telemetry --remote --file schema.sql`
+2. `npx wrangler d1 execute workbench-telemetry --remote --file migrations/0001_init.sql`
 3. `npx wrangler secret put TELEMETRY_INGEST_TOKEN` — generate a long
    random value; the same value is baked into the package by the
    Telemetry collector.
