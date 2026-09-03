@@ -1,4 +1,4 @@
-import { deepStrictEqual, match, strictEqual } from "node:assert";
+import { deepStrictEqual, match, rejects, strictEqual } from "node:assert";
 import test from "node:test";
 
 import { fetchAsana } from "./services/asana.mjs";
@@ -207,6 +207,48 @@ test("fetches and maps paginated GitHub issues, ignoring pull requests", async (
   strictEqual(calls[0].options.headers.Authorization, "Bearer secret");
   strictEqual(calls[0].options.headers.Accept, "application/vnd.github+json");
   strictEqual(result.message, "100 issues loaded");
+});
+
+test("falls back to the gh CLI token when the token env var is unset", async () => {
+  let call;
+  const fetchImpl = async (url, options) => {
+    call = { url, options };
+    return jsonResponse([]);
+  };
+
+  const result = await fetchGitHub(
+    { id: "issues", type: "github", repo: "example/project" },
+    { env: {}, fetchImpl, ghToken: async () => "cli-token" },
+  );
+
+  strictEqual(result.records.length, 0);
+  strictEqual(call.options.headers.Authorization, "Bearer cli-token");
+  strictEqual(result.message, "0 issues loaded");
+});
+
+test("prefers the token env var over the gh CLI", async () => {
+  let call;
+  const fetchImpl = async (url, options) => {
+    call = { url, options };
+    return jsonResponse([]);
+  };
+
+  await fetchGitHub(
+    { id: "issues", type: "github", repo: "example/project", tokenEnv: "GH_TOKEN" },
+    { env: { GH_TOKEN: "env-token" }, fetchImpl, ghToken: async () => "cli-token" },
+  );
+
+  strictEqual(call.options.headers.Authorization, "Bearer env-token");
+});
+
+test("reports missing GitHub credentials when env var and gh CLI are both unavailable", async () => {
+  await rejects(
+    fetchGitHub(
+      { id: "issues", type: "github", repo: "example/project" },
+      { env: {}, fetchImpl: async () => jsonResponse([]), ghToken: async () => "" },
+    ),
+    /missing GITHUB_TOKEN/,
+  );
 });
 
 test("fetches and maps GitLab project issues by project path", async () => {

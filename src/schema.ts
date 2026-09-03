@@ -2,7 +2,6 @@ import { Schema } from "effect";
 
 import type { OverviewData } from "./types";
 import { serviceStatuses, ticketKinds, ticketStatuses } from "./types";
-
 export const TicketStatusSchema = Schema.Literal(...ticketStatuses);
 
 export const TicketKindSchema = Schema.Literal(...ticketKinds);
@@ -88,6 +87,59 @@ export const OverviewSourceSchema = Schema.Struct({
   path: Schema.String,
 });
 
+export const SessionUsageDayRowSchema = Schema.Struct({
+  day: Schema.String,
+  provider: Schema.String,
+  model: Schema.String,
+  requests: Schema.Number,
+  sessions: Schema.Number,
+  inputTokens: Schema.Number,
+  outputTokens: Schema.Number,
+  cacheTokens: Schema.Number,
+  modelMs: Schema.Number,
+});
+
+export const SessionUsageModelRowSchema = Schema.Struct({
+  provider: Schema.String,
+  model: Schema.String,
+  requests: Schema.Number,
+  sessions: Schema.Number,
+  inputTokens: Schema.Number,
+  outputTokens: Schema.Number,
+  cacheTokens: Schema.Number,
+  modelMs: Schema.Number,
+});
+
+export const SessionUsageRecordSchema = Schema.Struct({
+  id: Schema.String,
+  taskType: Schema.String,
+  parent: Schema.String,
+  title: Schema.String,
+  directory: Schema.String,
+  started: Schema.String,
+  requests: Schema.Number,
+  inputTokens: Schema.Number,
+  outputTokens: Schema.Number,
+  modelMs: Schema.Number,
+  model: Schema.String,
+  edits: Schema.Number,
+  writes: Schema.Number,
+});
+
+export const SessionUsageSessionsByDaySchema = Schema.Struct({
+  day: Schema.String,
+  sessions: Schema.Number,
+});
+
+export const SessionUsageSchema = Schema.Struct({
+  enabled: Schema.Boolean,
+  generatedAt: Schema.String,
+  perDay: Schema.Array(SessionUsageDayRowSchema),
+  perModel: Schema.Array(SessionUsageModelRowSchema),
+  sessionsByDay: Schema.Array(SessionUsageSessionsByDaySchema),
+  sessions: Schema.Array(SessionUsageRecordSchema),
+});
+
 export const OverviewDataSchema = Schema.Struct({
   meta: Schema.Struct({
     projectName: Schema.String,
@@ -107,6 +159,7 @@ export const OverviewDataSchema = Schema.Struct({
   tickets: Schema.Array(TicketRecordSchema),
   plans: Schema.Array(PlanRecordSchema),
   changes: Schema.Array(SpecChangeRecordSchema),
+  sessions: SessionUsageSchema,
 });
 
 // Annotating the decoded output with the domain type is the compile-time check

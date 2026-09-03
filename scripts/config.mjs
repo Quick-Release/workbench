@@ -175,6 +175,19 @@ const normalizeServices = (value) => {
   });
 };
 
+// Reading the host user's agent-session database is strictly opt-in: the
+// default payload is disabled, and the path override supports ~ expansion.
+const normalizeSessions = (value) => {
+  if (value === undefined) return { enabled: false, databasePath: undefined };
+  if (!isRecord(value)) throw new Error("sessions must be an object");
+  const enabled = value.enabled ?? false;
+  if (typeof enabled !== "boolean") throw new Error("sessions.enabled must be a boolean");
+  const databasePath = stringValue(value.databasePath, "sessions.databasePath", {
+    maxLength: 500,
+  });
+  return { enabled, databasePath };
+};
+
 export const loadWorkbenchConfig = async (rootDirectory) => {
   const path = join(rootDirectory, "workbench.config.json");
   let text;
@@ -190,6 +203,7 @@ export const loadWorkbenchConfig = async (rootDirectory) => {
       repositoryUrl: undefined,
       theme: { ...DEFAULT_THEME },
       services: [],
+      sessions: { enabled: false, databasePath: undefined },
       path,
     };
   }
@@ -210,6 +224,7 @@ export const loadWorkbenchConfig = async (rootDirectory) => {
     repositoryUrl: repositoryUrl(value.repositoryUrl),
     theme: normalizeTheme(value.theme),
     services: normalizeServices(value.services),
+    sessions: normalizeSessions(value.sessions),
     path,
   };
 };

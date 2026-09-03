@@ -1,3 +1,5 @@
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import {
   externalTicket,
   httpUrl,
@@ -7,7 +9,6 @@ import {
   serviceLabel,
   statusFromLabels,
   statusFromService,
-  tokenFor,
 } from "./shared.mjs";
 
 const GITHUB_API = "https://api.github.com";
@@ -15,6 +16,38 @@ const DEFAULT_TOKEN_ENV = "GITHUB_TOKEN";
 const DEFAULT_ID_PREFIX = "GH-";
 const GITHUB_API_VERSION = "2022-11-28";
 const PER_PAGE = 100;
+
+const execFileAsync = promisify(execFile);
+
+// The gh CLI is this tracker's canonical client, so an authenticated `gh`
+// login can stand in for exporting the token environment variable.
+const tokenFromGhCli = async () => {
+  try {
+    const { stdout } = await execFileAsync("gh", ["auth", "token"], {
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    return stdout.trim();
+  } catch {
+    return "";
+  }
+};
+
+const tokenEnvName = (service) => {
+  const name = typeof service.tokenEnv === "string" ? service.tokenEnv.trim() : "";
+  if (!name) return DEFAULT_TOKEN_ENV;
+  if (!/^[A-Z][A-Z0-9_]*$/.test(name))
+    throw new Error("tokenEnv must be an environment variable name");
+  return name;
+};
+
+const resolveToken = async (service, env, ghToken) => {
+  const tokenEnv = tokenEnvName(service);
+  const fromEnv = typeof env[tokenEnv] === "string" ? env[tokenEnv].trim() : "";
+  if (fromEnv) return fromEnv;
+  const fromCli = await ghToken();
+  if (fromCli) return fromCli;
+  throw new Error(`missing ${tokenEnv} (set it, or authenticate the gh CLI)`);
+};
 
 const labelNames = (issue) =>
   (Array.isArray(issue.labels) ? issue.labels : [])
@@ -69,10 +102,13 @@ const issueRecord = (issue, service, repo) => {
   });
 };
 
-export const fetchGitHub = async (service, { env = process.env, fetchImpl = globalThis.fetch }) => {
+export const fetchGitHub = async (
+  service,
+  { env = process.env, fetchImpl = globalThis.fetch, ghToken = tokenFromGhCli } = {},
+) => {
   if (typeof fetchImpl !== "function") throw new Error("fetch is unavailable");
   const repo = requiredServiceValue(service, "repo");
-  const { token } = tokenFor(service, DEFAULT_TOKEN_ENV, env);
+  const token = await resolveToken(service, env, ghToken);
   const label = serviceLabel(service);
   const apiBase = (httpUrl(service.apiBaseUrl) || GITHUB_API).replace(/\/+$/, "");
   const maxPages = maxPagesFor(service);

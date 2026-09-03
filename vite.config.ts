@@ -1,6 +1,8 @@
+import tailwindcss from "@tailwindcss/vite";
 import { defineConfig } from "vite-plus";
 import { tanstackRouter } from "@tanstack/router-plugin/vite";
 import react from "@vitejs/plugin-react";
+import { fileURLToPath } from "node:url";
 
 export default defineConfig({
   fmt: {
@@ -12,5 +14,10 @@ export default defineConfig({
   test: {
     include: ["src/**/*.test.{ts,tsx}"],
   },
-  plugins: [tanstackRouter({ target: "react" }), react()],
+  plugins: [tanstackRouter({ target: "react" }), react(), tailwindcss()],
+  resolve: {
+    alias: {
+      "@": fileURLToPath(new URL("./src", import.meta.url)),
+    },
+  },
 });

@@ -64,7 +64,7 @@ const service = {
 describe("overview data boundary", () => {
   it("decodes the real generated data on import", () => {
     expect(overviewData.meta.projectName).toBeTruthy();
-    expect(overviewData.tickets.length).toBeGreaterThan(0);
+    expect(overviewData.tickets.length).toBe(overviewData.meta.ticketCount);
   });
 
   it("accepts a ticket with its optional external source present", () => {
@@ -133,5 +133,74 @@ describe("overview data boundary", () => {
       meta: { ...generatedData.meta, sources: [{ label: "Dashboard" }] },
     };
     expectRejected(drifted, /path/);
+  });
+
+  it("accepts the sessions payload on the generated data", () => {
+    expect(generatedData.sessions.enabled).toBe(true);
+    expect(generatedData.sessions.generatedAt).toBeTruthy();
+    expect(Array.isArray(generatedData.sessions.perDay)).toBe(true);
+    expect(Array.isArray(generatedData.sessions.perModel)).toBe(true);
+    expect(Array.isArray(generatedData.sessions.sessions)).toBe(true);
+  });
+
+  it("rejects a session day row with non-numeric token counts", () => {
+    const drifted: unknown = {
+      ...generatedData,
+      sessions: {
+        ...generatedData.sessions,
+        perDay: [
+          {
+            day: "2026-09-01",
+            provider: "prov",
+            model: "GLM-5.3-Flash",
+            requests: 1,
+            sessions: 1,
+            inputTokens: "lots",
+            outputTokens: 10,
+            cacheTokens: 0,
+            modelMs: 100,
+          },
+        ],
+      },
+    };
+    expectRejected(drifted, /inputTokens/);
+  });
+
+  it("rejects a session record with a missing title", () => {
+    const drifted: unknown = {
+      ...generatedData,
+      sessions: {
+        ...generatedData.sessions,
+        sessions: [
+          {
+            id: "sess_1",
+            taskType: "interactive",
+            parent: "",
+            directory: "/tmp",
+            started: "2026-09-01T10:00:00.000Z",
+            requests: 1,
+            inputTokens: 10,
+            outputTokens: 10,
+            modelMs: 100,
+            edits: 0,
+            writes: 0,
+          },
+        ],
+      },
+    };
+    expectRejected(drifted, /title/);
+  });
+
+  it("rejects a sessions payload with a non-boolean enabled flag", () => {
+    const drifted: unknown = {
+      ...generatedData,
+      sessions: { ...generatedData.sessions, enabled: "yes" },
+    };
+    expectRejected(drifted, /enabled/);
+  });
+
+  it("rejects data missing the sessions key entirely", () => {
+    const { sessions: _omitted, ...withoutSessions } = generatedData;
+    expectRejected(withoutSessions, /sessions/);
   });
 });

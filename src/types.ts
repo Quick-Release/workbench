@@ -103,6 +103,59 @@ export type WorkbenchTheme = {
   "white-dim": string;
 };
 
+export type SessionUsageDayRow = {
+  day: string;
+  provider: string;
+  model: string;
+  requests: number;
+  sessions: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheTokens: number;
+  modelMs: number;
+};
+
+export type SessionUsageModelRow = {
+  provider: string;
+  model: string;
+  requests: number;
+  sessions: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheTokens: number;
+  modelMs: number;
+};
+
+export type SessionUsageSessionsByDay = {
+  day: string;
+  sessions: number;
+};
+
+export type SessionUsageRecord = {
+  id: string;
+  taskType: string;
+  parent: string;
+  title: string;
+  directory: string;
+  started: string;
+  requests: number;
+  inputTokens: number;
+  outputTokens: number;
+  modelMs: number;
+  model: string;
+  edits: number;
+  writes: number;
+};
+
+export type SessionUsage = {
+  enabled: boolean;
+  generatedAt: string;
+  perDay: readonly SessionUsageDayRow[];
+  perModel: readonly SessionUsageModelRow[];
+  sessionsByDay: readonly SessionUsageSessionsByDay[];
+  sessions: readonly SessionUsageRecord[];
+};
+
 export type OverviewData = {
   meta: {
     projectName: string;
@@ -122,4 +175,5 @@ export type OverviewData = {
   tickets: readonly TicketRecord[];
   plans: readonly PlanRecord[];
   changes: readonly SpecChangeRecord[];
+  sessions: SessionUsage;
 };

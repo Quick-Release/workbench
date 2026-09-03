@@ -47,9 +47,17 @@ The lockfile pins the resolved commit; update with
 `pnpm up @quick-release/workbench`.
 
 The `workbench` command detects the host repository by walking up from the
-installed package to the enclosing git checkout. Set
-`WORKBENCH_SOURCE_ROOT=/path/to/repository` when detection cannot see the
-host (standalone checkouts, global installs, relocated package stores).
+installed package to the enclosing git checkout. Any checkout that is not this
+package's own repository counts as the host — npm installs, vendored copies,
+and submodules — and always supplies the data; demo data is ignored there. A
+standalone clone of this package reads its own planning sources by default,
+which is how workbench tracks its own development. To work against a larger
+corpus instead, run demo mode (`pnpm dev:demo`, or set `WORKBENCH_DEMO_SOURCE=1`),
+which reads the demo checkout at `~/workspaces/getquick/banquinha`; set
+`WORKBENCH_DEMO_SOURCE=/path/to/checkout` to demo against a different one.
+Set `WORKBENCH_SOURCE_ROOT=/path/to/repository` when detection cannot see the
+host (standalone checkouts, global installs, relocated package stores); the
+override wins over both detection and demo mode.
 `WORKBENCH_PROJECT_NAME` and `WORKBENCH_REPOSITORY_URL` can override the
 detected project metadata.
 
@@ -70,9 +78,13 @@ pnpm install
 pnpm dev
 ```
 
-This launches Workbench on <http://localhost:4051>. Run `pnpm sync` to
-regenerate the snapshot only. Set `WORKBENCH_SOURCE_ROOT=/path/to/repository`
-to run against a different checkout.
+This launches Workbench on <http://localhost:4051> against this repository's
+own planning sources, so workbench can track its own issues. Run
+`pnpm dev:demo` to develop against the demo checkout at
+`~/workspaces/getquick/banquinha` instead when you need a larger corpus of
+tickets and plans; `pnpm sync` and `pnpm sync:demo` regenerate the snapshot
+only. Set `WORKBENCH_SOURCE_ROOT=/path/to/repository` to run against a
+different checkout.
 
 ## Configuration
 
@@ -114,10 +126,35 @@ Supported service adapters are `asana` (project tasks, via `projectGid`),
 issue labels (using the same triage vocabulary as local records and any
 `statusMap` overrides), and both accept an optional `apiBaseUrl` for
 self-hosted instances. Tokens are read only from the named environment variables
-while `sync` runs; they are never written to the config or bundled into the
-browser. Service failures are reported in the snapshot and do not hide local
-Markdown records. Add future providers behind the adapter seam in
+while `sync` runs; for GitHub, an authenticated `gh` CLI is used as a fallback
+when the token variable is unset. Tokens are never written to the config or
+bundled into the browser. Service failures are reported in the snapshot and do
+not hide local Markdown records. Add future providers behind the adapter seam in
 `scripts/services/` rather than adding arbitrary browser-side URLs.
+
+### Agent sessions (opt-in)
+
+Workbench can chart the coding-agent sessions that produced a repository's
+tickets and code, including per-model usage (for example, comparing GLM 5.3
+Flash against GPT 5.6 Luna). Enable it with a `sessions` block:
+
+```json
+{
+  "sessions": {
+    "enabled": true,
+    "databasePath": "~/.zcode/cli/db/db.sqlite"
+  }
+}
+```
+
+`databasePath` is optional and defaults to the ZCode CLI session database in
+your home directory. When enabled, `sync` opens a temporary copy of that
+database read-only and folds pre-aggregated rows — per-model and per-day token
+totals plus a per-session rollup — into the snapshot; the `/sessions` page
+renders them as charts and a sortable table. Only aggregates, model ids,
+timestamps, and session titles ever enter the (git-ignored) snapshot; prompts
+and responses are never read. The feature requires a Node build with the
+built-in `node:sqlite` module (Node ≥ 22.13).
 
 ## Sources
 

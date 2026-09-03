@@ -1,3 +1,5 @@
+import { Badge } from "@/components/ui/badge";
+
 import { statusLabels, statusTone } from "../lib/overview";
 import type { TicketStatus } from "../types";
 
@@ -6,9 +8,9 @@ export function StatusBadge({
   label = statusLabels[status],
 }: Readonly<{ status: TicketStatus; label?: string }>) {
   return (
-    <span className={`status-badge status-${statusTone(status)}`}>
-      <span className="status-dot" aria-hidden="true" />
+    <Badge tone={statusTone(status)}>
+      <span aria-hidden="true" className="size-1.5 rounded-full bg-current" />
       {label}
-    </span>
+    </Badge>
   );
 }

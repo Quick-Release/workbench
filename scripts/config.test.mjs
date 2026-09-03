@@ -131,3 +131,39 @@ test("rejects inline service credentials and invalid colors", async () => {
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test("sessions sync is opt-in and defaults to disabled", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "workbench-config-"));
+  try {
+    const absent = await loadWorkbenchConfig(directory);
+    deepStrictEqual(absent.sessions, { enabled: false, databasePath: undefined });
+
+    await writeFile(
+      join(directory, "workbench.config.json"),
+      JSON.stringify({
+        sessions: { enabled: true, databasePath: "~/.zcode/cli/db/db.sqlite" },
+      }),
+    );
+    const enabled = await loadWorkbenchConfig(directory);
+    strictEqual(enabled.sessions.enabled, true);
+    strictEqual(enabled.sessions.databasePath, "~/.zcode/cli/db/db.sqlite");
+
+    await writeFile(join(directory, "workbench.config.json"), JSON.stringify({ sessions: {} }));
+    const partial = await loadWorkbenchConfig(directory);
+    deepStrictEqual(partial.sessions, { enabled: false, databasePath: undefined });
+
+    await writeFile(
+      join(directory, "workbench.config.json"),
+      JSON.stringify({ sessions: { enabled: "yes" } }),
+    );
+    await rejects(loadWorkbenchConfig(directory), /sessions\.enabled must be a boolean/);
+
+    await writeFile(
+      join(directory, "workbench.config.json"),
+      JSON.stringify({ sessions: { enabled: true, databasePath: "  " } }),
+    );
+    await rejects(loadWorkbenchConfig(directory), /sessions\.databasePath/);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});

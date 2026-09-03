@@ -26,14 +26,14 @@ Clack is "stylish interactive prompts for JavaScript CLIs", a pnpm monorepo ship
 
 ## 2. Ecosystem state (verified via npm registry, 2026-09-03)
 
-| Package            | Version / dist-tag                              | Runtime deps                                                                                              |
-| ------------------ | ----------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
-| `@clack/prompts`   | **1.7.0** (`latest`, published 2026-07-03)      | `@clack/core` 1.4.3 (exact), `fast-string-width`, `fast-wrap-ansi`, `sisteransi` ([npm](https://www.npmjs.com/package/@clack/prompts)) |
-| `@clack/prompts`   | `1.0.0-alpha.10` (`alpha`, 2026-01-27)          | —                                                                                                          |
-| `@clack/core`      | **1.4.3** (`latest`, published 2026-07-03)      | `fast-wrap-ansi`, `sisteransi` ([npm](https://www.npmjs.com/package/@clack/core))                          |
-| `prompts` (alt)    | 2.4.2 (published 2021-10-07)                    | `kleur`, `sisteransi`                                                                                      |
-| `@inquirer/prompts` (alt) | 8.7.1 (published 2026-09-02)             | 10 scoped `@inquirer/*` packages + `@types/node` peer                                                      |
-| `enquirer` (alt)   | 2.4.1 (published 2023-07-28)                    | —                                                                                                          |
+| Package                   | Version / dist-tag                         | Runtime deps                                                                                                                           |
+| ------------------------- | ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `@clack/prompts`          | **1.7.0** (`latest`, published 2026-07-03) | `@clack/core` 1.4.3 (exact), `fast-string-width`, `fast-wrap-ansi`, `sisteransi` ([npm](https://www.npmjs.com/package/@clack/prompts)) |
+| `@clack/prompts`          | `1.0.0-alpha.10` (`alpha`, 2026-01-27)     | —                                                                                                                                      |
+| `@clack/core`             | **1.4.3** (`latest`, published 2026-07-03) | `fast-wrap-ansi`, `sisteransi` ([npm](https://www.npmjs.com/package/@clack/core))                                                      |
+| `prompts` (alt)           | 2.4.2 (published 2021-10-07)               | `kleur`, `sisteransi`                                                                                                                  |
+| `@inquirer/prompts` (alt) | 8.7.1 (published 2026-09-02)               | 10 scoped `@inquirer/*` packages + `@types/node` peer                                                                                  |
+| `enquirer` (alt)          | 2.4.1 (published 2023-07-28)               | —                                                                                                                                      |
 
 **ESM/CJS:** `@clack/prompts` 1.0.0 (2026-01-28) went **ESM-only** — "The package is now distributed as ESM-only. In `v0` releases, the package was dual-published as CJS and ESM" ([1.0.0 release notes](https://github.com/bombshell-dev/clack/releases/tag/%40clack%2Fprompts%401.0.0)). Verified in the published 1.7.0 metadata: `"type": "module"`, single `exports` map with `.` → `./dist/index.mjs` + `./dist/index.d.mts`, plus `./package.json`. No `require()` support on Node < 20.19 without `--experimental-require-module`. This repo is `"type": "module"` with `.mjs` scripts (`package.json`), so this is a match, not a constraint.
 
@@ -53,18 +53,18 @@ Prompts ([`packages/prompts/README.md`](https://github.com/bombshell-dev/clack/b
 
 **Version-gated features** (all from [GitHub release notes](https://github.com/bombshell-dev/clack/releases)) — relevant only if you pin below 1.7.0:
 
-| Feature                                    | Since                                |
-| ------------------------------------------ | ------------------------------------ |
-| `updateSettings` (aliases), `signal` option | 0.9.0 (2024-12-19)                  |
-| `stream` API, spinner `timer` indicator     | 0.10.0 (2025-02-05)                 |
-| `progress` bar (first commit 2025-04-16, PR #290) | 0.11.0 (2025-05-22)           |
-| ESM-only distribution                       | 1.0.0 (2026-01-28)                  |
-| `withGuide` chrome toggle                   | 1.0.x (2026-02-12)                  |
-| `date` prompt                               | 1.2.0 (2026-03-31)                  |
-| `multiline` prompt; `engines` node ≥ 20.12  | 1.3.0 (2026-04-29)                  |
-| `groupMultiselect` scrolling / `maxItems`   | 1.4.0 (2026-05-12)                  |
-| **Standard Schema `validate` support**      | 1.5.0 (2026-05-29)                  |
-| `showInstructions` on select-family prompts | 1.7.0 (2026-07-03)                  |
+| Feature                                           | Since               |
+| ------------------------------------------------- | ------------------- |
+| `updateSettings` (aliases), `signal` option       | 0.9.0 (2024-12-19)  |
+| `stream` API, spinner `timer` indicator           | 0.10.0 (2025-02-05) |
+| `progress` bar (first commit 2025-04-16, PR #290) | 0.11.0 (2025-05-22) |
+| ESM-only distribution                             | 1.0.0 (2026-01-28)  |
+| `withGuide` chrome toggle                         | 1.0.x (2026-02-12)  |
+| `date` prompt                                     | 1.2.0 (2026-03-31)  |
+| `multiline` prompt; `engines` node ≥ 20.12        | 1.3.0 (2026-04-29)  |
+| `groupMultiselect` scrolling / `maxItems`         | 1.4.0 (2026-05-12)  |
+| **Standard Schema `validate` support**            | 1.5.0 (2026-05-29)  |
+| `showInstructions` on select-family prompts       | 1.7.0 (2026-07-03)  |
 
 ## 4. Maintenance health
 
@@ -98,7 +98,7 @@ Grounding: `bin.mjs` today reads `WORKBENCH_SOURCE_ROOT` (default: cwd) and `WOR
 ## 7. Zod / Effect interplay
 
 - **Zod: direct, first-class.** `validate` accepts any Standard Schema v1 object and reads `~standard.validate()` synchronously ([`packages/core/src/utils/validation.ts`](https://github.com/bombshell-dev/clack/blob/main/packages/core/src/utils/validation.ts)); Zod 4 implements Standard Schema (the repo's existing Zod 4.4.3 dependency, used for TanStack Router — [effect-adoption.md](./effect-adoption.md)). So `text({ message, validate: z.string().regex(...) })` works with zero adapters. Caveat: async validation throws (`'Schema validation must be synchronous'`), so keep prompt-level schemas sync.
-- **Effect: none documented, none needed.** A GitHub issue search for "zod" returns 0 results and "effect" only matches the English word in unrelated threads (searched 2026-09-03). No Effect-TS integration exists or is claimed anywhere in the repo or docs. If the Effect adoption from [effect-adoption.md](./effect-adoption.md) proceeds, the sensible composition is: run `Effect.gen` flows *around* prompts (prompt results as plain values entering the Effect program), not through them.
+- **Effect: none documented, none needed.** A GitHub issue search for "zod" returns 0 results and "effect" only matches the English word in unrelated threads (searched 2026-09-03). No Effect-TS integration exists or is claimed anywhere in the repo or docs. If the Effect adoption from [effect-adoption.md](./effect-adoption.md) proceeds, the sensible composition is: run `Effect.gen` flows _around_ prompts (prompt results as plain values entering the Effect program), not through them.
 
 ## 8. Integration constraints for this repo
 

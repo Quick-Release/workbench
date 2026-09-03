@@ -1,5 +1,16 @@
 import { createColumnHelper, flexRender, useTable } from "@tanstack/react-table";
 
+import {
+  Table,
+  TableBody,
+  TableHead,
+  TableHeader,
+  TableRow,
+  TableCell,
+} from "@/components/ui/table";
+import { Progress } from "@/components/ui/progress";
+import { cn } from "@/lib/utils";
+
 import { statusSortFn, sortableTableFeatures } from "../lib/table";
 import type { PlanRecord } from "../types";
 import { StatusBadge } from "./StatusBadge";
@@ -72,15 +83,15 @@ export function PlanTable({
         <span className="result-hint">Counts are derived from local Markdown files.</span>
       </div>
       <div className="table-shell">
-        <table className="signal-table plan-table">
+        <Table className="min-w-[1050px] border-collapse">
           <caption className="sr-only">Local planning source documents</caption>
-          <thead>
+          <TableHeader>
             {table.getHeaderGroups().map((headerGroup) => (
-              <tr key={headerGroup.id}>
+              <TableRow key={headerGroup.id} className="hover:bg-transparent">
                 {headerGroup.headers.map((header) => {
                   const sorted = header.column.getIsSorted();
                   return (
-                    <th
+                    <TableHead
                       key={header.id}
                       scope="col"
                       aria-sort={
@@ -90,45 +101,61 @@ export function PlanTable({
                             ? "descending"
                             : undefined
                       }
+                      className="sticky top-0 z-[2] h-auto bg-panel-hi/97 px-[15px] py-3.5 align-top font-mono text-[0.64rem] font-normal tracking-[0.08em] uppercase text-faint"
                     >
                       {header.isPlaceholder ? null : (
                         <button
                           type="button"
-                          className={sorted ? "th-sort sorted" : "th-sort"}
+                          className={cn(
+                            "inline-flex cursor-pointer items-center gap-1.5 border-0 bg-none p-0 text-left hover:text-acid focus-visible:text-acid",
+                            sorted && "text-acid",
+                          )}
                           onClick={header.column.getToggleSortingHandler()}
                         >
                           {flexRender(header.column.columnDef.header, header.getContext())}
-                          <span className="sort-mark" aria-hidden="true">
+                          <span
+                            aria-hidden="true"
+                            className={cn("text-[0.5rem]", sorted ? "opacity-100" : "opacity-40")}
+                          >
                             {sorted === "asc" ? "▲" : sorted === "desc" ? "▼" : "↕"}
                           </span>
                         </button>
                       )}
-                    </th>
+                    </TableHead>
                   );
                 })}
-              </tr>
+              </TableRow>
             ))}
-          </thead>
-          <tbody>
+          </TableHeader>
+          <TableBody>
             {rows.length === 0 ? (
-              <tr>
-                <td className="table-empty" colSpan={planColumns.length}>
+              <TableRow className="border-b-0 hover:bg-transparent">
+                <TableCell
+                  colSpan={planColumns.length}
+                  className="p-[35px] text-center text-muted-foreground"
+                >
                   No plan sources match this lens.
-                </td>
-              </tr>
+                </TableCell>
+              </TableRow>
             ) : (
               rows.map((row) => (
-                <tr key={row.id}>
+                <TableRow key={row.id} className="hover:bg-acid/3">
                   {row.getAllCells().map((cell) => (
-                    <td key={cell.id} className={cellClassNames[cell.column.id]}>
+                    <TableCell
+                      key={cell.id}
+                      className={cn(
+                        "border-b-0 px-[15px] py-3.5 align-top whitespace-normal",
+                        cellClassNames[cell.column.id],
+                      )}
+                    >
                       {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                    </td>
+                    </TableCell>
                   ))}
-                </tr>
+                </TableRow>
               ))
             )}
-          </tbody>
-        </table>
+          </TableBody>
+        </Table>
       </div>
     </section>
   );
@@ -166,9 +193,11 @@ function PlanLoadCell({ plan }: Readonly<{ plan: PlanRecord }>) {
       <span>
         {plan.openTicketCount} open / {plan.completeTicketCount} complete
       </span>
-      <div className="progress-bar" aria-label={`${progress}% of plan tickets complete`}>
-        <span style={{ width: `${progress}%` }} />
-      </div>
+      <Progress
+        value={progress}
+        aria-label={`${progress}% of plan tickets complete`}
+        className="h-[5px] rounded-none bg-panel-hi"
+      />
     </>
   );
 }

@@ -1,6 +1,13 @@
 import { useMemo } from "react";
 import type { ReactNode } from "react";
 
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { NativeSelect } from "@/components/ui/native-select";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { cn } from "@/lib/utils";
+
 import { MetricCard } from "./MetricCard";
 import { PlanTable } from "./PlanTable";
 import { SpecPanel } from "./SpecPanel";
@@ -34,6 +41,12 @@ const statusOptions = [
   ["complete", statusLabels.complete],
   ["deferred", statusLabels.deferred],
 ] as const;
+
+const calloutTopTone = {
+  hot: "border-t-hot",
+  good: "border-t-good",
+  info: "border-t-info",
+} as const;
 
 export function OverviewPage({
   data,
@@ -100,6 +113,7 @@ export function OverviewPage({
             <span className="local-badge">
               <i /> read-only / local
             </span>
+            <a href="/sessions">agent sessions</a>
             {data.meta.repositoryUrl && (
               <a href={data.meta.repositoryUrl} target="_blank" rel="noreferrer">
                 repository ↗
@@ -133,12 +147,12 @@ export function OverviewPage({
 
       <section className="callouts" aria-label="What matters now">
         <Callout tone="hot" label="01 / attention lane">
-          <h2>
+          <h2 className="mb-2.5 text-[1.08rem] font-bold leading-[1.18]">
             {attentionTickets.length > 0
               ? "Gates are visible, not implicit."
               : "No active gates found."}
           </h2>
-          <p>
+          <p className="text-[0.82rem] leading-[1.48] text-muted-foreground">
             {attentionTickets.length > 0
               ? "These records need evidence, a decision, or material development before they can move."
               : "The current local corpus has no ticket classified as gated, blocked, or needing development."}
@@ -146,12 +160,12 @@ export function OverviewPage({
           <MiniTicketList tickets={attentionTickets} />
         </Callout>
         <Callout tone="good" label="02 / clean frontier">
-          <h2>
+          <h2 className="mb-2.5 text-[1.08rem] font-bold leading-[1.18]">
             {readyTickets.length > 0
               ? "The ready-for-agent queue is ready to move."
               : "The ready-for-agent lane is empty."}
           </h2>
-          <p>
+          <p className="text-[0.82rem] leading-[1.48] text-muted-foreground">
             {readyTickets.length > 0
               ? "ready-for-agent means the plan has made the work legible; it does not skip the required review steps."
               : "Use the plan corpus to find the next source that needs decomposition."}
@@ -159,8 +173,10 @@ export function OverviewPage({
           <MiniTicketList tickets={readyTickets} />
         </Callout>
         <Callout tone="info" label="03 / source of truth">
-          <h2>Local documents stay authoritative.</h2>
-          <p>
+          <h2 className="mb-2.5 text-[1.08rem] font-bold leading-[1.18]">
+            Local documents stay authoritative.
+          </h2>
+          <p className="text-[0.82rem] leading-[1.48] text-muted-foreground">
             The app is a read-only projection. Status comes from the canonical ledger where one
             exists; otherwise it comes from the ticket&apos;s own plan file.
           </p>
@@ -170,77 +186,95 @@ export function OverviewPage({
         </Callout>
       </section>
 
-      <section className="control-panel" aria-label="Overview filters">
-        <div className="control-heading">
-          <div>
-            <p className="section-kicker">Filter the workbench</p>
-            <h2>
-              Find the next <em>move.</em>
-            </h2>
+      <section aria-label="Overview filters">
+        <Card className="mb-[76px] gap-0 rounded-none border-line-strong bg-panel/92 p-[22px] shadow-panel max-[780px]:mb-[55px]">
+          <div className="control-heading">
+            <div>
+              <p className="section-kicker">Filter the workbench</p>
+              <h2>
+                Find the next <em>move.</em>
+              </h2>
+            </div>
+            {activeFilter && (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="rounded-none border-line-strong bg-transparent text-[0.75rem] font-normal text-muted-foreground shadow-none hover:border-acid hover:bg-transparent hover:text-acid"
+                onClick={resetSearch}
+              >
+                Clear filters
+              </Button>
+            )}
           </div>
-          {activeFilter && (
-            <button type="button" className="clear-button" onClick={resetSearch}>
-              Clear filters
-            </button>
-          )}
-        </div>
-        <div className="filter-grid">
-          <label className="search-control">
-            <span>Search everything</span>
-            <input
-              type="search"
-              value={search.q}
-              maxLength={120}
-              placeholder="Try auth, production, a ticket ID, or a source path"
-              onChange={(event) => onSearchChange({ q: event.currentTarget.value })}
-            />
-          </label>
-          <label>
-            <span>Status lens</span>
-            <select
-              value={search.status}
-              onChange={(event) => {
-                const next = statusOptions.find(
-                  ([value]) => value === event.currentTarget.value,
-                )?.[0];
-                if (next) onSearchChange({ status: next });
-              }}
-            >
-              {statusOptions.map(([value, label]) => (
-                <option key={value} value={value}>
-                  {label}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            <span>Stream</span>
-            <select
-              value={search.stream}
-              onChange={(event) => onSearchChange({ stream: event.currentTarget.value })}
-            >
-              <option value="all">All streams</option>
-              {groups.map((group) => (
-                <option key={group} value={group}>
-                  {group}
-                </option>
-              ))}
-            </select>
-          </label>
-        </div>
-        <div className="source-tabs" role="group" aria-label="Source lens">
-          {sourceOptions.map(([value, label]) => (
-            <button
-              key={value}
-              type="button"
-              className={search.source === value ? "source-tab active" : "source-tab"}
-              aria-pressed={search.source === value}
-              onClick={() => onSearchChange({ source: value })}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
+          <div className="filter-grid">
+            <label className="search-control">
+              <span>Search everything</span>
+              <Input
+                type="search"
+                value={search.q}
+                maxLength={120}
+                placeholder="Try auth, production, a ticket ID, or a source path"
+                className="h-[42px] rounded-none border-line-strong bg-field px-[11px] shadow-none placeholder:text-faint focus-visible:border-acid focus-visible:ring-acid/15"
+                onChange={(event) => onSearchChange({ q: event.currentTarget.value })}
+              />
+            </label>
+            <label>
+              <span>Status lens</span>
+              <NativeSelect
+                value={search.status}
+                onChange={(event) => {
+                  const next = statusOptions.find(
+                    ([value]) => value === event.currentTarget.value,
+                  )?.[0];
+                  if (next) onSearchChange({ status: next });
+                }}
+              >
+                {statusOptions.map(([value, label]) => (
+                  <option key={value} value={value}>
+                    {label}
+                  </option>
+                ))}
+              </NativeSelect>
+            </label>
+            <label>
+              <span>Stream</span>
+              <NativeSelect
+                value={search.stream}
+                onChange={(event) => onSearchChange({ stream: event.currentTarget.value })}
+              >
+                <option value="all">All streams</option>
+                {groups.map((group) => (
+                  <option key={group} value={group}>
+                    {group}
+                  </option>
+                ))}
+              </NativeSelect>
+            </label>
+          </div>
+          <ToggleGroup
+            type="single"
+            spacing={8}
+            value={search.source}
+            aria-label="Source lens"
+            className="source-tabs w-auto flex-wrap gap-[7px] rounded-none"
+            onValueChange={(next) => {
+              if (next) onSearchChange({ source: next as OverviewSearch["source"] });
+            }}
+          >
+            {sourceOptions.map(([value, label]) => (
+              <ToggleGroupItem
+                key={value}
+                value={value}
+                variant="outline"
+                aria-pressed={search.source === value}
+                className="rounded-none border-line px-[11px] py-[7px] text-[0.74rem] font-normal text-muted-foreground shadow-none hover:border-acid hover:bg-acid/8 hover:text-acid data-[state=on]:border-acid data-[state=on]:bg-acid/8 data-[state=on]:text-acid"
+              >
+                {label}
+              </ToggleGroupItem>
+            ))}
+          </ToggleGroup>
+        </Card>
       </section>
 
       {showTickets && <TicketTable tickets={visibleTickets} total={data.tickets.length} />}
@@ -287,10 +321,22 @@ function Callout({
   children: ReactNode;
 }>) {
   return (
-    <article className={`callout callout-${tone}`}>
-      <span className="callout-label">{label}</span>
+    <Card
+      className={cn(
+        "min-h-[240px] gap-0 rounded-none border-line bg-panel/90 p-5 shadow-none",
+        calloutTopTone[tone],
+      )}
+    >
+      <span
+        className={cn(
+          "mb-[13px] block font-mono text-[0.66rem] tracking-[0.11em] uppercase",
+          tone === "hot" ? "text-hot" : tone === "good" ? "text-good" : "text-amber",
+        )}
+      >
+        {label}
+      </span>
       {children}
-    </article>
+    </Card>
   );
 }
 

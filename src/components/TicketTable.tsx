@@ -1,5 +1,16 @@
 import { createColumnHelper, flexRender, useTable } from "@tanstack/react-table";
 
+import {
+  Table,
+  TableBody,
+  TableHead,
+  TableHeader,
+  TableRow,
+  TableCell,
+} from "@/components/ui/table";
+import { Progress } from "@/components/ui/progress";
+import { cn } from "@/lib/utils";
+
 import { statusSortFn, sortableTableFeatures } from "../lib/table";
 import type { TicketRecord } from "../types";
 import { StatusBadge } from "./StatusBadge";
@@ -81,15 +92,15 @@ export function TicketTable({
         <span className="result-hint">Select a status or stream above to narrow the view.</span>
       </div>
       <div className="table-shell">
-        <table className="signal-table ticket-table">
+        <Table className="min-w-[1050px] border-collapse">
           <caption className="sr-only">Implementation tickets and external tasks</caption>
-          <thead>
+          <TableHeader>
             {table.getHeaderGroups().map((headerGroup) => (
-              <tr key={headerGroup.id}>
+              <TableRow key={headerGroup.id} className="hover:bg-transparent">
                 {headerGroup.headers.map((header) => {
                   const sorted = header.column.getIsSorted();
                   return (
-                    <th
+                    <TableHead
                       key={header.id}
                       scope="col"
                       aria-sort={
@@ -99,45 +110,61 @@ export function TicketTable({
                             ? "descending"
                             : undefined
                       }
+                      className="sticky top-0 z-[2] h-auto bg-panel-hi/97 px-[15px] py-3.5 align-top font-mono text-[0.64rem] font-normal tracking-[0.08em] uppercase text-faint"
                     >
                       {header.isPlaceholder ? null : (
                         <button
                           type="button"
-                          className={sorted ? "th-sort sorted" : "th-sort"}
+                          className={cn(
+                            "inline-flex cursor-pointer items-center gap-1.5 border-0 bg-none p-0 text-left hover:text-acid focus-visible:text-acid",
+                            sorted && "text-acid",
+                          )}
                           onClick={header.column.getToggleSortingHandler()}
                         >
                           {flexRender(header.column.columnDef.header, header.getContext())}
-                          <span className="sort-mark" aria-hidden="true">
+                          <span
+                            aria-hidden="true"
+                            className={cn("text-[0.5rem]", sorted ? "opacity-100" : "opacity-40")}
+                          >
                             {sorted === "asc" ? "▲" : sorted === "desc" ? "▼" : "↕"}
                           </span>
                         </button>
                       )}
-                    </th>
+                    </TableHead>
                   );
                 })}
-              </tr>
+              </TableRow>
             ))}
-          </thead>
-          <tbody>
+          </TableHeader>
+          <TableBody>
             {rows.length === 0 ? (
-              <tr>
-                <td className="table-empty" colSpan={ticketColumns.length}>
+              <TableRow className="border-b-0 hover:bg-transparent">
+                <TableCell
+                  colSpan={ticketColumns.length}
+                  className="p-[35px] text-center text-muted-foreground"
+                >
                   No tickets match this lens. Clear the filters to restore the full ledger.
-                </td>
-              </tr>
+                </TableCell>
+              </TableRow>
             ) : (
               rows.map((row) => (
-                <tr key={row.id}>
+                <TableRow key={row.id} className="hover:bg-acid/3">
                   {row.getAllCells().map((cell) => (
-                    <td key={cell.id} className={cellClassNames[cell.column.id]}>
+                    <TableCell
+                      key={cell.id}
+                      className={cn(
+                        "border-b-0 px-[15px] py-3.5 align-top whitespace-normal",
+                        cellClassNames[cell.column.id],
+                      )}
+                    >
                       {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                    </td>
+                    </TableCell>
                   ))}
-                </tr>
+                </TableRow>
               ))
             )}
-          </tbody>
-        </table>
+          </TableBody>
+        </Table>
       </div>
     </section>
   );
@@ -184,7 +211,9 @@ function TicketStreamCell({ ticket }: Readonly<{ ticket: TicketRecord }>) {
   return (
     <>
       <strong className="stream-name">{ticket.group}</strong>
-      <small>{ticket.lane}</small>
+      <small className="block text-[0.76rem] leading-[1.45] text-muted-foreground">
+        {ticket.lane}
+      </small>
     </>
   );
 }
@@ -199,14 +228,11 @@ function TicketProgressCell({ ticket }: Readonly<{ ticket: TicketRecord }>) {
   }
   return (
     <div className="progress-cell">
-      <div className="progress-bar" aria-hidden="true">
-        <span
-          style={{
-            width: `${Math.round((ticket.progress.done / ticket.progress.total) * 100)}%`,
-          }}
-        />
-      </div>
-      <small>
+      <Progress
+        value={Math.round((ticket.progress.done / ticket.progress.total) * 100)}
+        className="mb-[7px] h-[5px] rounded-none bg-panel-hi"
+      />
+      <small className="block text-[0.76rem] leading-[1.45] text-muted-foreground">
         {ticket.progress.done}/{ticket.progress.total} checked
       </small>
     </div>

@@ -1,5 +1,8 @@
 {
   "$schema": "./workbench.config.schema.json",
+  "sessions": {
+    "enabled": false
+  },
   "projectName": "Your project",
   "theme": {
     "background": "#101715",

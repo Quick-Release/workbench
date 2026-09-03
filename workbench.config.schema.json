@@ -5,7 +5,9 @@
   "type": "object",
   "additionalProperties": false,
   "properties": {
-    "$schema": { "type": "string" },
+    "$schema": {
+      "type": "string"
+    },
     "projectName": {
       "type": "string",
       "minLength": 1,
@@ -20,27 +22,76 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "text": { "$ref": "#/$defs/color" },
-        "textMuted": { "$ref": "#/$defs/color" },
-        "textFaint": { "$ref": "#/$defs/color" },
-        "background": { "$ref": "#/$defs/color" },
-        "surface": { "$ref": "#/$defs/color" },
-        "surfaceElevated": { "$ref": "#/$defs/color" },
-        "border": { "$ref": "#/$defs/color" },
-        "borderStrong": { "$ref": "#/$defs/color" },
-        "accent": { "$ref": "#/$defs/color" },
-        "accentMuted": { "$ref": "#/$defs/color" },
-        "warning": { "$ref": "#/$defs/color" },
-        "warningMuted": { "$ref": "#/$defs/color" },
-        "danger": { "$ref": "#/$defs/color" },
-        "dangerMuted": { "$ref": "#/$defs/color" },
-        "info": { "$ref": "#/$defs/color" },
-        "infoMuted": { "$ref": "#/$defs/color" }
+        "text": {
+          "$ref": "#/$defs/color"
+        },
+        "textMuted": {
+          "$ref": "#/$defs/color"
+        },
+        "textFaint": {
+          "$ref": "#/$defs/color"
+        },
+        "background": {
+          "$ref": "#/$defs/color"
+        },
+        "surface": {
+          "$ref": "#/$defs/color"
+        },
+        "surfaceElevated": {
+          "$ref": "#/$defs/color"
+        },
+        "border": {
+          "$ref": "#/$defs/color"
+        },
+        "borderStrong": {
+          "$ref": "#/$defs/color"
+        },
+        "accent": {
+          "$ref": "#/$defs/color"
+        },
+        "accentMuted": {
+          "$ref": "#/$defs/color"
+        },
+        "warning": {
+          "$ref": "#/$defs/color"
+        },
+        "warningMuted": {
+          "$ref": "#/$defs/color"
+        },
+        "danger": {
+          "$ref": "#/$defs/color"
+        },
+        "dangerMuted": {
+          "$ref": "#/$defs/color"
+        },
+        "info": {
+          "$ref": "#/$defs/color"
+        },
+        "infoMuted": {
+          "$ref": "#/$defs/color"
+        }
       }
     },
     "services": {
       "type": "array",
-      "items": { "$ref": "#/$defs/service" }
+      "items": {
+        "$ref": "#/$defs/service"
+      }
+    },
+    "sessions": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false
+        },
+        "databasePath": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500
+        }
+      }
     }
   },
   "$defs": {
@@ -52,31 +103,70 @@
       "type": "object",
       "required": ["id", "type"],
       "properties": {
-        "id": { "type": "string", "minLength": 1, "maxLength": 80 },
-        "type": { "type": "string", "minLength": 1, "maxLength": 40 },
-        "label": { "type": "string", "minLength": 1, "maxLength": 100 },
-        "enabled": { "type": "boolean" },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "type": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 40
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "enabled": {
+          "type": "boolean"
+        },
         "tokenEnv": {
           "type": "string",
           "pattern": "^[A-Z][A-Z0-9_]*$"
         },
-        "maxPages": { "type": "integer", "minimum": 1, "maximum": 100 },
-        "idPrefix": { "type": "string", "maxLength": 40 },
-        "group": { "type": "string", "maxLength": 100 },
-        "lane": { "type": "string", "maxLength": 100 },
+        "maxPages": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100
+        },
+        "idPrefix": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "group": {
+          "type": "string",
+          "maxLength": 100
+        },
+        "lane": {
+          "type": "string",
+          "maxLength": 100
+        },
         "statusMap": {
           "type": "object",
-          "additionalProperties": { "type": "string" }
+          "additionalProperties": {
+            "type": "string"
+          }
         },
-        "projectGid": { "type": "string", "minLength": 1 },
-        "dataSourceId": { "type": "string", "minLength": 1 },
+        "projectGid": {
+          "type": "string",
+          "minLength": 1
+        },
+        "dataSourceId": {
+          "type": "string",
+          "minLength": 1
+        },
         "repo": {
           "type": "string",
           "minLength": 1,
           "maxLength": 300,
           "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9][A-Za-z0-9_.-]*$"
         },
-        "projectId": { "type": ["string", "number"], "minLength": 1, "pattern": "^\\d+$" },
+        "projectId": {
+          "type": ["string", "number"],
+          "minLength": 1,
+          "pattern": "^\\d+$"
+        },
         "projectPath": {
           "type": "string",
           "minLength": 1,
@@ -94,36 +184,95 @@
         },
         "properties": {
           "type": "object",
-          "additionalProperties": { "type": "string" },
+          "additionalProperties": {
+            "type": "string"
+          },
           "properties": {
-            "title": { "type": "string" },
-            "status": { "type": "string" },
-            "group": { "type": "string" },
-            "lane": { "type": "string" },
-            "id": { "type": "string" },
-            "dependencies": { "type": "string" },
-            "summary": { "type": "string" }
+            "title": {
+              "type": "string"
+            },
+            "status": {
+              "type": "string"
+            },
+            "group": {
+              "type": "string"
+            },
+            "lane": {
+              "type": "string"
+            },
+            "id": {
+              "type": "string"
+            },
+            "dependencies": {
+              "type": "string"
+            },
+            "summary": {
+              "type": "string"
+            }
           }
         },
-        "filter": { "type": "object" },
-        "sorts": { "type": "array" }
+        "filter": {
+          "type": "object"
+        },
+        "sorts": {
+          "type": "array"
+        }
       },
       "allOf": [
         {
-          "if": { "properties": { "type": { "const": "asana" } } },
-          "then": { "required": ["projectGid"] }
+          "if": {
+            "properties": {
+              "type": {
+                "const": "asana"
+              }
+            }
+          },
+          "then": {
+            "required": ["projectGid"]
+          }
         },
         {
-          "if": { "properties": { "type": { "const": "notion" } } },
-          "then": { "required": ["dataSourceId"] }
+          "if": {
+            "properties": {
+              "type": {
+                "const": "notion"
+              }
+            }
+          },
+          "then": {
+            "required": ["dataSourceId"]
+          }
         },
         {
-          "if": { "properties": { "type": { "const": "github" } } },
-          "then": { "required": ["repo"] }
+          "if": {
+            "properties": {
+              "type": {
+                "const": "github"
+              }
+            }
+          },
+          "then": {
+            "required": ["repo"]
+          }
         },
         {
-          "if": { "properties": { "type": { "const": "gitlab" } } },
-          "then": { "anyOf": [{ "required": ["projectId"] }, { "required": ["projectPath"] }] }
+          "if": {
+            "properties": {
+              "type": {
+                "const": "gitlab"
+              }
+            }
+          },
+          "then": {
+            "anyOf": [
+              {
+                "required": ["projectId"]
+              },
+              {
+                "required": ["projectPath"]
+              }
+            ]
+          }
         }
       ],
       "additionalProperties": true

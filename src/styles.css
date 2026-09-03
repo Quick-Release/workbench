@@ -1,4 +1,83 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+/*
+ * shadcn/ui semantic tokens, defined in terms of the legacy workbench tokens
+ * below. main.tsx injects overrides for the legacy names at runtime from
+ * workbench.config.json, so this layer follows any configured theme without
+ * a schema change.
+ */
+@theme inline {
+  --color-background: var(--bg);
+  --color-foreground: var(--ink);
+  --color-card: var(--panel);
+  --color-card-foreground: var(--ink);
+  --color-popover: var(--panel);
+  --color-popover-foreground: var(--ink);
+  --color-primary: var(--acid);
+  --color-primary-foreground: var(--bg);
+  --color-secondary: var(--panel-hi);
+  --color-secondary-foreground: var(--ink);
+  --color-muted: var(--panel-hi);
+  --color-muted-foreground: var(--muted);
+  --color-accent: var(--panel-hi);
+  --color-accent-foreground: var(--ink);
+  --color-destructive: var(--coral);
+  --color-destructive-foreground: var(--bg);
+  --color-border: var(--line);
+  --color-input: var(--line-strong);
+  --color-ring: var(--acid);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+
+  --color-ink: var(--ink);
+  --color-faint: var(--faint);
+  --color-white-dim: var(--white-dim);
+  --color-panel: var(--panel);
+  --color-panel-hi: var(--panel-hi);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-acid: var(--acid);
+  --color-acid-dim: var(--acid-dim);
+  --color-amber: var(--amber);
+  --color-amber-dim: var(--amber-dim);
+  --color-coral: var(--coral);
+  --color-coral-dim: var(--coral-dim);
+  --color-blue: var(--blue);
+  --color-blue-dim: var(--blue-dim);
+
+  /* tone triads (text / dim background / mixed border) shared by badges,
+     metric values, callout accents, and status dots */
+  --color-good: var(--acid);
+  --color-good-dim: var(--acid-dim);
+  --color-good-border: color-mix(in srgb, var(--acid) 55%, var(--line-strong));
+  --color-warn: var(--amber);
+  --color-warn-dim: var(--amber-dim);
+  --color-warn-border: color-mix(in srgb, var(--amber) 55%, var(--line-strong));
+  --color-hot: var(--coral);
+  --color-hot-dim: var(--coral-dim);
+  --color-hot-border: color-mix(in srgb, var(--coral) 55%, var(--line-strong));
+  --color-info: var(--blue);
+  --color-info-dim: var(--blue-dim);
+  --color-info-border: color-mix(in srgb, var(--blue) 55%, var(--line-strong));
+
+  --color-field: color-mix(in srgb, var(--bg) 80%, var(--panel));
+  --font-mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  --shadow-panel: var(--shadow);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+}
+
 :root {
+  --radius: 0rem;
   color-scheme: dark;
   --ink: #f1f3e9;
   --muted: #a5b0a4;
@@ -167,9 +246,7 @@ code {
 .section-nav,
 .control-heading,
 .section-heading,
-.result-line,
-.spec-card-topline,
-.spec-card-footer {
+.result-line {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -299,18 +376,6 @@ code {
   font-style: normal;
 }
 
-.callout-label {
-  display: block;
-  margin-bottom: 13px;
-  color: var(--amber);
-  font:
-    0.66rem "SFMono-Regular",
-    Consolas,
-    monospace;
-  letter-spacing: 0.11em;
-  text-transform: uppercase;
-}
-
 .section-nav {
   position: sticky;
   top: 95px;
@@ -356,103 +421,11 @@ code {
   margin: 30px 0 52px;
 }
 
-.metric-card {
-  min-height: 135px;
-  padding: 17px;
-  border: 1px solid var(--line);
-  background: linear-gradient(
-    145deg,
-    color-mix(in srgb, var(--panel-hi) 93%, transparent),
-    color-mix(in srgb, var(--panel) 93%, transparent)
-  );
-  box-shadow: var(--shadow);
-}
-
-.metric-card strong {
-  display: block;
-  margin-bottom: 12px;
-  color: var(--ink);
-  font:
-    700 clamp(1.9rem, 3.8vw, 3.1rem)/1 "SFMono-Regular",
-    Consolas,
-    monospace;
-  letter-spacing: -0.11em;
-}
-
-.metric-card span {
-  display: block;
-  max-width: 130px;
-  color: var(--muted);
-  font-size: 0.76rem;
-  line-height: 1.3;
-}
-
-.metric-card small {
-  display: block;
-  margin-top: 7px;
-  color: var(--faint);
-  font-size: 0.65rem;
-}
-
-.metric-good strong,
-.metric-ready strong {
-  color: var(--acid);
-}
-
-.metric-warn strong {
-  color: var(--amber);
-}
-
-.metric-hot strong {
-  color: var(--coral);
-}
-
-.metric-info strong {
-  color: var(--blue);
-}
-
 .callouts {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
   margin-bottom: 78px;
-}
-
-.callout {
-  min-height: 240px;
-  padding: 20px;
-  border: 1px solid var(--line);
-  border-top: 3px solid var(--blue);
-  background: color-mix(in srgb, var(--panel) 90%, transparent);
-}
-
-.callout-good {
-  border-top-color: var(--acid);
-}
-
-.callout-hot {
-  border-top-color: var(--coral);
-}
-
-.callout-hot .callout-label {
-  color: var(--coral);
-}
-
-.callout-good .callout-label {
-  color: var(--acid);
-}
-
-.callout h2 {
-  margin: 0 0 10px;
-  font-size: 1.08rem;
-  line-height: 1.18;
-}
-
-.callout p {
-  margin: 0;
-  color: var(--muted);
-  font-size: 0.82rem;
-  line-height: 1.48;
 }
 
 .text-link {
@@ -498,14 +471,6 @@ code {
   font-size: 0.68rem;
 }
 
-.control-panel {
-  padding: 22px;
-  margin-bottom: 76px;
-  border: 1px solid var(--line-strong);
-  background: color-mix(in srgb, var(--panel) 92%, transparent);
-  box-shadow: var(--shadow);
-}
-
 .control-heading {
   align-items: end;
   margin-bottom: 23px;
@@ -513,20 +478,6 @@ code {
 
 .control-heading h2 {
   font-size: clamp(1.65rem, 3vw, 2.5rem);
-}
-
-.clear-button {
-  padding: 8px 11px;
-  border: 1px solid var(--line-strong);
-  color: var(--muted);
-  background: transparent;
-  cursor: pointer;
-  font-size: 0.75rem;
-}
-
-.clear-button:hover {
-  border-color: var(--acid);
-  color: var(--acid);
 }
 
 .filter-grid {
@@ -550,28 +501,6 @@ code {
   text-transform: uppercase;
 }
 
-.filter-grid input,
-.filter-grid select {
-  width: 100%;
-  min-height: 42px;
-  padding: 9px 11px;
-  border: 1px solid var(--line-strong);
-  border-radius: 0;
-  outline: 0;
-  color: var(--ink);
-  background: color-mix(in srgb, var(--bg) 80%, var(--panel));
-}
-
-.filter-grid input::placeholder {
-  color: var(--faint);
-}
-
-.filter-grid input:focus,
-.filter-grid select:focus {
-  border-color: var(--acid);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--acid) 13%, transparent);
-}
-
 .source-tabs {
   display: flex;
   flex-wrap: wrap;
@@ -579,22 +508,6 @@ code {
   margin-top: 16px;
   padding-top: 15px;
   border-top: 1px solid var(--line);
-}
-
-.source-tab {
-  padding: 7px 11px;
-  border: 1px solid var(--line);
-  color: var(--muted);
-  background: transparent;
-  cursor: pointer;
-  font-size: 0.74rem;
-}
-
-.source-tab:hover,
-.source-tab.active {
-  border-color: var(--acid);
-  color: var(--acid);
-  background: color-mix(in srgb, var(--acid) 8%, transparent);
 }
 
 .content-section {
@@ -644,82 +557,10 @@ code {
   box-shadow: var(--shadow);
 }
 
-.signal-table {
-  width: 100%;
-  min-width: 1050px;
-  border-collapse: collapse;
-}
-
-.signal-table th,
-.signal-table td {
-  padding: 14px 15px;
-  border-bottom: 1px solid var(--line);
-  text-align: left;
-  vertical-align: top;
-}
-
-.signal-table th {
-  position: sticky;
-  top: 0;
-  z-index: 2;
-  color: var(--faint);
-  background: color-mix(in srgb, var(--panel-hi) 97%, transparent);
-  font:
-    0.64rem "SFMono-Regular",
-    Consolas,
-    monospace;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-.th-sort {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 0;
-  border: 0;
-  background: none;
-  color: inherit;
-  cursor: pointer;
-  font: inherit;
-  letter-spacing: inherit;
-  text-align: inherit;
-  text-transform: inherit;
-}
-
-.th-sort:hover,
-.th-sort:focus-visible {
-  color: var(--acid);
-}
-
-.th-sort .sort-mark {
-  font-size: 0.5rem;
-  opacity: 0.4;
-}
-
-.th-sort.sorted {
-  color: var(--acid);
-}
-
-.th-sort.sorted .sort-mark {
-  opacity: 1;
-}
-
-.signal-table tbody tr:last-child td {
-  border-bottom: 0;
-}
-
-.signal-table tbody tr:hover td {
-  background: color-mix(in srgb, var(--acid) 3%, transparent);
-}
-
-.signal-table td > small,
-.ticket-title-cell > p,
-.plan-summary {
-  display: block;
-  color: var(--muted);
-  font-size: 0.76rem;
-  line-height: 1.45;
+/* Keep the shell as the only scroll context so sticky headers still track the
+   page, exactly as they did before the vendored Table added its own. */
+.table-shell [data-slot="table-container"] {
+  overflow: visible;
 }
 
 .ticket-title-cell {
@@ -734,6 +575,14 @@ code {
   color: var(--ink);
   font-size: 0.94rem;
   line-height: 1.28;
+}
+
+.ticket-title-cell > p,
+.plan-summary {
+  display: block;
+  color: var(--muted);
+  font-size: 0.76rem;
+  line-height: 1.45;
 }
 
 .ticket-title-cell > p {
@@ -779,60 +628,6 @@ code {
   line-height: 1.35;
 }
 
-.status-badge {
-  display: inline-flex;
-  width: fit-content;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 8px;
-  border: 1px solid var(--line-strong);
-  border-radius: 999px;
-  color: var(--muted);
-  font:
-    700 0.65rem "SFMono-Regular",
-    Consolas,
-    monospace;
-  white-space: nowrap;
-}
-
-.status-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: currentColor;
-}
-
-.status-good,
-.status-ready {
-  border-color: color-mix(in srgb, var(--acid) 55%, var(--line-strong));
-  color: var(--acid);
-  background: var(--acid-dim);
-}
-
-.status-warn {
-  border-color: color-mix(in srgb, var(--amber) 55%, var(--line-strong));
-  color: var(--amber);
-  background: var(--amber-dim);
-}
-
-.status-hot {
-  border-color: color-mix(in srgb, var(--coral) 55%, var(--line-strong));
-  color: var(--coral);
-  background: var(--coral-dim);
-}
-
-.status-info {
-  border-color: color-mix(in srgb, var(--blue) 55%, var(--line-strong));
-  color: var(--blue);
-  background: var(--blue-dim);
-}
-
-.status-muted {
-  border-color: var(--line-strong);
-  color: var(--faint);
-  background: var(--panel-hi);
-}
-
 .status-detail {
   max-width: 210px;
   margin-top: 8px;
@@ -863,29 +658,8 @@ code {
   min-width: 100px;
 }
 
-.progress-bar {
-  width: 100%;
-  min-width: 92px;
-  height: 5px;
-  overflow: hidden;
-  margin-bottom: 7px;
-  background: var(--panel-hi);
-}
-
-.progress-bar span {
-  display: block;
-  height: 100%;
-  background: var(--acid);
-}
-
 .muted-copy {
   color: var(--faint) !important;
-}
-
-.table-empty {
-  padding: 35px !important;
-  color: var(--muted);
-  text-align: center !important;
 }
 
 .plan-title-cell {
@@ -929,68 +703,6 @@ code {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
-}
-
-.spec-card {
-  display: flex;
-  min-height: 230px;
-  flex-direction: column;
-  padding: 19px;
-  border: 1px solid var(--line);
-  border-top: 3px solid var(--blue);
-  background: color-mix(in srgb, var(--panel) 90%, transparent);
-}
-
-.spec-card-topline {
-  align-items: start;
-}
-
-.spec-card-topline code {
-  color: var(--blue);
-  font-size: 0.7rem;
-}
-
-.spec-card h3 {
-  margin: 23px 0 9px;
-  font-size: 1.05rem;
-  line-height: 1.2;
-}
-
-.spec-card > p {
-  max-width: 630px;
-  margin: 0;
-  color: var(--muted);
-  font-size: 0.82rem;
-  line-height: 1.52;
-}
-
-.spec-card-footer {
-  align-items: end;
-  gap: 20px;
-  margin-top: auto;
-  padding-top: 22px;
-}
-
-.spec-card-footer > div {
-  min-width: 130px;
-}
-
-.spec-card-footer small {
-  color: var(--faint);
-  font-size: 0.67rem;
-}
-
-.spec-card-footer a {
-  flex: 0 0 auto;
-  font-size: 0.74rem;
-}
-
-.empty-card {
-  padding: 35px;
-  border: 1px solid var(--line);
-  color: var(--muted);
-  background: color-mix(in srgb, var(--panel) 90%, transparent);
-  text-align: center;
 }
 
 .site-footer {
@@ -1104,7 +816,7 @@ code {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .callout:last-child {
+  .callouts > :last-child {
     grid-column: 1 / -1;
   }
 }
@@ -1154,26 +866,16 @@ code {
     margin: 22px 0 45px;
   }
 
-  .metric-card {
-    min-height: 115px;
-    padding: 13px;
-  }
-
-  .metric-card strong {
-    margin-bottom: 8px;
-  }
-
   .callouts,
   .spec-grid {
     grid-template-columns: 1fr;
   }
 
-  .callout:last-child {
+  .callouts > :last-child {
     grid-column: auto;
   }
 
   .callouts,
-  .control-panel,
   .content-section {
     margin-bottom: 55px;
   }
