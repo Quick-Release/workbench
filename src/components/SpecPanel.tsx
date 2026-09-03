@@ -1,6 +1,6 @@
 import { Card } from "@/components/ui/card";
-import { Progress } from "@/components/ui/progress";
 
+import { ProgressBar } from "./ProgressBar";
 import { StatusBadge } from "./StatusBadge";
 import type { SpecChangeRecord } from "../types";
 
@@ -59,7 +59,7 @@ function SpecCard({ change }: Readonly<{ change: SpecChangeRecord }>) {
       </p>
       <div className="mt-auto flex items-end justify-between gap-5 pt-[22px]">
         <div className="min-w-[130px]">
-          <Progress value={progress} className="mb-[7px] h-[5px] rounded-none bg-panel-hi" />
+          <ProgressBar value={progress} />
           <small className="text-[0.67rem] text-faint">
             {change.completeTaskCount}/{change.taskCount} tasks checked
           </small>

@@ -8,9 +8,15 @@ import {
   TableRow,
   TableCell,
 } from "@/components/ui/table";
-import { Progress } from "@/components/ui/progress";
-import { cn } from "@/lib/utils";
 
+import { ProgressBar } from "./ProgressBar";
+import {
+  SortButton,
+  sortableBodyCellClass,
+  sortableBodyRowClass,
+  sortableHeadClass,
+  tableEmptyCellClass,
+} from "./sortable-table";
 import { statusSortFn, sortableTableFeatures } from "../lib/table";
 import type { TicketRecord } from "../types";
 import { StatusBadge } from "./StatusBadge";
@@ -110,25 +116,15 @@ export function TicketTable({
                             ? "descending"
                             : undefined
                       }
-                      className="sticky top-0 z-[2] h-auto bg-panel-hi/97 px-[15px] py-3.5 align-top font-mono text-[0.64rem] font-normal tracking-[0.08em] uppercase text-faint"
+                      className={sortableHeadClass}
                     >
                       {header.isPlaceholder ? null : (
-                        <button
-                          type="button"
-                          className={cn(
-                            "inline-flex cursor-pointer items-center gap-1.5 border-0 bg-none p-0 text-left hover:text-acid focus-visible:text-acid",
-                            sorted && "text-acid",
-                          )}
+                        <SortButton
+                          sorted={sorted}
                           onClick={header.column.getToggleSortingHandler()}
                         >
                           {flexRender(header.column.columnDef.header, header.getContext())}
-                          <span
-                            aria-hidden="true"
-                            className={cn("text-[0.5rem]", sorted ? "opacity-100" : "opacity-40")}
-                          >
-                            {sorted === "asc" ? "▲" : sorted === "desc" ? "▼" : "↕"}
-                          </span>
-                        </button>
+                        </SortButton>
                       )}
                     </TableHead>
                   );
@@ -139,23 +135,19 @@ export function TicketTable({
           <TableBody>
             {rows.length === 0 ? (
               <TableRow className="border-b-0 hover:bg-transparent">
-                <TableCell
-                  colSpan={ticketColumns.length}
-                  className="p-[35px] text-center text-muted-foreground"
-                >
+                <TableCell colSpan={ticketColumns.length} className={tableEmptyCellClass}>
                   No tickets match this lens. Clear the filters to restore the full ledger.
                 </TableCell>
               </TableRow>
             ) : (
               rows.map((row) => (
-                <TableRow key={row.id} className="hover:bg-acid/3">
+                <TableRow key={row.id} className={sortableBodyRowClass}>
                   {row.getAllCells().map((cell) => (
                     <TableCell
                       key={cell.id}
-                      className={cn(
-                        "border-b-0 px-[15px] py-3.5 align-top whitespace-normal",
-                        cellClassNames[cell.column.id],
-                      )}
+                      className={[sortableBodyCellClass, cellClassNames[cell.column.id]]
+                        .filter(Boolean)
+                        .join(" ")}
                     >
                       {flexRender(cell.column.columnDef.cell, cell.getContext())}
                     </TableCell>
@@ -228,10 +220,7 @@ function TicketProgressCell({ ticket }: Readonly<{ ticket: TicketRecord }>) {
   }
   return (
     <div className="progress-cell">
-      <Progress
-        value={Math.round((ticket.progress.done / ticket.progress.total) * 100)}
-        className="mb-[7px] h-[5px] rounded-none bg-panel-hi"
-      />
+      <ProgressBar value={Math.round((ticket.progress.done / ticket.progress.total) * 100)} />
       <small className="block text-[0.76rem] leading-[1.45] text-muted-foreground">
         {ticket.progress.done}/{ticket.progress.total} checked
       </small>

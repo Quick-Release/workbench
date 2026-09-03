@@ -8,9 +8,15 @@ import {
   TableRow,
   TableCell,
 } from "@/components/ui/table";
-import { Progress } from "@/components/ui/progress";
-import { cn } from "@/lib/utils";
 
+import { ProgressBar } from "./ProgressBar";
+import {
+  SortButton,
+  sortableBodyCellClass,
+  sortableBodyRowClass,
+  sortableHeadClass,
+  tableEmptyCellClass,
+} from "./sortable-table";
 import { statusSortFn, sortableTableFeatures } from "../lib/table";
 import type { PlanRecord } from "../types";
 import { StatusBadge } from "./StatusBadge";
@@ -101,25 +107,15 @@ export function PlanTable({
                             ? "descending"
                             : undefined
                       }
-                      className="sticky top-0 z-[2] h-auto bg-panel-hi/97 px-[15px] py-3.5 align-top font-mono text-[0.64rem] font-normal tracking-[0.08em] uppercase text-faint"
+                      className={sortableHeadClass}
                     >
                       {header.isPlaceholder ? null : (
-                        <button
-                          type="button"
-                          className={cn(
-                            "inline-flex cursor-pointer items-center gap-1.5 border-0 bg-none p-0 text-left hover:text-acid focus-visible:text-acid",
-                            sorted && "text-acid",
-                          )}
+                        <SortButton
+                          sorted={sorted}
                           onClick={header.column.getToggleSortingHandler()}
                         >
                           {flexRender(header.column.columnDef.header, header.getContext())}
-                          <span
-                            aria-hidden="true"
-                            className={cn("text-[0.5rem]", sorted ? "opacity-100" : "opacity-40")}
-                          >
-                            {sorted === "asc" ? "▲" : sorted === "desc" ? "▼" : "↕"}
-                          </span>
-                        </button>
+                        </SortButton>
                       )}
                     </TableHead>
                   );
@@ -130,23 +126,19 @@ export function PlanTable({
           <TableBody>
             {rows.length === 0 ? (
               <TableRow className="border-b-0 hover:bg-transparent">
-                <TableCell
-                  colSpan={planColumns.length}
-                  className="p-[35px] text-center text-muted-foreground"
-                >
+                <TableCell colSpan={planColumns.length} className={tableEmptyCellClass}>
                   No plan sources match this lens.
                 </TableCell>
               </TableRow>
             ) : (
               rows.map((row) => (
-                <TableRow key={row.id} className="hover:bg-acid/3">
+                <TableRow key={row.id} className={sortableBodyRowClass}>
                   {row.getAllCells().map((cell) => (
                     <TableCell
                       key={cell.id}
-                      className={cn(
-                        "border-b-0 px-[15px] py-3.5 align-top whitespace-normal",
-                        cellClassNames[cell.column.id],
-                      )}
+                      className={[sortableBodyCellClass, cellClassNames[cell.column.id]]
+                        .filter(Boolean)
+                        .join(" ")}
                     >
                       {flexRender(cell.column.columnDef.cell, cell.getContext())}
                     </TableCell>
@@ -193,11 +185,7 @@ function PlanLoadCell({ plan }: Readonly<{ plan: PlanRecord }>) {
       <span>
         {plan.openTicketCount} open / {plan.completeTicketCount} complete
       </span>
-      <Progress
-        value={progress}
-        aria-label={`${progress}% of plan tickets complete`}
-        className="h-[5px] rounded-none bg-panel-hi"
-      />
+      <ProgressBar value={progress} label={`${progress}% of plan tickets complete`} />
     </>
   );
 }

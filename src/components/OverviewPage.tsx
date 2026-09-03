@@ -48,6 +48,12 @@ const calloutTopTone = {
   info: "border-t-info",
 } as const;
 
+const calloutLabelTone = {
+  hot: "text-hot",
+  good: "text-good",
+  info: "text-amber",
+} as const;
+
 export function OverviewPage({
   data,
   search,
@@ -267,6 +273,7 @@ export function OverviewPage({
                 key={value}
                 value={value}
                 variant="outline"
+                /* Radix only applies aria-pressed on the client; SSR must carry it too. */
                 aria-pressed={search.source === value}
                 className="rounded-none border-line px-[11px] py-[7px] text-[0.74rem] font-normal text-muted-foreground shadow-none hover:border-acid hover:bg-acid/8 hover:text-acid data-[state=on]:border-acid data-[state=on]:bg-acid/8 data-[state=on]:text-acid"
               >
@@ -330,7 +337,7 @@ function Callout({
       <span
         className={cn(
           "mb-[13px] block font-mono text-[0.66rem] tracking-[0.11em] uppercase",
-          tone === "hot" ? "text-hot" : tone === "good" ? "text-good" : "text-amber",
+          calloutLabelTone[tone],
         )}
       >
         {label}
