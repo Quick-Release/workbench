@@ -159,6 +159,61 @@ test("telemetry from another developer on the same day is accepted", async () =>
   strictEqual(env.d1.db.prepare("SELECT COUNT(*) AS n FROM telemetry").get().n, 2);
 });
 
+test("the same developer with and without an email is still one identity per day", async () => {
+  const env = { d1: createD1Double() };
+  strictEqual(
+    (await callWorker(env, request("/telemetry", { body: telemetryPayload }))).status,
+    200,
+  );
+  const emailLost = { ...telemetryPayload, developer: { login: "ada" } };
+  const response = await callWorker(env, request("/telemetry", { body: emailLost }));
+  strictEqual(response.status, 409);
+  strictEqual(env.d1.db.prepare("SELECT COUNT(*) AS n FROM telemetry").get().n, 1);
+});
+
+test("unidentified telemetry dedupes per repo and day too", async () => {
+  const env = { d1: createD1Double() };
+  const anonymous = { ...telemetryPayload, developer: null };
+  strictEqual((await callWorker(env, request("/telemetry", { body: anonymous }))).status, 200);
+  const response = await callWorker(env, request("/telemetry", { body: anonymous }));
+  strictEqual(response.status, 409);
+  strictEqual(env.d1.db.prepare("SELECT COUNT(*) AS n FROM telemetry").get().n, 1);
+});
+
+test("submission shas are normalized, so case differs only", async () => {
+  const env = { d1: createD1Double() };
+  strictEqual(
+    (await callWorker(env, request("/submissions", { body: submissionPayload }))).status,
+    200,
+  );
+  const upper = { ...submissionPayload, commitSha: submissionPayload.commitSha.toUpperCase() };
+  const response = await callWorker(env, request("/submissions", { body: upper }));
+  strictEqual(response.status, 409);
+  strictEqual(env.d1.db.prepare("SELECT COUNT(*) AS n FROM submissions").get().n, 1);
+});
+
+test("a D1-wrapped unique violation is still a conflict", async () => {
+  const inner = createD1Double();
+  const d1 = {
+    db: inner.db,
+    prepare(sql) {
+      const statement = inner.prepare(sql);
+      const wrapper = {
+        bind: (...args) => {
+          statement.bind(...args);
+          return wrapper;
+        },
+        run: async () => {
+          throw new Error("D1_ERROR: UNIQUE constraint failed: telemetry.day: SQLSTATE 23505");
+        },
+      };
+      return wrapper;
+    },
+  };
+  const response = await callWorker({ d1 }, request("/telemetry", { body: telemetryPayload }));
+  strictEqual(response.status, 409);
+});
+
 test("repeat submission of the same commit is a conflict", async () => {
   const env = { d1: createD1Double() };
   strictEqual(

@@ -5,7 +5,6 @@
 
 CREATE TABLE IF NOT EXISTS telemetry (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  dedup_key TEXT NOT NULL,
   day TEXT NOT NULL,
   repo_remote TEXT NOT NULL,
   developer_login TEXT,
@@ -14,7 +13,14 @@ CREATE TABLE IF NOT EXISTS telemetry (
   received_at TEXT NOT NULL
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS telemetry_dedup ON telemetry (dedup_key);
+-- One payload per Developer per host repo per UTC day. Identity is the
+-- login when present, else the email, else 'anon' — so a run that once
+-- had an email and later only a login still dedupes to one Developer.
+CREATE UNIQUE INDEX IF NOT EXISTS telemetry_day_repo_developer ON telemetry (
+  day,
+  repo_remote,
+  IFNULL(NULLIF(developer_login, ''), IFNULL(NULLIF(developer_email, ''), 'anon'))
+);
 
 CREATE TABLE IF NOT EXISTS submissions (
   id INTEGER PRIMARY KEY AUTOINCREMENT,

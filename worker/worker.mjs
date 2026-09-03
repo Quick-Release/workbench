@@ -68,8 +68,7 @@ function validateSubmission(payload) {
   return null;
 }
 
-// Backdated: constant-time even though the token gates a public endpoint
-// on a private registry — comparing secrets with === is never defensible.
+// Constant-time so response timing leaks nothing about the token.
 function tokenMatches(presented, expected) {
   if (!isNonEmptyString(expected)) return false;
   const a = typeof presented === "string" ? presented : "";
@@ -99,31 +98,33 @@ function conflict() {
   return Response.json({ ok: false, error: "duplicate: already received" }, { status: 409 });
 }
 
+// Both node:sqlite and D1 surface unique violations with this phrase in
+// their (differently wrapped) error messages; anything else is a 500.
+function isUniqueViolation(cause) {
+  return /UNIQUE constraint failed/.test(String(cause?.message));
+}
+
 async function ingestTelemetry(request, env) {
   const { payload, error } = await readJson(request);
   if (error) return Response.json({ ok: false, error }, { status: 400 });
   const invalid = validateTelemetry(payload);
   if (invalid) return Response.json({ ok: false, error: invalid }, { status: 400 });
 
-  const login = payload.developer?.login ?? null;
-  const email = payload.developer?.email ?? null;
-  const dedupKey = [payload.day, payload.repoRemote, login ?? "", email ?? ""].join("|");
   try {
     await env.D1_DB.prepare(
-      "INSERT INTO telemetry (dedup_key, day, repo_remote, developer_login, developer_email, payload, received_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+      "INSERT INTO telemetry (day, repo_remote, developer_login, developer_email, payload, received_at) VALUES (?, ?, ?, ?, ?, ?)",
     )
       .bind(
-        dedupKey,
         payload.day,
         payload.repoRemote,
-        login,
-        email,
+        payload.developer?.login ?? null,
+        payload.developer?.email ?? null,
         JSON.stringify(payload),
         new Date().toISOString(),
       )
       .run();
   } catch (cause) {
-    if (/UNIQUE constraint failed/.test(String(cause?.message))) return conflict();
+    if (isUniqueViolation(cause)) return conflict();
     return Response.json({ ok: false, error: "storage failure" }, { status: 500 });
   }
   return Response.json({ ok: true });
@@ -141,7 +142,7 @@ async function ingestSubmission(request, env) {
     )
       .bind(
         payload.repoRemote,
-        payload.commitSha,
+        payload.commitSha.toLowerCase(),
         payload.subject,
         payload.body,
         payload.author,
@@ -153,7 +154,7 @@ async function ingestSubmission(request, env) {
       )
       .run();
   } catch (cause) {
-    if (/UNIQUE constraint failed/.test(String(cause?.message))) return conflict();
+    if (isUniqueViolation(cause)) return conflict();
     return Response.json({ ok: false, error: "storage failure" }, { status: 500 });
   }
   return Response.json({ ok: true });
