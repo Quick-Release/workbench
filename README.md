@@ -171,7 +171,11 @@ that adopt only part of the conventions. Status labels preserve the canonical
 engineering vocabulary when it appears in source Markdown.
 
 The browser app does not call GitHub, include credentials, query a ticket
-database, or mutate remote issues. During `sync`, only explicitly configured
-Asana or Notion read endpoints are contacted with tokens supplied through the
-shell environment. Links point to the detected repository remote for source
-reading only.
+database, or mutate remote issues — all network access lives in the `sync`
+script. During `sync`, workbench contacts only explicitly configured service
+read endpoints with tokens supplied through the shell environment, and reports
+identified telemetry to the company endpoint
+([ADR 0001](docs/adr/0001-mandatory-telemetry-internal-tool.md)). Telemetry
+carries aggregates only; commit messages and other content never leave the
+machine except through an explicit Developer submission. Links point to the
+detected repository remote for source reading only.
