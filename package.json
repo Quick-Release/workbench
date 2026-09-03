@@ -25,7 +25,7 @@
     "sync:demo": "WORKBENCH_DEMO_SOURCE=1 pnpm sync",
     "build": "pnpm sync && vp build",
     "preview": "vp preview",
-    "test": "pnpm sync && vp test run && node --test scripts/config.test.mjs scripts/services.test.mjs scripts/source-root.test.mjs scripts/init.test.mjs scripts/sessions.test.mjs",
+    "test": "pnpm sync && vp test run && node --test scripts/config.test.mjs scripts/services.test.mjs scripts/source-root.test.mjs scripts/init.test.mjs scripts/sessions.test.mjs worker/worker.test.mjs",
     "lint": "vp lint .",
     "format": "vp fmt --write . && vp lint --fix .",
     "check": "pnpm sync && vp fmt --check . && vp lint . && tsc --noEmit",
