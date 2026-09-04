@@ -1,0 +1,674 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Blocker graph &amp; frontier — prototype (issue #51)</title>
+<style>
+  :root {
+    --bg: #0a0a0b;
+    --panel: #141417;
+    --card: #18181b;
+    --border: #27272a;
+    --border-strong: #3f3f46;
+    --fg: #f4f4f5;
+    --muted: #a1a1aa;
+    --faint: #71717a;
+    --frontier: #4ade80;
+    --claimed: #38bdf8;
+    --gate: #f59e0b;
+    --done: #52525b;
+    --broken: #ef4444;
+    --cp: #8b5cf6;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font: 13px/1.45 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  header.bar {
+    display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+    padding: 10px 16px; border-bottom: 1px solid var(--border);
+  }
+  header.bar h1 { font-size: 14px; font-weight: 600; margin: 0; }
+  header.bar h1 span { color: var(--faint); font-weight: 400; }
+  .controls { display: flex; align-items: center; gap: 10px; }
+  .seg { display: inline-flex; border: 1px solid var(--border-strong); border-radius: 8px; overflow: hidden; }
+  .seg button {
+    background: none; border: 0; color: var(--muted); font: inherit; font-size: 12px;
+    padding: 5px 12px; cursor: pointer; border-right: 1px solid var(--border);
+  }
+  .seg button:last-child { border-right: 0; }
+  .seg button.on { background: var(--card); color: var(--fg); }
+  .tog {
+    background: none; border: 1px solid var(--border-strong); border-radius: 8px;
+    color: var(--faint); font: inherit; font-size: 12px; padding: 5px 12px; cursor: pointer;
+  }
+  .tog.on { color: var(--cp); border-color: color-mix(in srgb, var(--cp) 50%, transparent); }
+  .cpnote { color: var(--cp); font-size: 11.5px; }
+  .snap { margin-left: auto; color: var(--faint); font-size: 11px; }
+
+  main { padding: 6px 0 0 8px; }
+  svg { display: block; width: 100%; max-width: 1440px; height: auto; }
+  svg text { user-select: none; }
+
+  /* right rail: frontier strip + detail */
+  #rail {
+    position: fixed; top: 54px; right: 12px; bottom: 40px; width: 334px;
+    display: flex; flex-direction: column; gap: 10px; pointer-events: none;
+  }
+  #rail > section {
+    pointer-events: auto; background: var(--panel); border: 1px solid var(--border-strong);
+    border-radius: 10px; padding: 12px 14px; box-shadow: 0 8px 30px rgba(0,0,0,.5);
+  }
+  #strip { flex-shrink: 0; max-height: 52%; overflow-y: auto; }
+  #detail { flex: 1; overflow-y: auto; }
+  #rail h2 {
+    margin: 0 0 2px; font-size: 11px; font-weight: 600; text-transform: uppercase;
+    letter-spacing: .07em; color: var(--faint);
+  }
+  #rail .sub { color: var(--faint); font-size: 11px; margin: 0 0 8px; }
+  #rail .scen { color: var(--muted); font-size: 11.5px; margin: 0 0 8px; }
+  #rail .scen b { color: var(--fg); font-weight: 600; }
+  .frow { display: flex; align-items: baseline; gap: 7px; padding: 4px 0; font-size: 12.5px; }
+  .frow .ord { color: var(--faint); font-size: 11px; width: 12px; text-align: right; }
+  .frow .nid { color: var(--frontier); font-weight: 600; }
+  .frow .grab {
+    margin-left: auto; font-size: 9.5px; letter-spacing: .05em; color: var(--frontier);
+    border: 1px solid color-mix(in srgb, var(--frontier) 40%, transparent); border-radius: 999px; padding: 1px 7px;
+  }
+  .bucket { border-top: 1px solid var(--border); margin-top: 8px; padding-top: 8px; }
+  .bucket > button {
+    background: none; border: 0; color: var(--muted); font: inherit; font-size: 12px;
+    cursor: pointer; padding: 0; text-align: left;
+  }
+  .bucket > button:hover { color: var(--fg); }
+  .bucket ul { margin: 6px 0 0; padding: 0 0 0 4px; list-style: none; max-height: 170px; overflow-y: auto; }
+  .bucket li { font-size: 11.5px; color: var(--muted); padding: 2px 0; }
+  .bucket li b { color: var(--faint); font-weight: 500; }
+  .emptymsg { color: var(--muted); font-size: 12.5px; margin: 2px 0 0; }
+  .emptymsg b { color: var(--claimed); font-weight: 600; }
+
+  #detail .hint { color: var(--faint); font-size: 12px; }
+  #detail h3 { margin: 0 24px 2px 0; font-size: 13.5px; }
+  #detail .chips { display: flex; gap: 6px; flex-wrap: wrap; margin: 6px 0 8px; }
+  .chip { font-size: 10px; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--border-strong); color: var(--muted); }
+  .chip.grab { color: var(--frontier); border-color: color-mix(in srgb, var(--frontier) 45%, transparent); }
+  .chip.claimed { color: var(--claimed); border-color: color-mix(in srgb, var(--claimed) 45%, transparent); }
+  .chip.mock { color: var(--gate); border-color: color-mix(in srgb, var(--gate) 55%, transparent); }
+  #detail .why {
+    border: 1px solid var(--border); border-radius: 8px; padding: 7px 9px;
+    font-size: 12px; color: var(--muted); margin-bottom: 8px;
+  }
+  #detail .why.grab { border-color: color-mix(in srgb, var(--frontier) 40%, transparent); color: var(--fg); }
+  #detail .why b { color: var(--fg); }
+  #detail .why.bad { border-color: color-mix(in srgb, var(--broken) 45%, transparent); }
+  #detail .sec { border-top: 1px solid var(--border); padding-top: 7px; margin-top: 7px; font-size: 12px; }
+  #detail .sec b.blk {
+    display: block; font-size: 10px; text-transform: uppercase; letter-spacing: .06em;
+    color: var(--faint); font-weight: 600; margin-bottom: 3px;
+  }
+  #detail .bl { display: flex; gap: 6px; align-items: baseline; padding: 1.5px 0; color: var(--muted); }
+  #detail .bl .st { width: 12px; text-align: center; flex-shrink: 0; }
+  #detail .bl.ok .st { color: var(--done); }
+  #detail .bl.open .st { color: var(--gate); }
+  #detail .bl.broken { color: var(--broken); }
+  #closeBtn {
+    position: absolute; top: 6px; right: 9px; background: none; border: 0; color: var(--faint);
+    font-size: 15px; cursor: pointer; padding: 2px 6px;
+  }
+  #detail { position: relative; }
+  #detail:has(.hint) { padding-top: 12px; }
+
+  footer {
+    position: fixed; left: 0; right: 0; bottom: 0; display: flex; gap: 14px; align-items: center;
+    flex-wrap: wrap; padding: 9px 16px; border-top: 1px solid var(--border); background: var(--bg);
+    color: var(--muted); font-size: 11px;
+  }
+  footer .sw { display: inline-block; vertical-align: middle; margin-right: 5px; }
+  footer .n.sw { width: 14px; height: 10px; border-radius: 3px; background: var(--card); }
+  footer .n.frontier { border: 1.5px solid var(--frontier); }
+  footer .n.claimed { border: 1.5px solid var(--claimed); }
+  footer .n.plain { border: 1.5px solid var(--border-strong); }
+  footer .n.closedsw { border: 1px solid var(--border-strong); opacity: .5; }
+  footer .n.brokensw { border: 1.5px dashed var(--broken); }
+  footer .n.cpsw { border: 1.5px solid var(--cp); }
+  footer .l { display: inline-block; width: 24px; height: 0; vertical-align: middle; margin-right: 5px; }
+  footer .l.gate { border-top: 2px solid var(--gate); }
+  footer .l.done { border-top: 2px dashed var(--done); }
+  footer .l.broken { border-top: 2px dashed var(--broken); }
+  footer .l.cp { border-top: 3px solid var(--cp); }
+  footer .mock { color: var(--gate); border: 1px solid color-mix(in srgb, var(--gate) 55%, transparent); border-radius: 999px; padding: 0 7px; font-size: 9.5px; }
+
+  /* graph classes */
+  .colcap { fill: var(--faint); font-size: 10.5px; letter-spacing: .04em; }
+  .mapcap { fill: var(--muted); font-size: 12px; font-weight: 600; }
+  .mapnote { fill: var(--faint); font-size: 10.5px; }
+  .gEdges path { fill: none; transition: opacity .12s; }
+  .gEdges path.e-open { stroke: var(--gate); stroke-width: 1.6; }
+  .gEdges path.e-closed { stroke: var(--done); stroke-width: 1.2; stroke-dasharray: 4 4; }
+  .gEdges path.e-broken { stroke: var(--broken); stroke-width: 1.4; stroke-dasharray: 3 4; }
+  .gEdges path.e-cp { stroke: var(--cp); stroke-width: 2.6; opacity: 0; }
+  svg.cp-on .gEdges path.e-cp { opacity: 1; }
+  svg.emphasizing .gEdges path:not(.hl):not(.e-cp) { opacity: .15; }
+  .gNodes g { cursor: pointer; }
+  .gNodes g.closed { opacity: .55; }
+  .gNodes rect.body { fill: var(--card); stroke: var(--border-strong); stroke-width: 1.2; }
+  .gNodes g.frontier rect.body { stroke: var(--frontier); stroke-width: 1.6; filter: drop-shadow(0 0 6px rgba(74,222,128,.35)); }
+  .gNodes g.claimed rect.body { stroke: var(--claimed); stroke-width: 1.4; }
+  .gNodes g.broken rect.body { stroke: var(--broken); stroke-width: 1.4; stroke-dasharray: 5 4; fill: color-mix(in srgb, var(--broken) 8%, var(--card)); }
+  .gNodes g.cpn rect.body { stroke: var(--cp); stroke-width: 2; }
+  .gNodes g.sel rect.body { stroke: #e4e4e7; stroke-width: 1.8; }
+  .gNodes .t1 { fill: var(--fg); font-size: 12.5px; font-weight: 600; }
+  .gNodes .t2 { fill: var(--faint); font-size: 9.5px; letter-spacing: .05em; }
+  .gNodes .t1c { fill: var(--muted); font-size: 11px; }
+  .gNodes .mockrect { fill: none; stroke: var(--gate); }
+  .gNodes .mocktext { fill: var(--gate); font-size: 8.5px; font-weight: 700; letter-spacing: .08em; }
+  .gNodes .dot { fill: var(--claimed); }
+  svg.emphasizing .gNodes g:not(.hl):not(.sel) { opacity: .4; }
+</style>
+</head>
+<body>
+<header class="bar">
+  <h1>Blocker graph &amp; frontier <span>— prototype (issue #51)</span></h1>
+  <div class="controls">
+    <div class="seg" id="scenario">
+      <button data-s="today" class="on">Today</button>
+      <button data-s="exercise">Exercise</button>
+      <button data-s="empty">Empty</button>
+    </div>
+    <button id="cpToggle" class="tog">Critical path</button>
+    <span id="cpNote" class="cpnote" hidden></span>
+    <button id="exToggle" class="tog">Expand closed</button>
+  </div>
+  <div class="snap">states transcribed from the tracker 2026-09-04 · not live</div>
+</header>
+
+<main><svg id="graph" viewBox="0 0 1440 716" aria-label="blocker graph"></svg></main>
+
+<aside id="rail">
+  <section id="strip">
+    <h2>Frontier — what to grab next</h2>
+    <p class="sub">open ∧ unassigned ∧ all blockers closed · ordered per effort, first in map order wins</p>
+    <div id="stripBody"></div>
+  </section>
+  <section id="detail"><span class="hint">Click a ticket for detail — blockers, why it is or isn't grabbable, map order.</span></section>
+</aside>
+
+<footer>
+  <span><span class="sw n frontier"></span>frontier (grabbable now)</span>
+  <span><span class="sw n claimed"></span>claimed</span>
+  <span><span class="sw n plain"></span>open · blocked</span>
+  <span><span class="sw n closedsw"></span>closed · contracted</span>
+  <span><span class="sw n brokensw"></span>broken reference</span>
+  <span><span class="sw n cpsw"></span>critical path</span>
+  <span><span class="l gate"></span>gates: open blocker</span>
+  <span><span class="l done"></span>satisfied (closed)</span>
+  <span><span class="l broken"></span>broken (fail-closed)</span>
+  <span><span class="l cp"></span>on critical path</span>
+  <span><span class="mock">MOCK</span>&nbsp;injected state</span>
+</footer>
+
+<script>
+'use strict';
+
+/* ============================================================
+   1. DATA — transcribed from Quick-Release/workbench, 2026-09-04.
+   Edges are GitHub native blocked-by (ADR 0008); map membership
+   is #41's sub-issue order (order, not edges — drawn nowhere).
+   ============================================================ */
+
+const MAP = { id: 41, title: 'Skills-ecosystem dashboard', order: [42,43,44,45,46,47,48,49,50,51,52,53] };
+
+const TICKETS = [
+  { id: 42, title: 'What the session database can attribute',            short: 'Session DB attribution',    type: 'research',  state: 'closed', assignee: 'vvaz' },
+  { id: 43, title: 'Graph rendering approach for flow and blocker graphs', short: 'Graph rendering approach', type: 'research',  state: 'closed', assignee: 'vvaz' },
+  { id: 44, title: 'Confirm the read-only boundary for new views',       short: 'Read-only boundary',        type: 'grilling',  state: 'closed' },
+  { id: 45, title: 'Sources of truth for the skills catalog and flow edges', short: 'Catalog & flow-edge sources', type: 'grilling', state: 'closed' },
+  { id: 46, title: 'How the tracker encodes phase and kind',             short: 'Phase & kind labels',       type: 'grilling',  state: 'closed' },
+  { id: 47, title: 'Structured blocker edges and the frontier',          short: 'Blocker edges & frontier',  type: 'grilling',  state: 'closed' },
+  { id: 48, title: 'Live seam: snapshot refresh vs dev-server API',      short: 'Live seam',                 type: 'grilling',  state: 'closed' },
+  { id: 49, title: 'Decision and artifact modeling',                     short: 'Decision & artifact modeling', type: 'grilling', state: 'closed' },
+  { id: 50, title: 'Prototype: the skill-flow graph',                    short: 'Skill-flow prototype',      type: 'prototype', state: 'open' },
+  { id: 51, title: 'Prototype: blocker graph and frontier',              short: 'Blocker-graph prototype',   type: 'prototype', state: 'open' },
+  { id: 52, title: 'The workflow state machine and next-action rules',   short: 'State-machine grilling',    type: 'grilling',  state: 'open' },
+  { id: 53, title: 'Information architecture for the seven new views',   short: 'IA: seven new views',       type: 'grilling',  state: 'open' },
+];
+
+// [blocked, blocker] — the blocker must close before the blocked ticket starts.
+const EDGES = [
+  [50, 43], [50, 45],
+  [51, 43], [51, 47],
+  [52, 42], [52, 46], [52, 47], [52, 48], [52, 49],
+  [53, 50], [53, 51], [53, 52],
+];
+
+// Open, unassigned, zero edges → vacuously frontier; no sequencing story, so bucketed.
+const UNMAPPED = [
+  [1, 'Adopt Effect — runtime validation (stage 1)'],
+  [7, 're-skin the app shell to shadcn (design-only)'],
+  [8, "Vendor the sidebar's missing pieces"],
+  [9, 'Flip the theme layer to the reference look'],
+  [10, 'Make the shell live around both pages'],
+  [11, 'Contract: retire the dead pre-shell chrome'],
+  [12, 'Telemetry & content sourcing'],
+  [14, 'Telemetry from every sync'],
+  [15, 'Agent usage & Health in the Telemetry payload'],
+  [16, "Outcomes: the Developer's PRs"],
+  [17, 'Highlights: commit-message candidates (read path)'],
+  [18, 'Submission flow: Highlights → review queue'],
+  [20, 'Local PR review actions (CodeRabbit / zcode)'],
+  [24, 'Engine health checks with setup guidance'],
+  [25, 'Opt-in review findings as a PR comment'],
+  [26, 'Review run lifecycle: cancel, timeout, caps'],
+  [27, 'Session run history with re-run'],
+  [28, 'Agents SDK adoption — SubmissionReviewAgent'],
+  [29, 'Workers runtime test harness (ingest)'],
+  [30, 'Digest computation as a pure function'],
+  [31, 'Land the Agents SDK behind the ingest token gate'],
+  [32, 'On-demand digest of pending submissions'],
+  [33, 'Daily scheduled digest per repository'],
+  [34, 'Draft PR descriptions with TanStack AI'],
+  [35, 'LLM proxy: session capture to D1 + R2'],
+  [37, 'AI middleware: one-shot draft endpoint'],
+  [38, 'Draft description button and panel'],
+  [39, 'Commit-subject style context (consent boundary)'],
+  [40, 'Issue agent: draft-PR proposals (Ollama)'],
+];
+
+/* ============================================================
+   2. MODEL — pure functions over (tickets, edges). This section
+   ports to the real modules behind the GraphView seam.
+   ============================================================ */
+
+const deepCopyTickets = () => TICKETS.map(t => ({ ...t }));
+
+function applyScenario(name) {
+  const tickets = deepCopyTickets();
+  const edges = EDGES.map(([blocked, blocker]) => ({ blocked, blocker }));
+  const notes = [];
+  if (name === 'exercise') {
+    const t52 = tickets.find(t => t.id === 52);
+    t52.assignee = 'vvaz';
+    t52.mock = 'claimed in Exercise only';
+    edges.push({ blocked: 53, blocker: 99, dangling: true, mock: true });
+    notes.push('mock: #52 claimed · broken edge “#53 blocked by #99” (fail-closed)');
+  } else if (name === 'empty') {
+    for (const id of [50, 51, 52]) tickets.find(t => t.id === id).state = 'closed';
+    const t53 = tickets.find(t => t.id === 53);
+    t53.assignee = 'vvaz';
+    t53.mock = 'claimed in Empty only';
+    notes.push('mock: #50–52 flipped closed · #53 claimed — frontier empty, one ticket in flight');
+  }
+  return { tickets, edges, notes };
+}
+
+const byId = (tickets, id) => tickets.find(t => t.id === id);
+
+// ADR 0008: open ∧ unassigned ∧ all blockers closed; a dangling blocker counts open.
+function frontier(tickets, edges) {
+  const openOrDangling = e => {
+    const b = byId(tickets, e.blocker);
+    return e.dangling || !b || b.state === 'open';
+  };
+  return tickets.filter(t =>
+    t.state === 'open' && !t.assignee &&
+    !edges.some(e => e.blocked === t.id && openOrDangling(e))
+  );
+}
+
+function whyNot(tickets, edges, t) {
+  if (t.state === 'closed') return { cls: '', text: 'Closed.' };
+  if (t.assignee) return { cls: '', text: `Not grabbable — claimed by @${t.assignee}.` };
+  const gating = edges.filter(e => e.blocked === t.id);
+  const openIds = [], broken = [];
+  for (const e of gating) {
+    const b = byId(tickets, e.blocker);
+    if (e.dangling || !b) broken.push(e.blocker);
+    else if (b.state === 'open') openIds.push(b.id);
+  }
+  const bits = [];
+  if (openIds.length) bits.push(`blocked by ${openIds.length} open (${openIds.map(id => '#' + id).join(', ')})`);
+  if (broken.length) bits.push(`${broken.length} broken reference (${broken.map(id => '#' + id).join(', ')}) — counts open, fail-closed`);
+  if (!bits.length) return { cls: 'grab', text: 'Grabbable now — all blockers closed, nobody assigned.' };
+  return { cls: broken.length ? 'bad' : '', text: 'Not grabbable — ' + bits.join(' · ') + '.' };
+}
+
+// Longest open chains, all ties. Dangling edges excluded (no real endpoint to traverse).
+function criticalChains(tickets, edges) {
+  const open = id => { const t = byId(tickets, id); return t && t.state === 'open'; };
+  const openEdges = edges.filter(e => !e.dangling && open(e.blocked) && open(e.blocker));
+  const blockersOf = id => openEdges.filter(e => e.blocked === id).map(e => e.blocker);
+  const memo = new Map();
+  const best = id => {
+    if (memo.has(id)) return memo.get(id);
+    const bs = blockersOf(id);
+    let chains;
+    if (!bs.length) chains = [[id]];
+    else {
+      const subs = bs.flatMap(best);
+      const len = Math.max(...subs.map(c => c.length));
+      chains = subs.filter(c => c.length === len).map(c => [...c, id]);
+    }
+    memo.set(id, chains);
+    return chains;
+  };
+  // chain terminals: open tickets that block nothing else (the map's remaining tail)
+  const blocksNothing = new Set(openEdges.map(e => e.blocker));
+  const openIds = tickets.filter(t => t.state === 'open').map(t => t.id);
+  const sinks = openIds.filter(id => !blocksNothing.has(id));
+  const all = sinks.flatMap(best);
+  if (!all.length) return [];
+  const len = Math.max(...all.map(c => c.length));
+  return all.filter(c => c.length === len);
+}
+
+// Longest-path layering over real edges only; dangling blockers get their own depth.
+function depths(tickets, edges) {
+  const d = new Map();
+  const deps = new Map(tickets.map(t => [t.id, []]));
+  for (const e of edges) if (!e.dangling) deps.get(e.blocked).push(e.blocker);
+  const depth = id => {
+    if (d.has(id)) return d.get(id);
+    const ds = deps.get(id);
+    const v = ds.length ? 1 + Math.max(...ds.map(depth)) : 0;
+    d.set(id, v);
+    return v;
+  };
+  tickets.forEach(t => depth(t.id));
+  return d;
+}
+
+/* ============================================================
+   3. LAYOUT — pure: (tickets, edges, opts) → positions. This
+   section ports to the real modules behind the GraphView seam.
+   Columns are graph depth (blockers left, blocked right); map
+   membership orders within a column and the strip, never edges.
+   ============================================================ */
+
+const VIEW = { w: 1440, h: 716 };
+const COL_X = { 0: 36, 1: 424, 2: 812 };
+const OPEN_W = 230, OPEN_H = 58;
+const CLOSED_W = 168, CLOSED_H = 24, CLOSED_EXP_W = 204, CLOSED_EXP_H = 48;
+const GAP_OPEN = 26, GAP_CLOSED = 13;
+
+function layout(tickets, edges, expandClosed) {
+  const dep = depths(tickets, edges);
+  const cols = new Map();
+  for (const t of tickets) {
+    const k = dep.get(t.id);
+    if (!cols.has(k)) cols.set(k, []);
+    cols.get(k).push(t);
+  }
+  const pos = new Map();
+  for (const [k, arr] of cols) {
+    arr.sort((a, b) => MAP.order.indexOf(a.id) - MAP.order.indexOf(b.id));
+    const sized = arr.map(t => t.state === 'open'
+      ? { w: OPEN_W, h: OPEN_H, gap: GAP_OPEN }
+      : (expandClosed ? { w: CLOSED_EXP_W, h: CLOSED_EXP_H, gap: GAP_CLOSED } : { w: CLOSED_W, h: CLOSED_H, gap: GAP_CLOSED }));
+    const total = sized.reduce((s, z) => s + z.h, 0) + sized.reduce((s, z) => s + z.gap, 0) - (sized.length ? sized[sized.length - 1].gap : 0);
+    let y = Math.max(52, (VIEW.h - total) / 2);
+    arr.forEach((t, i) => {
+      pos.set(t.id, { x: COL_X[k] ?? 36 + k * 388, y, w: sized[i].w, h: sized[i].h, depth: k });
+      y += sized[i].h + sized[i].gap;
+    });
+    if (k === 1) var col1Bottom = y;
+  }
+  return { pos, col1Bottom: col1Bottom ?? 0 };
+}
+
+/* ============================================================
+   4. RENDER
+   ============================================================ */
+
+const svg = document.getElementById('graph');
+const NS = 'http://www.w3.org/2000/svg';
+const el = (name, attrs = {}, parent) => {
+  const n = document.createElementNS(NS, name);
+  for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, v);
+  if (parent) parent.appendChild(n);
+  return n;
+};
+const txt = (parent, x, y, cls, content, anchor) => {
+  const t = el('text', { x, y, class: cls, ...(anchor ? { 'text-anchor': anchor } : {}) }, parent);
+  t.textContent = content;
+  return t;
+};
+const truncate = (s, n) => s.length <= n ? s : s.slice(0, n - 1) + '…';
+
+let ui = { scenario: 'today', cp: false, expand: false, sel: null };
+
+function render() {
+  const state = applyScenario(ui.scenario);
+  const fr = frontier(state.tickets, state.edges);
+  const frIds = new Set(fr.map(t => t.id));
+  const chains = ui.cp ? criticalChains(state.tickets, state.edges) : [];
+  const cpNodes = new Set(chains.flat());
+  const cpEdges = new Set(chains.flatMap(c => c.slice(0, -1).map((b, i) => b + '→' + c[i + 1])));
+  const { pos, col1Bottom } = layout(state.tickets, state.edges, ui.expand);
+
+  svg.innerHTML = '';
+  svg.classList.toggle('cp-on', ui.cp);
+
+  // captions
+  const caps = el('g', {}, svg);
+  txt(caps, 36, 30, 'mapcap', `Map #${MAP.id} · ${MAP.title}`);
+  txt(caps, 36, 48, 'mapnote', 'decision tickets only · map membership is order, not edges — the sub-issue structure is drawn nowhere');
+  txt(caps, COL_X[0], 70, 'colcap', 'DEPTH 0 · NO BLOCKERS');
+  txt(caps, COL_X[1], 70, 'colcap', 'DEPTH 1');
+  txt(caps, COL_X[2], 70, 'colcap', 'DEPTH 2');
+
+  // dangling refs get a warning node in the blocker's would-be column
+  const dangling = state.edges.filter(e => e.dangling);
+  const dangPos = new Map();
+  dangling.forEach((e, i) => {
+    const dep = (pos.get(e.blocked) || {}).depth ?? 2;
+    dangPos.set(e.blocker, {
+      x: COL_X[Math.max(0, dep - 1)] ?? COL_X[1],
+      y: Math.max(col1Bottom + 8, 300) + i * 78, w: 216, h: 62,
+    });
+  });
+
+  // edges (below nodes)
+  const gE = el('g', { class: 'gEdges' }, svg);
+  const anchor = (id, side) => {
+    const p = pos.get(id);
+    if (p) return { x: side === 'r' ? p.x + p.w : p.x, y: p.y + p.h / 2 };
+    const dq = dangPos.get(id);
+    return dq ? { x: side === 'r' ? dq.x + dq.w : dq.x, y: dq.y + dq.h / 2 } : { x: 0, y: 0 };
+  };
+  for (const e of state.edges) {
+    const a = anchor(e.blocker, 'r'), b = anchor(e.blocked, 'l');
+    const blockerT = byId(state.tickets, e.blocker);
+    const satisfied = !e.dangling && blockerT && blockerT.state === 'closed';
+    const cls = e.dangling ? 'e-broken' : (satisfied ? 'e-closed' : 'e-open');
+    const mx = (a.x + b.x) / 2;
+    const p = el('path', {
+      d: `M ${a.x} ${a.y} C ${mx} ${a.y}, ${mx} ${b.y}, ${b.x} ${b.y}`,
+      class: cls, 'data-key': `${e.blocked}←${e.blocker}`,
+    }, gE);
+    if (cpEdges.has(e.blocker + '→' + e.blocked)) el('path', { d: p.getAttribute('d'), class: 'e-cp' }, gE);
+  }
+
+  // nodes
+  const gN = el('g', { class: 'gNodes' }, svg);
+  const drawNode = (id, p, opts) => {
+    const t = opts.ticket;
+    const isFr = frIds.has(id);
+    const g = el('g', {
+      class: [
+        isFr ? 'frontier' : '', t && t.assignee ? 'claimed' : '', opts.broken ? 'broken' : '',
+        cpNodes.has(id) ? 'cpn' : '', t && t.state === 'closed' ? 'closed' : '',
+        ui.sel === id ? 'sel' : '',
+      ].filter(Boolean).join(' '),
+      'data-id': id,
+    }, gN);
+    el('rect', { class: 'body', x: p.x, y: p.y, width: p.w, height: p.h, rx: t && t.state === 'closed' && !ui.expand ? 5 : 8 }, g);
+    if (t && t.state === 'closed' && !ui.expand) {
+      txt(g, p.x + 10, p.y + 16, 't1c', `#${id} · ${truncate(t.short, Math.floor((p.w - 44) / 5.9))} ✓`);
+    } else if (t && t.state === 'closed') {
+      txt(g, p.x + 12, p.y + 20, 't1', `#${id} ${truncate(t.short, Math.floor((p.w - 74) / 6.6))}`);
+      txt(g, p.x + 12, p.y + 37, 't2', t.type.toUpperCase() + ' · CLOSED ✓');
+    } else if (t) {
+      txt(g, p.x + 12, p.y + 22, 't1', `#${id}  ${truncate(t.short, Math.floor((p.w - 76) / 6.6))}`);
+      const bits = [t.type.toUpperCase()];
+      if (t.assignee) bits.push(`@${t.assignee.toUpperCase()}`);
+      else if (isFr) bits.push('GRABBABLE');
+      else {
+        const gating = state.edges.filter(e => e.blocked === id);
+        const openN = gating.filter(e => { const b = byId(state.tickets, e.blocker); return e.dangling || !b || b.state === 'open'; }).length;
+        bits.push(openN ? `BLOCKED BY ${openN}` : 'WAITING');
+      }
+      txt(g, p.x + 12, p.y + 42, 't2', bits.join(' · '));
+      if (t.assignee) el('circle', { class: 'dot', cx: p.x + p.w - 14, cy: p.y + 16, r: 4 }, g);
+    }
+    if (opts.broken) {
+      txt(g, p.x + 12, p.y + 22, 't1', `⚠ #${id}  unknown reference`);
+      txt(g, p.x + 12, p.y + 38, 't2', 'COUNTS OPEN · FAIL-CLOSED');
+      el('rect', { class: 'mockrect', x: p.x + p.w - 44, y: p.y + 6, width: 34, height: 13, rx: 7, 'stroke-width': 1 }, g);
+      txt(g, p.x + p.w - 27, p.y + 16, 'mocktext', 'MOCK', 'middle');
+    }
+    if (t && t.mock) {
+      el('rect', { class: 'mockrect', x: p.x + p.w - 44, y: p.y + p.h - 18, width: 34, height: 13, rx: 7, 'stroke-width': 1 }, g);
+      txt(g, p.x + p.w - 27, p.y + p.h - 8, 'mocktext', 'MOCK', 'middle');
+    }
+    g.addEventListener('click', ev => { ev.stopPropagation(); ui.sel = id; render(); });
+    g.addEventListener('mouseenter', () => emphasize(id, true));
+    g.addEventListener('mouseleave', () => emphasize(id, false));
+  };
+
+  for (const t of state.tickets) drawNode(t.id, pos.get(t.id), { ticket: t });
+  for (const e of dangling) {
+    drawNode(e.blocker, dangPos.get(e.blocker), { ticket: null, broken: true });
+  }
+
+  // hover emphasis: this node's edges stay lit, everything else dims
+  function emphasize(id, on) {
+    svg.classList.toggle('emphasizing', on);
+    for (const p of gE.querySelectorAll('path')) {
+      const [blocked, blocker] = p.dataset.key.split('←').map(Number);
+      p.classList.toggle('hl', on && (blocked === id || blocker === id));
+    }
+    for (const g of gN.querySelectorAll('g[data-id]')) {
+      const nid = Number(g.dataset.id);
+      if (nid === id) continue;
+      const touches = state.edges.some(e => (e.blocked === id && e.blocker === nid) || (e.blocker === id && e.blocked === nid));
+      g.classList.toggle('hl', on && touches);
+    }
+  }
+
+  renderStrip(state, fr, frIds);
+  renderDetail(state, frIds);
+  renderCpNote(chains);
+}
+
+function renderStrip(state, fr, frIds) {
+  const body = document.getElementById('stripBody');
+  const rows = MAP.order.filter(id => frIds.has(id));
+  let html = `<p class="scen"><b>${{ today: 'Today', exercise: 'Exercise', empty: 'Empty' }[ui.scenario]}</b> — ${state.notes[0] || 'states as transcribed'}</p>`;
+  html += `<div style="font-size:12px;color:var(--muted);margin:2px 0 4px;">Map #${MAP.id} · ${MAP.title}</div>`;
+  if (rows.length) {
+    html += MAP.order.filter(id => frIds.has(id)).map((id, i) => {
+      const t = byId(state.tickets, id);
+      return `<div class="frow"><span class="ord">${i + 1}.</span><span class="nid">#${id}</span><span>${t.short}</span><span class="grab">GRAB</span></div>`;
+    }).join('');
+  } else {
+    const inFlight = state.tickets.filter(t => t.state === 'open' && t.assignee);
+    html += `<p class="emptymsg">Nothing grabbable.` +
+      (inFlight.length ? ` <b>#${inFlight.map(t => t.id).join(', #')}</b> claimed — in flight, not grabbable.` : ' All work closed or gated.') +
+      `</p>`;
+  }
+  html += `<div class="bucket"><button id="bucketBtn">${UNMAPPED.length} unmapped open · no edges ${'▾'}</button><ul id="bucketList" hidden>` +
+    UNMAPPED.map(([n, s]) => `<li><b>#${n}</b> ${s}</li>`).join('') + `</ul></div>`;
+  body.innerHTML = html;
+  document.getElementById('bucketBtn').addEventListener('click', () => {
+    const ul = document.getElementById('bucketList');
+    ul.hidden = !ul.hidden;
+    document.getElementById('bucketBtn').textContent =
+      `${UNMAPPED.length} unmapped open · no edges ${ul.hidden ? '▾' : '▴'}`;
+  });
+}
+
+function renderDetail(state, frIds) {
+  const d = document.getElementById('detail');
+  if (!ui.sel || ui.sel < 42) {
+    d.innerHTML = `<span class="hint">Click a ticket for detail — blockers, why it is or isn't grabbable, map order.</span>`;
+    return;
+  }
+  const t = byId(state.tickets, ui.sel);
+  if (!t) {
+    const e = state.edges.find(x => x.dangling && x.blocker === ui.sel);
+    d.innerHTML = `<span id="closeBtn" title="close">✕</span><h3>⚠ #${ui.sel} — unknown reference</h3>
+      <div class="chips"><span class="chip mock">MOCK</span></div>
+      <div class="why bad">A blocker edge points here from <b>#${e ? e.blocked : '?'}</b>, but no such ticket exists. ADR 0008: unknown references <b>fail closed</b> — the edge counts open, so the blocked ticket can never look grabbable by accident. Sync surfaces the broken reference; the graph shows it.</div>`;
+    wireClose();
+    return;
+  }
+  const why = whyNot(state.tickets, state.edges, t);
+  const order = MAP.order.indexOf(t.id) + 1;
+  const blockers = state.edges.filter(e => e.blocked === t.id);
+  d.innerHTML = `
+    <span id="closeBtn" title="close">✕</span>
+    <h3>#${t.id} — ${t.title}</h3>
+    <div class="chips">
+      <span class="chip">${t.type}</span>
+      ${t.state === 'closed' ? '<span class="chip">closed</span>' : ''}
+      ${t.assignee ? `<span class="chip claimed">@${t.assignee}</span>` : ''}
+      ${frIds.has(t.id) ? '<span class="chip grab">grabbable now</span>' : ''}
+      ${t.mock ? `<span class="chip mock">MOCK</span>` : ''}
+    </div>
+    <div class="why ${why.cls}"><b>${frIds.has(t.id) ? 'Frontier.' : whyNot(state.tickets, state.edges, t).text}</b></div>
+    <div class="sec"><b class="blk">Blockers (${blockers.length})</b>${
+      blockers.length ? blockers.map(e => {
+        const b = byId(state.tickets, e.blocker);
+        if (e.dangling || !b) return `<div class="bl broken"><span class="st">⚠</span>#${e.blocker} — unknown reference (fail-closed)</div>`;
+        return b.state === 'closed'
+          ? `<div class="bl ok"><span class="st">✓</span>#${b.id} ${b.short}</div>`
+          : `<div class="bl open"><span class="st">●</span>#${b.id} ${b.short}</div>`;
+      }).join('') : '<div class="bl"><span class="st">·</span>none — gate is clear</div>'
+    }</div>
+    <div class="sec"><b class="blk">Map order</b>${order} of ${MAP.order.length} — the tiebreak when several are grabbable (“first in map order wins”).</div>
+    ${t.mock ? `<div class="sec"><b class="blk">Mock</b>${t.mock} — not tracker state.</div>` : ''}`;
+  wireClose();
+}
+
+function wireClose() {
+  document.getElementById('closeBtn').addEventListener('click', () => { ui.sel = null; render(); });
+}
+
+function renderCpNote(chains) {
+  const n = document.getElementById('cpNote');
+  if (!ui.cp) { n.hidden = true; return; }
+  n.hidden = false;
+  n.textContent = chains.length > 1
+    ? `${chains.length}-way tie (${chains.map(c => '#' + c.join('→#')).join(' · ')}) — degenerate at this scale`
+    : `#${chains[0].join(' → #')}`;
+}
+
+/* ============================================================
+   5. INTERACTION
+   ============================================================ */
+
+document.getElementById('scenario').addEventListener('click', ev => {
+  const b = ev.target.closest('button'); if (!b) return;
+  ui.scenario = b.dataset.s; ui.sel = null; render();
+  for (const x of document.querySelectorAll('#scenario button')) x.classList.toggle('on', x === b);
+});
+document.getElementById('cpToggle').addEventListener('click', () => {
+  ui.cp = !ui.cp;
+  document.getElementById('cpToggle').classList.toggle('on', ui.cp);
+  render();
+});
+document.getElementById('exToggle').addEventListener('click', () => {
+  ui.expand = !ui.expand;
+  document.getElementById('exToggle').classList.toggle('on', ui.expand);
+  render();
+});
+svg.addEventListener('click', () => { ui.sel = null; render(); });
+
+render();
+</script>
+</body>
+</html>
