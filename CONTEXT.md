@@ -85,7 +85,7 @@ A declared relationship between two skills: merges-onto, delegates-to, pairs-wit
 _Avoid_: link (overloaded with tracker links), dependency (that's blocker edge)
 
 **Primitive**:
-A skill that runs inside other skills rather than being reached for directly — grilling runs under both grill-me and grill-with-docs.
+A skill that runs inside other skills rather than being reached for directly — grilling runs under both grill-me and grill-with-docs. Direct use is permitted but rare.
 _Avoid_: helper, utility
 
 **Workflow phase**:
