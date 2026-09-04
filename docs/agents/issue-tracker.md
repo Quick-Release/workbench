@@ -13,6 +13,10 @@ Issues and specs for this repo live as GitHub issues. Use the `gh` CLI for all o
 
 Infer the repo from `git remote -v`; `gh` does this automatically when run inside a clone.
 
+## Workflow phase, category, parking
+
+Phase moves are labels written by the skill that makes the move (`workflow:<phase>`, exactly one; absent = pre-flow); category is `bug`/`enhancement`; `deferred` parks work. The vocabulary lives in [workflow-labels.md](./workflow-labels.md) — the sync script parses it, so use those exact strings. Decision tickets (children of a `wayfinder:map`) carry no phase label; their phase derives from type plus open/closed/claimed state.
+
 ## Pull requests as a triage surface
 
 **PRs as a request surface: no.** _(Set to `yes` if this repo treats external PRs as feature requests; `/triage` reads this flag.)_

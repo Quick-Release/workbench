@@ -89,12 +89,16 @@ A skill that runs inside other skills rather than being reached for directly —
 _Avoid_: helper, utility
 
 **Workflow phase**:
-Where a work item sits on a skill flow — grilling, prototyping, specced, ticketed, implementing, reviewing, shipped. Distinct from triage state: an issue can be ready-for-agent while its effort sits in the spec phase.
+Where a work item sits on a skill flow — grilling, prototyping, specced, ticketed, implementing, reviewing, shipped. A work item has no phase until a flow skill first touches it. Distinct from triage state: an issue can be ready-for-agent while its effort sits in the spec phase.
 _Avoid_: status (overloaded with triage state and ticket status)
 
 **Triage state**:
 The five tracker roles (needs-triage, needs-info, ready-for-agent, ready-for-human, wontfix) plus unlabeled, moved by the triage skill. Distinct from workflow phase.
 _Avoid_: label (the label string is the encoding, not the concept)
+
+**Deferred**:
+A parked work item: not being worked now, not refused. Orthogonal to both triage state and workflow phase.
+_Avoid_: wontfix (that's refusal), backlog (that's an unordered pile)
 
 **Blocker edge**:
 A declared dependency from a ticket to the tickets that must close before it can start — native links on the tracker, "Blocked by" lines in local ticket files.
