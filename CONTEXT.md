@@ -119,3 +119,17 @@ _Avoid_: task (overloaded with implementation work)
 **Map membership**:
 A decision ticket's belonging to a map, recorded as a tracker sub-issue; the membership order is the order the map's frontier is worked in. Membership groups tickets onto a map; blocker edges sequence them.
 _Avoid_: parent-child (ambiguous with session trees), sub-issue (the tracker encoding, not the concept)
+
+### Decisions and artifacts
+
+**Decision**:
+A conclusion the planning work reached, sourced from exactly one of: an ADR file, a decision ticket's Resolution, or a spec's implementation-decisions section as one bundle per spec. The same conclusion may exist as both a Resolution and an ADR — two records over one work item, grouped by it, never merged.
+_Avoid_: decision ticket (the tracker issue a Resolution closes), ADR (one source form, not the concept)
+
+**Resolution**:
+The answer posted as the closing comment on a decision ticket; the durable content of that ticket's decision. The map's one-line decisions-so-far gist points at it and is never a second copy.
+_Avoid_: verdict (prototype language), gist (the map's index line)
+
+**Artifact**:
+A file a skill session left at a findable repo location — the supporting evidence, not the Decision it produced. Research notes are the modeled kind; handoff docs, questionnaires, wizard scripts, and prototype branches are deliberately not modeled.
+_Avoid_: output (any byproduct, modeled or not), deliverable (implies a shipped product)
