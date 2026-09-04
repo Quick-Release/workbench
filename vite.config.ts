@@ -4,6 +4,8 @@ import { tanstackRouter } from "@tanstack/router-plugin/vite";
 import react from "@vitejs/plugin-react";
 import { fileURLToPath } from "node:url";
 
+import { toolsApiPlugin } from "./scripts/tools-api.mjs";
+
 export default defineConfig({
   fmt: {
     ignorePatterns: ["src/routeTree.gen.ts", ".zcode", ".firecrawl"],
@@ -14,7 +16,7 @@ export default defineConfig({
   test: {
     include: ["src/**/*.test.{ts,tsx}"],
   },
-  plugins: [tanstackRouter({ target: "react" }), react(), tailwindcss()],
+  plugins: [tanstackRouter({ target: "react" }), react(), tailwindcss(), toolsApiPlugin()],
   resolve: {
     alias: {
       "@": fileURLToPath(new URL("./src", import.meta.url)),

@@ -1,0 +1,12 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended", "schedule:weekly"],
+  "rangeStrategy": "bump",
+  "packageRules": [
+    {
+      "description": "Group Effect RC and alchemy beta pins so they move together",
+      "matchPackagePatterns": ["^effect$", "^@effect/", "^alchemy$"],
+      "groupName": "effect-and-alchemy"
+    }
+  ]
+}

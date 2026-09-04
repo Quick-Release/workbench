@@ -67,7 +67,8 @@
     "@dotenvx/dotenvx": "^2.23.0",
     "@types/node": "^26.4.1",
     "@types/react": "19.2.17",
-    "@types/react-dom": "19.2.3"
+    "@types/react-dom": "19.2.3",
+    "fallow": "^3.22.0"
   },
   "packageManager": "pnpm@11.24.0"
 }
