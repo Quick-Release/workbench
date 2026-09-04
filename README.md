@@ -58,6 +58,12 @@ which reads the demo checkout at `~/workspaces/getquick/banquinha`; set
 Set `WORKBENCH_SOURCE_ROOT=/path/to/repository` when detection cannot see the
 host (standalone checkouts, global installs, relocated package stores); the
 override wins over both detection and demo mode.
+When no host repository or demo source is selected, Workbench defaults to
+its own read-only GitHub issue source (`Quick-Release/workbench`), including
+when the command is launched from an ordinary directory outside Git. An
+explicit `services` configuration, host repository, or demo source takes
+precedence. GitHub authentication comes from `GITHUB_TOKEN` or the local
+`gh` login.
 `WORKBENCH_PROJECT_NAME` and `WORKBENCH_REPOSITORY_URL` can override the
 detected project metadata.
 
@@ -180,7 +186,8 @@ The browser app does not call GitHub, include credentials, query a ticket
 database, or mutate remote issues — all network access belongs to
 workbench's Node process (the `sync` script and the local server), and the
 browser talks only to localhost. During `sync`, workbench contacts only
-explicitly configured service read endpoints with tokens supplied through
+explicitly configured service read endpoints — or the canonical Workbench
+GitHub issue endpoint in standalone mode — with tokens supplied through
 the shell environment, and reports identified telemetry to the company
 endpoint ([ADR 0001](docs/adr/0001-mandatory-telemetry-internal-tool.md)).
 Telemetry carries aggregates and identifiers only; commit messages and

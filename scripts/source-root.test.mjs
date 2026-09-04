@@ -21,6 +21,7 @@ const resolve = (overrides) =>
     gitDirectory: "",
     demoDirectory: "",
     fallbackDirectory,
+    fallbackGitDirectory: "",
     ...overrides,
   });
 
@@ -39,36 +40,49 @@ test("reads an enclosing host repository and ignores requested demo data", () =>
   const result = resolve({ gitDirectory: hostDirectory, demoDirectory });
   strictEqual(result.rootDirectory, hostDirectory);
   strictEqual(result.usingDemoSource, false);
+  strictEqual(result.usingSelfRepository, false);
 });
 
 test("treats a submodule superproject as the host repository", () => {
   const result = resolve({ superprojectDirectory: hostDirectory, gitDirectory: appDirectory });
   strictEqual(result.rootDirectory, hostDirectory);
   strictEqual(result.usingDemoSource, false);
+  strictEqual(result.usingSelfRepository, false);
 });
 
 test("reads requested demo data in a standalone clone", () => {
   const result = resolve({ gitDirectory: appDirectory, demoDirectory });
   strictEqual(result.rootDirectory, demoDirectory);
   strictEqual(result.usingDemoSource, true);
+  strictEqual(result.usingSelfRepository, false);
 });
 
 test("reads requested demo data outside any git repository", () => {
   const result = resolve({ demoDirectory });
   strictEqual(result.rootDirectory, demoDirectory);
   strictEqual(result.usingDemoSource, true);
+  strictEqual(result.usingSelfRepository, false);
 });
 
 test("tracks this repository's own sources when demo is not requested", () => {
   const result = resolve({ gitDirectory: appDirectory });
   strictEqual(result.rootDirectory, appDirectory);
   strictEqual(result.usingDemoSource, false);
+  strictEqual(result.usingSelfRepository, true);
 });
 
 test("keeps the working directory outside any repository without demo data", () => {
   const result = resolve({});
   strictEqual(result.rootDirectory, fallbackDirectory);
   strictEqual(result.usingDemoSource, false);
+  strictEqual(result.usingSelfRepository, true);
+});
+
+test("uses the working directory repository when the package is outside its git tree", () => {
+  const result = resolve({ fallbackGitDirectory: hostDirectory, demoDirectory });
+  strictEqual(result.rootDirectory, hostDirectory);
+  strictEqual(result.usingDemoSource, false);
+  strictEqual(result.usingSelfRepository, false);
 });
 
 test("an explicit source root overrides the demo data", () => {
@@ -76,4 +90,5 @@ test("an explicit source root overrides the demo data", () => {
   const result = resolve({ configuredSourceRoot, gitDirectory: appDirectory, demoDirectory });
   strictEqual(result.rootDirectory, configuredSourceRoot);
   strictEqual(result.usingDemoSource, false);
+  strictEqual(result.usingSelfRepository, false);
 });

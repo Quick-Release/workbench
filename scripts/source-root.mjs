@@ -21,17 +21,27 @@ export const resolveSourceRoot = ({
   gitDirectory,
   demoDirectory,
   fallbackDirectory,
+  fallbackGitDirectory,
 }) => {
+  const packageIsInItsOwnRepository =
+    gitDirectory && resolve(gitDirectory) === resolve(appDirectory);
   const insideHostRepository = Boolean(
-    superprojectDirectory || (gitDirectory && resolve(gitDirectory) !== resolve(appDirectory)),
+    superprojectDirectory ||
+    (gitDirectory && !packageIsInItsOwnRepository) ||
+    (!gitDirectory && fallbackGitDirectory),
+  );
+  const usingDemoSource = Boolean(!configuredSourceRoot && !insideHostRepository && demoDirectory);
+  const usingSelfRepository = Boolean(
+    !configuredSourceRoot && !insideHostRepository && !usingDemoSource,
   );
   const rootDirectory =
     configuredSourceRoot ||
-    (insideHostRepository ? superprojectDirectory || gitDirectory : "") ||
+    (insideHostRepository ? superprojectDirectory || gitDirectory || fallbackGitDirectory : "") ||
     (insideHostRepository ? "" : demoDirectory || gitDirectory) ||
     fallbackDirectory;
   return {
     rootDirectory: resolve(rootDirectory),
-    usingDemoSource: Boolean(!configuredSourceRoot && !insideHostRepository && demoDirectory),
+    usingDemoSource,
+    usingSelfRepository,
   };
 };

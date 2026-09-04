@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { loadWorkbenchConfig } from "./config.mjs";
+import { SELF_REPOSITORY_URL, servicesForSource } from "./self-defaults.mjs";
 import { fetchConfiguredServices } from "./services/index.mjs";
 import {
   collectSessionUsage,
@@ -16,6 +17,14 @@ const appDirectory = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const directoryExists = async (path) => {
   try {
     return (await stat(path)).isDirectory();
+  } catch {
+    return false;
+  }
+};
+
+const fileExists = async (path) => {
+  try {
+    return (await stat(path)).isFile();
   } catch {
     return false;
   }
@@ -41,15 +50,21 @@ const superprojectDirectory = command(
   "",
 );
 const gitDirectory = command("git", ["-C", appDirectory, "rev-parse", "--show-toplevel"], "");
+const fallbackGitDirectory = command(
+  "git",
+  ["-C", process.cwd(), "rev-parse", "--show-toplevel"],
+  "",
+);
 const demoRequest = process.env.WORKBENCH_DEMO_SOURCE;
 const demoPath = demoSourceRoot(demoRequest);
-const { rootDirectory, usingDemoSource } = resolveSourceRoot({
+const { rootDirectory, usingDemoSource, usingSelfRepository } = resolveSourceRoot({
   appDirectory,
   configuredSourceRoot: process.env.WORKBENCH_SOURCE_ROOT,
   superprojectDirectory,
   gitDirectory,
   demoDirectory: demoRequest && (await directoryExists(demoPath)) ? demoPath : "",
   fallbackDirectory: process.cwd(),
+  fallbackGitDirectory,
 });
 const docsDirectory = join(rootDirectory, "docs");
 const plansDirectory = join(docsDirectory, "plans");
@@ -419,9 +434,12 @@ const main = async () => {
   if (usingDemoSource) console.log(`Demo data requested; reading ${rootDirectory}.`);
   else if (demoRequest) console.log(`Demo source ${demoPath} not used; reading ${rootDirectory}.`);
   const config = await loadWorkbenchConfig(rootDirectory);
+  const hasConfig = await fileExists(config.path);
   const remote = command("git", ["config", "--get", "remote.origin.url"], "", rootDirectory);
   const repositoryUrl =
-    process.env.WORKBENCH_REPOSITORY_URL || config.repositoryUrl || repositoryWebUrlFrom(remote);
+    process.env.WORKBENCH_REPOSITORY_URL ||
+    config.repositoryUrl ||
+    (usingSelfRepository ? SELF_REPOSITORY_URL : repositoryWebUrlFrom(remote));
   const repo = repositoryNameFrom(repositoryUrl);
   const projectName =
     process.env.WORKBENCH_PROJECT_NAME || config.projectName || repo.split("/").pop() || repo;
@@ -434,7 +452,7 @@ const main = async () => {
     rootDirectory,
   );
   const { records: serviceTickets, statuses: serviceStatuses } = await fetchConfiguredServices(
-    config.services,
+    servicesForSource(config.services, usingSelfRepository && !hasConfig),
   );
 
   const sessions = config.sessions.enabled
