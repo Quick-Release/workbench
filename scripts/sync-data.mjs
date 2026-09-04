@@ -8,6 +8,7 @@ import {
   sessionUsageDisabled,
 } from "./sessions.mjs";
 import { demoSourceRoot, resolveSourceRoot } from "./source-root.mjs";
+import { collectTrackerState } from "./tracker/index.mjs";
 import { readdir, readFile, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -462,6 +463,11 @@ const main = async () => {
       })
     : sessionUsageDisabled();
 
+  const tracker = await collectTrackerState({
+    repo,
+    vocabularyPath: join(rootDirectory, "docs", "agents", "workflow-labels.md"),
+  });
+
   const planFiles = (await walk(plansDirectory)).filter((path) => path.endsWith(".md"));
   const planTicketFiles = planFiles.filter((path) => relativePath(path).includes("/tickets/"));
   const genericTickets = [];
@@ -504,6 +510,7 @@ const main = async () => {
   const changes = await parseSpecChanges(changeDirectories, repositoryUrl, branch);
 
   const sources = [];
+  sources.push({ label: "Tracker", path: `github / repo ${repo}` });
   if (dashboardTickets.length > 0) {
     sources.push({
       label: "Status ledger",
@@ -548,6 +555,8 @@ const main = async () => {
     tickets,
     plans,
     changes,
+    workItems: tracker.workItems,
+    maps: tracker.maps,
     sessions,
   };
   await writeFile(
@@ -560,6 +569,14 @@ const main = async () => {
         ? ` Sessions: ${sessions.sessions.length} tracked (${sessions.perModel.length} models).`
         : " Sessions sync disabled."),
   );
+  if (tracker.warnings.length > 0) {
+    console.log(`Tracker warnings (${tracker.warnings.length}):`);
+    for (const warning of tracker.warnings) console.log(`  - ${warning}`);
+  } else {
+    console.log(
+      `Tracker: ${tracker.workItems.length} work items, ${tracker.maps.length} maps, no warnings.`,
+    );
+  }
 };
 
 await main();

@@ -123,6 +123,8 @@ const data = {
       sourceUrl: "https://github.com/Quick-Release/banquinha",
     },
   ],
+  workItems: [],
+  maps: [],
   sessions: {
     enabled: false,
     generatedAt: "2026-09-03T00:00:00.000Z",

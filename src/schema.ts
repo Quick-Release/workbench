@@ -1,12 +1,28 @@
 import { Schema } from "effect";
 
 import type { OverviewData } from "./types";
-import { serviceStatuses, ticketKinds, ticketStatuses } from "./types";
+import {
+  serviceStatuses,
+  ticketKinds,
+  ticketStatuses,
+  trackerCategories,
+  triageStates,
+  wayfinderKinds,
+  workflowPhases,
+} from "./types";
 export const TicketStatusSchema = Schema.Literals(ticketStatuses);
 
 export const TicketKindSchema = Schema.Literals(ticketKinds);
 
 export const ServiceStatusSchema = Schema.Literals(serviceStatuses);
+
+export const WorkflowPhaseSchema = Schema.NullOr(Schema.Literals(workflowPhases));
+
+export const TriageStateSchema = Schema.Literals(triageStates);
+
+export const WayfinderKindSchema = Schema.NullOr(Schema.Literals(wayfinderKinds));
+
+export const TrackerCategorySchema = Schema.NullOr(Schema.Literals(trackerCategories));
 
 export const TicketRecordSchema = Schema.Struct({
   id: Schema.String,
@@ -23,6 +39,27 @@ export const TicketRecordSchema = Schema.Struct({
   kind: TicketKindSchema,
   externalSource: Schema.optional(Schema.String),
   progress: Schema.Struct({ done: Schema.Number, total: Schema.Number }),
+});
+
+export const WorkItemRecordSchema = Schema.Struct({
+  id: Schema.String,
+  title: Schema.String,
+  url: Schema.String,
+  state: Schema.Literals(["open", "closed"]),
+  assignees: Schema.Array(Schema.String),
+  phase: WorkflowPhaseSchema,
+  triageState: TriageStateSchema,
+  deferred: Schema.Boolean,
+  category: TrackerCategorySchema,
+  kind: WayfinderKindSchema,
+  summary: Schema.String,
+});
+
+export const TrackerMapRecordSchema = Schema.Struct({
+  mapId: Schema.String,
+  title: Schema.String,
+  url: Schema.String,
+  ticketIds: Schema.Array(Schema.String),
 });
 
 export const PlanRecordSchema = Schema.Struct({
@@ -159,6 +196,8 @@ export const OverviewDataSchema = Schema.Struct({
   tickets: Schema.Array(TicketRecordSchema),
   plans: Schema.Array(PlanRecordSchema),
   changes: Schema.Array(SpecChangeRecordSchema),
+  workItems: Schema.Array(WorkItemRecordSchema),
+  maps: Schema.Array(TrackerMapRecordSchema),
   sessions: SessionUsageSchema,
 });
 
@@ -171,5 +210,13 @@ export const parseOverviewData: (input: unknown) => OverviewData = Schema.decode
 );
 
 export const parseTicketRecord = Schema.decodeUnknownSync(TicketRecordSchema, {
+  onExcessProperty: "error",
+});
+
+export const parseWorkItemRecord = Schema.decodeUnknownSync(WorkItemRecordSchema, {
+  onExcessProperty: "error",
+});
+
+export const parseTrackerMapRecord = Schema.decodeUnknownSync(TrackerMapRecordSchema, {
   onExcessProperty: "error",
 });

@@ -29,7 +29,7 @@
     "sync:demo": "node scripts/env.mjs && dotenvx run -f .env.demo -f .env -- pnpm sync",
     "build": "pnpm sync && vp build",
     "preview": "vp preview",
-    "test": "pnpm sync && vp test run && node --test scripts/config.test.mjs scripts/services.test.mjs scripts/source-root.test.mjs scripts/self-defaults.test.mjs scripts/env.test.mjs scripts/init.test.mjs scripts/sessions.test.mjs scripts/skills-api.test.mjs worker/worker.test.mjs",
+    "test": "pnpm sync && vp test run && node --test scripts/config.test.mjs scripts/services.test.mjs scripts/source-root.test.mjs scripts/self-defaults.test.mjs scripts/env.test.mjs scripts/init.test.mjs scripts/sessions.test.mjs scripts/skills-api.test.mjs scripts/tracker.test.mjs worker/worker.test.mjs",
     "lint": "vp lint .",
     "format": "vp fmt --write . && vp lint --fix .",
     "check": "pnpm sync && vp fmt --check . && vp lint . && tsc --noEmit",

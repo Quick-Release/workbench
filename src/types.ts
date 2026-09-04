@@ -15,6 +15,63 @@ export const ticketKinds = ["ledger", "plan-ticket", "external"] as const;
 
 export const serviceStatuses = ["connected", "skipped", "error"] as const;
 
+// ADR 0007 vocabulary: workflow phase (absent means pre-flow), triage state
+// (the five tracker roles plus unlabeled), and decision-ticket kind.
+export const workflowPhases = [
+  "grilling",
+  "prototyping",
+  "specced",
+  "ticketed",
+  "implementing",
+  "reviewing",
+  "shipped",
+] as const;
+
+export type WorkflowPhase = (typeof workflowPhases)[number];
+
+export const triageStates = [
+  "needs-triage",
+  "needs-info",
+  "ready-for-agent",
+  "ready-for-human",
+  "wontfix",
+  "unlabeled",
+] as const;
+
+export type TriageState = (typeof triageStates)[number];
+
+export const wayfinderKinds = ["map", "research", "prototype", "grilling", "task"] as const;
+
+export type WayfinderKind = (typeof wayfinderKinds)[number];
+
+export const trackerCategories = ["bug", "enhancement"] as const;
+
+export type TrackerCategory = (typeof trackerCategories)[number];
+
+// ADR 0008: the tracker adapter's first-class records. A work item carries
+// exactly what display state derives from (phase + triage + deferred +
+// open/closed + assignees + kind); a map record is membership and order.
+export type WorkItemRecord = {
+  id: string;
+  title: string;
+  url: string;
+  state: "open" | "closed";
+  assignees: readonly string[];
+  phase: WorkflowPhase | null;
+  triageState: TriageState;
+  deferred: boolean;
+  category: TrackerCategory | null;
+  kind: WayfinderKind | null;
+  summary: string;
+};
+
+export type TrackerMapRecord = {
+  mapId: string;
+  title: string;
+  url: string;
+  ticketIds: readonly string[];
+};
+
 export type TicketRecord = {
   id: string;
   title: string;
@@ -180,5 +237,7 @@ export type OverviewData = {
   tickets: readonly TicketRecord[];
   plans: readonly PlanRecord[];
   changes: readonly SpecChangeRecord[];
+  workItems: readonly WorkItemRecord[];
+  maps: readonly TrackerMapRecord[];
   sessions: SessionUsage;
 };

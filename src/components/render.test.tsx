@@ -157,6 +157,8 @@ const data = {
   tickets,
   plans,
   changes,
+  workItems: [],
+  maps: [],
   sessions,
 } satisfies OverviewData;
 
