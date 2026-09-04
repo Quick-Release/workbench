@@ -2,7 +2,12 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { overviewData } from "./data";
 import { overviewData as generatedData } from "./data.generated";
-import { parseOverviewData, parseTicketRecord } from "./schema";
+import {
+  parseOverviewData,
+  parseTicketRecord,
+  parseTrackerMapRecord,
+  parseWorkItemRecord,
+} from "./schema";
 
 const expectRejected = (input: unknown, pattern: RegExp) => {
   expect(() => parseOverviewData(input)).toThrow(pattern);
@@ -136,7 +141,10 @@ describe("overview data boundary", () => {
   });
 
   it("accepts the sessions payload on the generated data", () => {
-    expect(generatedData.sessions.enabled).toBe(true);
+    // enabled reflects the host's config (sync on a machine without the
+    // session database writes the disabled payload), so assert shape, not
+    // this machine's setting.
+    expect(typeof generatedData.sessions.enabled).toBe("boolean");
     expect(generatedData.sessions.generatedAt).toBeTruthy();
     expect(Array.isArray(generatedData.sessions.perDay)).toBe(true);
     expect(Array.isArray(generatedData.sessions.perModel)).toBe(true);
@@ -202,5 +210,101 @@ describe("overview data boundary", () => {
   it("rejects data missing the sessions key entirely", () => {
     const { sessions: _omitted, ...withoutSessions } = generatedData;
     expectRejected(withoutSessions, /sessions/);
+  });
+
+  it("rejects data missing the tracker work items key entirely", () => {
+    const { workItems: _omitted, ...withoutWorkItems } = generatedData;
+    expectRejected(withoutWorkItems, /workItems/);
+  });
+
+  it("carries tracker work items and maps from the generated snapshot", () => {
+    expect(Array.isArray(generatedData.workItems)).toBe(true);
+    expect(Array.isArray(generatedData.maps)).toBe(true);
+    for (const record of generatedData.workItems) expect(parseWorkItemRecord(record)).toBeTruthy();
+    for (const record of generatedData.maps) expect(parseTrackerMapRecord(record)).toBeTruthy();
+  });
+});
+
+describe("tracker work item boundary", () => {
+  const workItem = {
+    id: "GH-54",
+    title: "Skills-ecosystem dashboard: build spec",
+    url: "https://github.com/Quick-Release/workbench/issues/54",
+    state: "open",
+    assignees: ["vvaz"],
+    phase: "ticketed",
+    triageState: "ready-for-agent",
+    deferred: false,
+    category: "enhancement",
+    kind: null,
+    summary: "Collapses the map and ADRs into one buildable spec.",
+  };
+
+  it("accepts a fully labeled work item", () => {
+    expect(parseWorkItemRecord(workItem)).toEqual(workItem);
+  });
+
+  it("accepts a pre-flow work item with nullable fields absent", () => {
+    expect(
+      parseWorkItemRecord({
+        ...workItem,
+        assignees: [],
+        phase: null,
+        triageState: "unlabeled",
+        category: null,
+        kind: null,
+      }),
+    ).toEqual(expect.objectContaining({ triageState: "unlabeled", phase: null }));
+  });
+
+  it("rejects an excess property on a work item", () => {
+    expect(() => parseWorkItemRecord({ ...workItem, dependencies: "—" })).toThrow(/dependencies/);
+  });
+
+  it("rejects an unknown workflow phase", () => {
+    expect(() => parseWorkItemRecord({ ...workItem, phase: "done" })).toThrow(/phase/);
+  });
+
+  it("rejects an unknown triage state", () => {
+    expect(() => parseWorkItemRecord({ ...workItem, triageState: "ready" })).toThrow(/triageState/);
+  });
+
+  it("rejects an unknown wayfinder kind", () => {
+    expect(() => parseWorkItemRecord({ ...workItem, kind: "epic" })).toThrow(/kind/);
+  });
+
+  it("rejects an unknown open/closed state", () => {
+    expect(() => parseWorkItemRecord({ ...workItem, state: "merged" })).toThrow(/state/);
+  });
+
+  it("rejects a work item missing its summary", () => {
+    const { summary: _omitted, ...incomplete } = workItem;
+    expect(() => parseWorkItemRecord(incomplete)).toThrow(/summary/);
+  });
+});
+
+describe("tracker map boundary", () => {
+  const trackerMap = {
+    mapId: "GH-41",
+    title: "Skills-ecosystem dashboard",
+    url: "https://github.com/Quick-Release/workbench/issues/41",
+    ticketIds: ["GH-42", "GH-55"],
+  };
+
+  it("accepts a map record with member ids in map order", () => {
+    expect(parseTrackerMapRecord(trackerMap)).toEqual(trackerMap);
+  });
+
+  it("rejects a map record with an excess property", () => {
+    expect(() => parseTrackerMapRecord({ ...trackerMap, blockedBy: [] })).toThrow(/blockedBy/);
+  });
+
+  it("rejects a map record missing its member ids", () => {
+    const { ticketIds: _omitted, ...incomplete } = trackerMap;
+    expect(() => parseTrackerMapRecord(incomplete)).toThrow(/ticketIds/);
+  });
+
+  it("rejects a map record with non-string member ids", () => {
+    expect(() => parseTrackerMapRecord({ ...trackerMap, ticketIds: [42] })).toThrow(/ticketIds/);
   });
 });
