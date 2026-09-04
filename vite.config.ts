@@ -4,6 +4,7 @@ import { tanstackRouter } from "@tanstack/router-plugin/vite";
 import react from "@vitejs/plugin-react";
 import { fileURLToPath } from "node:url";
 
+import { skillsApiPlugin } from "./scripts/skills-api.mjs";
 import { toolsApiPlugin } from "./scripts/tools-api.mjs";
 
 export default defineConfig({
@@ -16,7 +17,13 @@ export default defineConfig({
   test: {
     include: ["src/**/*.test.{ts,tsx}"],
   },
-  plugins: [tanstackRouter({ target: "react" }), react(), tailwindcss(), toolsApiPlugin()],
+  plugins: [
+    tanstackRouter({ target: "react" }),
+    react(),
+    tailwindcss(),
+    toolsApiPlugin(),
+    skillsApiPlugin(),
+  ],
   resolve: {
     alias: {
       "@": fileURLToPath(new URL("./src", import.meta.url)),

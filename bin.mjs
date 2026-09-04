@@ -64,6 +64,9 @@ const main = async () => {
   }
 
   p.log.info(`Starting dev server on port ${port}`);
+  // The Vite app lives inside the installed package, while setup actions must
+  // mutate the host repository that this invocation is serving.
+  process.env.WORKBENCH_SOURCE_ROOT = sourceRoot;
   const devStatus = run(vp, ["dev", "--port", port, "--strictPort"], appDirectory);
   if (devStatus !== 0) {
     process.exitCode = devStatus;

@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { readFile, stat, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
@@ -72,6 +72,7 @@ export const toolsApiPlugin = () => ({
   name: "workbench-tools-api",
   configureServer(server) {
     server.middlewares.use(async (request, response, next) => {
+      const rootDirectory = resolve(process.env.WORKBENCH_SOURCE_ROOT || server.config.root);
       const url = new URL(request.url, "http://localhost");
       const statusMatch = url.pathname.match(/^\/api\/tools\/?$/);
       const setupMatch = url.pathname.match(/^\/api\/tools\/([\w-]+)\/setup$/);
@@ -79,7 +80,7 @@ export const toolsApiPlugin = () => ({
       if (request.method === "GET" && statusMatch) {
         response.statusCode = 200;
         response.setHeader("content-type", "application/json");
-        response.end(JSON.stringify(await toolsStatus(server.config.root)));
+        response.end(JSON.stringify(await toolsStatus(rootDirectory)));
         return;
       }
 
@@ -91,10 +92,10 @@ export const toolsApiPlugin = () => ({
           return;
         }
         try {
-          const message = await setup(server.config.root);
+          const message = await setup(rootDirectory);
           response.statusCode = 200;
           response.setHeader("content-type", "application/json");
-          response.end(JSON.stringify({ message, ...(await toolsStatus(server.config.root)) }));
+          response.end(JSON.stringify({ message, ...(await toolsStatus(rootDirectory)) }));
         } catch (error) {
           response.statusCode = 500;
           response.setHeader("content-type", "application/json");

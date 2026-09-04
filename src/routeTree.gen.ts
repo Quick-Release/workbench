@@ -11,6 +11,7 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as SessionsRouteImport } from './routes/sessions'
+import { Route as SkillsRouteImport } from './routes/skills'
 import { Route as ToolsRouteImport } from './routes/tools'
 
 const IndexRoute = IndexRouteImport.update({
@@ -23,6 +24,11 @@ const SessionsRoute = SessionsRouteImport.update({
   path: '/sessions',
   getParentRoute: () => rootRouteImport,
 } as any)
+const SkillsRoute = SkillsRouteImport.update({
+  id: '/skills',
+  path: '/skills',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ToolsRoute = ToolsRouteImport.update({
   id: '/tools',
   path: '/tools',
@@ -32,30 +38,34 @@ const ToolsRoute = ToolsRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/sessions': typeof SessionsRoute
+  '/skills': typeof SkillsRoute
   '/tools': typeof ToolsRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/sessions': typeof SessionsRoute
+  '/skills': typeof SkillsRoute
   '/tools': typeof ToolsRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/sessions': typeof SessionsRoute
+  '/skills': typeof SkillsRoute
   '/tools': typeof ToolsRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/sessions' | '/tools'
+  fullPaths: '/' | '/sessions' | '/skills' | '/tools'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/sessions' | '/tools'
-  id: '__root__' | '/' | '/sessions' | '/tools'
+  to: '/' | '/sessions' | '/skills' | '/tools'
+  id: '__root__' | '/' | '/sessions' | '/skills' | '/tools'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   SessionsRoute: typeof SessionsRoute
+  SkillsRoute: typeof SkillsRoute
   ToolsRoute: typeof ToolsRoute
 }
 
@@ -75,6 +85,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SessionsRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/skills': {
+      id: '/skills'
+      path: '/skills'
+      fullPath: '/skills'
+      preLoaderRoute: typeof SkillsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/tools': {
       id: '/tools'
       path: '/tools'
@@ -88,6 +105,7 @@ declare module '@tanstack/react-router' {
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   SessionsRoute: SessionsRoute,
+  SkillsRoute: SkillsRoute,
   ToolsRoute: ToolsRoute,
 }
 export const routeTree = rootRouteImport

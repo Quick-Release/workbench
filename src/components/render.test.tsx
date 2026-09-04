@@ -5,6 +5,7 @@ import { MetricCard } from "./MetricCard";
 import { OverviewPage } from "./OverviewPage";
 import { PlanTable } from "./PlanTable";
 import { SessionsPage } from "./SessionsPage";
+import { SkillsPage } from "./SkillsPage";
 import { SpecPanel } from "./SpecPanel";
 import { StatusBadge } from "./StatusBadge";
 import { TicketTable } from "./TicketTable";
@@ -282,5 +283,13 @@ describe("rendered dashboard shell (shadcn rebuild)", () => {
     );
     expect(html).toContain("Session tracking is off");
     expect(html).not.toContain("Model share");
+  });
+
+  it("renders the favorite skills and local install command", () => {
+    const html = renderToString(<SkillsPage />);
+    expect(html).toContain("Matt Pocock Skills");
+    expect(html).toContain("Grill with docs");
+    expect(html).toContain("npx skills@latest add mattpocock/skills --all");
+    expect(html).toContain("View source");
   });
 });

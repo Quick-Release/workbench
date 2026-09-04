@@ -1,5 +1,5 @@
 import { Link, linkOptions, useRouterState } from "@tanstack/react-router";
-import { Activity, ReceiptText, Wrench } from "lucide-react";
+import { Activity, ReceiptText, Sparkles, Wrench } from "lucide-react";
 import {
   SidebarGroup,
   SidebarGroupContent,
@@ -20,17 +20,20 @@ const sessionsLink = linkOptions({
   search: { subagents: "all" },
 });
 const toolsLink = linkOptions({ to: "/tools" });
+const skillsLink = linkOptions({ to: "/skills" });
 
 type NavItem = { title: string; icon: typeof ReceiptText } & (
   | typeof overviewLink
   | typeof sessionsLink
   | typeof toolsLink
+  | typeof skillsLink
 );
 
 export const navItems: NavItem[] = [
   { title: "Overview", icon: ReceiptText, ...overviewLink },
   { title: "Agent sessions", icon: Activity, ...sessionsLink },
   { title: "Tools", icon: Wrench, ...toolsLink },
+  { title: "skills", icon: Sparkles, ...skillsLink },
 ];
 
 export function NavMain({ items = navItems }: { items?: NavItem[] }) {

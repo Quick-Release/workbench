@@ -46,8 +46,13 @@ const renderShellAt = async (path: string) => {
     path: "/sessions",
     component: () => <div>stub:sessions</div>,
   });
+  const skillsRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: "/skills",
+    component: () => <div>stub:skills</div>,
+  });
   const router = createRouter({
-    routeTree: rootRoute.addChildren([indexRoute, sessionsRoute]),
+    routeTree: rootRoute.addChildren([indexRoute, sessionsRoute, skillsRoute]),
     history: createMemoryHistory({ initialEntries: [path] }),
   });
   await router.load();
@@ -85,11 +90,14 @@ describe("app shell (shadcn dashboard frame)", () => {
   it("marks exactly the active route in the sidebar nav", async () => {
     const home = await renderShellAt("/");
     const sessions = await renderShellAt("/sessions");
+    const skills = await renderShellAt("/skills");
     expect(anchorFor(home, "/")).toContain('data-active="true"');
     expect(anchorFor(home, "/")).not.toContain('data-active="false"');
     expect(anchorFor(home, "/sessions")).toContain('data-active="false"');
+    expect(anchorFor(home, "/skills")).toContain('data-active="false"');
     expect(anchorFor(sessions, "/sessions")).toContain('data-active="true"');
     expect(anchorFor(sessions, "/")).toContain('data-active="false"');
+    expect(anchorFor(skills, "/skills")).toContain('data-active="true"');
   });
 
   it("keeps the repository link external", async () => {
