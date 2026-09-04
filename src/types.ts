@@ -61,11 +61,16 @@ export type SpecChangeRecord = {
 
 export const sourceFilters = ["all", "tickets", "plans", "specs"] as const;
 
+export const overviewViews = ["all", "grilling", "spec", "tickets", "implementation"] as const;
+
+export type OverviewView = (typeof overviewViews)[number];
+
 export type OverviewSearch = {
   q: string;
   status: TicketStatus | "all";
   source: (typeof sourceFilters)[number];
   stream: string;
+  view: OverviewView;
 };
 
 export type OverviewSource = {

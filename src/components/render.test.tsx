@@ -237,7 +237,7 @@ describe("rendered dashboard shell (shadcn rebuild)", () => {
     const html = renderToString(
       <OverviewPage
         data={data}
-        search={{ q: "", status: "all", source: "all", stream: "all" }}
+        search={{ q: "", status: "all", source: "all", stream: "all", view: "all" }}
         onSearchChange={() => {}}
         resetSearch={() => {}}
       />,
@@ -245,13 +245,32 @@ describe("rendered dashboard shell (shadcn rebuild)", () => {
     expect(html).toContain('data-slot="card"');
     expect(html).toContain('type="search"');
     expect((html.match(/data-slot="native-select"/g) ?? []).length).toBe(2);
-    expect((html.match(/aria-pressed="true"/g) ?? []).length).toBe(1);
-    expect((html.match(/aria-pressed="false"/g) ?? []).length).toBe(3);
+    expect((html.match(/aria-pressed="true"/g) ?? []).length).toBe(2);
+    expect((html.match(/aria-pressed="false"/g) ?? []).length).toBe(7);
+    expect(html).toContain("Ready for grilling");
+    expect(html).toContain("Ready for spec");
+    expect(html).toContain("Ready for tickets");
+    expect(html).toContain("Ready for implementation");
     expect(html).toContain("border-t-hot");
     expect(html).toContain("border-t-good");
     expect(html).toContain("border-t-info");
     expect(html).toContain("text-good");
     expect(html).toContain("text-warn");
+  });
+
+  it("renders one workflow view at a time", () => {
+    const html = renderToString(
+      <OverviewPage
+        data={data}
+        search={{ q: "", status: "all", source: "all", stream: "all", view: "tickets" }}
+        onSearchChange={() => {}}
+        resetSearch={() => {}}
+      />,
+    );
+    expect(html).toContain("Specs waiting for a");
+    expect(html).not.toContain("Work that still needs a");
+    expect(html).not.toContain("The plans behind the");
+    expect(withoutComments(html)).toContain("<strong>1</strong> of 1 active change proposals");
   });
 
   it("renders the sessions page with charts and the session table", () => {

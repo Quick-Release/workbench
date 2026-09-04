@@ -17,10 +17,13 @@ import {
   filterChanges,
   filterPlans,
   filterTickets,
+  overviewViewLabels,
+  recordsForView,
   statusLabels,
-  summaryFor,
   uniqueGroups,
+  viewCounts,
 } from "../lib/overview";
+import { overviewViews, sourceFilters } from "../types";
 import type { OverviewData, OverviewSearch, TicketRecord } from "../types";
 
 const sourceOptions = [
@@ -40,6 +43,14 @@ const statusOptions = [
   ["planned", statusLabels.planned],
   ["complete", statusLabels.complete],
   ["deferred", statusLabels.deferred],
+] as const;
+
+const workflowOptions = [
+  { value: "all", description: "Everything in the snapshot" },
+  { value: "grilling", description: "Untriaged external records" },
+  { value: "spec", description: "Planning sources" },
+  { value: "tickets", description: "Active change proposals" },
+  { value: "implementation", description: "Ready-for-agent tickets" },
 ] as const;
 
 const calloutTopTone = {
@@ -65,23 +76,29 @@ export function OverviewPage({
   onSearchChange: (next: Partial<OverviewSearch>) => void;
   resetSearch: () => void;
 }>) {
-  const summary = summaryFor(data);
   const groups = uniqueGroups(data.tickets);
+  const counts = viewCounts(data);
+  const scopedData = useMemo(() => recordsForView(data, search.view), [data, search.view]);
   const visibleTickets = useMemo(
-    () => filterTickets(data.tickets, search.q, search.status, search.stream),
-    [data.tickets, search.q, search.status, search.stream],
+    () => filterTickets(scopedData.tickets, search.q, search.status, search.stream),
+    [scopedData.tickets, search.q, search.status, search.stream],
   );
   const visiblePlans = useMemo(
-    () => filterPlans(data.plans, search.q, search.status, search.stream),
-    [data.plans, search.q, search.status, search.stream],
+    () => filterPlans(scopedData.plans, search.q, search.status, search.stream),
+    [scopedData.plans, search.q, search.status, search.stream],
   );
   const visibleChanges = useMemo(
-    () => filterChanges(data.changes, search.q, search.status),
-    [data.changes, search.q, search.status],
+    () => filterChanges(scopedData.changes, search.q, search.status),
+    [scopedData.changes, search.q, search.status],
   );
-  const showTickets = search.source === "all" || search.source === "tickets";
-  const showPlans = search.source === "all" || search.source === "plans";
-  const showSpecs = search.source === "all" || search.source === "specs";
+  const showTickets =
+    (search.source === "all" || search.source === "tickets") &&
+    ["all", "grilling", "implementation"].includes(search.view);
+  const showPlans =
+    (search.source === "all" || search.source === "plans") && ["all", "spec"].includes(search.view);
+  const showSpecs =
+    (search.source === "all" || search.source === "specs") &&
+    ["all", "tickets"].includes(search.view);
   const readyTickets = data.tickets.filter((ticket) => ticket.status === "ready").slice(0, 3);
   const attentionTickets = data.tickets
     .filter((ticket) => ["gated", "blocked", "needs-development"].includes(ticket.status))
@@ -90,30 +107,20 @@ export function OverviewPage({
     search.q.length > 0 ||
     search.status !== "all" ||
     search.source !== "all" ||
-    search.stream !== "all";
+    search.stream !== "all" ||
+    search.view !== "all";
 
   return (
     <>
-      <nav className="section-nav" aria-label="Page sections">
-        <a href="#tickets">
-          Ticket ledger <b>{data.tickets.length}</b>
-        </a>
-        <a href="#plans">
-          Plan corpus <b>{data.plans.length}</b>
-        </a>
-        <a href="#specs">
-          OpenSpec <b>{data.changes.length}</b>
-        </a>
-        <a href="#sources">Sources + caveats</a>
-      </nav>
-
-      <section className="metrics" aria-label="Project summary">
-        <MetricCard value={data.tickets.length} label="local ticket records" tone="info" />
-        <MetricCard value={summary.open} label="not complete or deferred" tone="good" />
-        <MetricCard value={summary.ready} label="ready-for-agent" tone="good" />
-        <MetricCard value={summary["in-progress"]} label="in active motion" tone="info" />
-        <MetricCard value={summary.attention} label="gates or development" tone="warn" />
-        <MetricCard value={summary.complete} label="complete records" tone="neutral" />
+      <section className="metrics" aria-label="Workflow summary">
+        <MetricCard value={counts.grilling} label={overviewViewLabels.grilling} tone="hot" />
+        <MetricCard value={counts.spec} label={overviewViewLabels.spec} tone="info" />
+        <MetricCard value={counts.tickets} label={overviewViewLabels.tickets} tone="warn" />
+        <MetricCard
+          value={counts.implementation}
+          label={overviewViewLabels.implementation}
+          tone="good"
+        />
       </section>
 
       <section className="callouts" aria-label="What matters now">
@@ -178,6 +185,34 @@ export function OverviewPage({
               </Button>
             )}
           </div>
+          <div className="workflow-view">
+            <p className="section-kicker">Workflow views</p>
+            <ToggleGroup
+              type="single"
+              spacing={8}
+              value={search.view}
+              aria-label="Workflow view"
+              className="workflow-tabs w-full flex-wrap gap-[7px] rounded-none"
+              onValueChange={(next) => {
+                const view = overviewViews.find((candidate) => candidate === next);
+                if (view) onSearchChange({ view, source: "all", stream: "all" });
+              }}
+            >
+              {workflowOptions.map(({ value, description }) => (
+                <ToggleGroupItem
+                  key={value}
+                  value={value}
+                  variant="outline"
+                  aria-pressed={search.view === value}
+                  className="workflow-tab rounded-none border-line px-[11px] py-[9px] text-left font-normal text-muted-foreground shadow-none hover:border-acid hover:bg-acid/8 hover:text-acid data-[state=on]:border-acid data-[state=on]:bg-acid/8 data-[state=on]:text-acid"
+                >
+                  <span className="workflow-tab-label">{overviewViewLabels[value]}</span>
+                  <b className="workflow-tab-count">{counts[value]}</b>
+                  <small className="workflow-tab-description">{description}</small>
+                </ToggleGroupItem>
+              ))}
+            </ToggleGroup>
+          </div>
           <div className="filter-grid">
             <label className="search-control">
               <span>Search everything</span>
@@ -230,7 +265,8 @@ export function OverviewPage({
             aria-label="Source lens"
             className="source-tabs w-auto flex-wrap gap-[7px] rounded-none"
             onValueChange={(next) => {
-              if (next) onSearchChange({ source: next as OverviewSearch["source"] });
+              const source = sourceFilters.find((candidate) => candidate === next);
+              if (source) onSearchChange({ source, view: "all", stream: "all" });
             }}
           >
             {sourceOptions.map(([value, label]) => (
@@ -249,9 +285,9 @@ export function OverviewPage({
         </Card>
       </section>
 
-      {showTickets && <TicketTable tickets={visibleTickets} total={data.tickets.length} />}
-      {showPlans && <PlanTable plans={visiblePlans} total={data.plans.length} />}
-      {showSpecs && <SpecPanel changes={visibleChanges} total={data.changes.length} />}
+      {showTickets && <TicketTable tickets={visibleTickets} total={scopedData.tickets.length} />}
+      {showPlans && <PlanTable plans={visiblePlans} total={scopedData.plans.length} />}
+      {showSpecs && <SpecPanel changes={visibleChanges} total={scopedData.changes.length} />}
 
       <footer className="site-footer" id="sources">
         <div>

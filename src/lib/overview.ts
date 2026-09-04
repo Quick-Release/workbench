@@ -4,6 +4,7 @@ import type {
   SpecChangeRecord,
   TicketRecord,
   TicketStatus,
+  OverviewView,
 } from "../types";
 
 export const statusLabels = {
@@ -16,6 +17,59 @@ export const statusLabels = {
   planned: "needs-triage",
   deferred: "deferred",
 } satisfies Record<TicketStatus, string>;
+
+export const overviewViewLabels = {
+  all: "All work",
+  grilling: "Ready for grilling",
+  spec: "Ready for spec",
+  tickets: "Ready for tickets",
+  implementation: "Ready for implementation",
+} satisfies Record<OverviewView, string>;
+
+export const recordsForView = (data: OverviewData, view: OverviewView) => {
+  switch (view) {
+    case "grilling":
+      return {
+        tickets: data.tickets.filter(
+          (ticket) => ticket.kind === "external" && ticket.status === "planned",
+        ),
+        plans: [],
+        changes: [],
+      };
+    case "spec":
+      return { tickets: [], plans: data.plans, changes: [] };
+    case "tickets":
+      return {
+        tickets: [],
+        plans: [],
+        changes: data.changes.filter((change) => change.status !== "complete"),
+      };
+    case "implementation":
+      return {
+        tickets: data.tickets.filter((ticket) => ticket.status === "ready"),
+        plans: [],
+        changes: [],
+      };
+    case "all":
+      return { tickets: data.tickets, plans: data.plans, changes: data.changes };
+  }
+};
+
+export const viewCounts = (data: OverviewData) => {
+  const all = recordsForView(data, "all");
+  const grilling = recordsForView(data, "grilling");
+  const spec = recordsForView(data, "spec");
+  const tickets = recordsForView(data, "tickets");
+  const implementation = recordsForView(data, "implementation");
+
+  return {
+    all: all.tickets.length + all.plans.length + all.changes.length,
+    grilling: grilling.tickets.length,
+    spec: spec.plans.length,
+    tickets: tickets.changes.length,
+    implementation: implementation.tickets.length,
+  };
+};
 
 export const statusTone = (status: TicketStatus) =>
   status === "complete"

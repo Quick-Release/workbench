@@ -4,12 +4,14 @@ import {
   filterChanges,
   filterPlans,
   filterTickets,
+  recordsForView,
   statusLabels,
   summaryFor,
   ticketCounts,
   uniqueGroups,
+  viewCounts,
 } from "./overview";
-import type { OverviewData } from "../types";
+import type { OverviewData, SpecChangeRecord, TicketRecord } from "../types";
 
 const data = {
   meta: {
@@ -160,6 +162,45 @@ describe("workbench selectors", () => {
     expect(filterPlans(data.plans, "", "complete", "all")).toHaveLength(0);
     expect(filterChanges(data.changes, "copilot", "planned")).toHaveLength(1);
     expect(filterChanges(data.changes, "copilot", "complete")).toHaveLength(0);
+  });
+
+  it("organizes the existing records into workflow views", () => {
+    const externalTicket = {
+      ...data.tickets[1],
+      id: "GH-001",
+      kind: "external",
+      status: "planned",
+      statusLabel: "needs-triage",
+    } satisfies TicketRecord;
+    const completedChange = {
+      ...data.changes[0],
+      id: "completed-change",
+      status: "complete",
+      statusLabel: "complete",
+    } satisfies SpecChangeRecord;
+    const viewData = {
+      ...data,
+      tickets: [...data.tickets, externalTicket],
+      changes: [...data.changes, completedChange],
+    } satisfies OverviewData;
+
+    expect(recordsForView(viewData, "grilling").tickets.map((ticket) => ticket.id)).toEqual([
+      "GH-001",
+    ]);
+    expect(recordsForView(viewData, "spec").plans).toHaveLength(1);
+    expect(recordsForView(viewData, "tickets").changes.map((change) => change.id)).toEqual([
+      "add-copilot",
+    ]);
+    expect(recordsForView(viewData, "implementation").tickets.map((ticket) => ticket.id)).toEqual([
+      "TKT-001",
+    ]);
+    expect(viewCounts(viewData)).toEqual({
+      all: 7,
+      grilling: 1,
+      spec: 1,
+      tickets: 1,
+      implementation: 1,
+    });
   });
 
   it("returns sorted unique groups", () => {
