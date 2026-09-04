@@ -101,8 +101,8 @@ A parked work item: not being worked now, not refused. Orthogonal to both triage
 _Avoid_: wontfix (that's refusal), backlog (that's an unordered pile)
 
 **Blocker edge**:
-A declared dependency from a ticket to the tickets that must close before it can start — native links on the tracker, "Blocked by" lines in local ticket files.
-_Avoid_: dependency string (the lossy display encoding it replaces)
+A declared dependency from a ticket to the tickets that must close before it can start — native links on the tracker, "Blocked by" lines in local ticket files. Endpoints may live in different sources: any ticket can gate any other.
+_Avoid_: dependency string (the lossy display encoding it replaces), sub-issue (that's map membership)
 
 **Frontier**:
 The open, unblocked, unclaimed work at the edge of an effort: implementation tickets whose blockers are all closed, and map decision tickets with no open blockers. What "pick next" means everywhere in Workbench.
@@ -115,3 +115,7 @@ _Avoid_: epic (a map holds decisions, not features)
 **Decision ticket**:
 A child issue of a map whose resolution is a decision, not a build slice; typed research, prototype, grilling, or task.
 _Avoid_: task (overloaded with implementation work)
+
+**Map membership**:
+A decision ticket's belonging to a map, recorded as a tracker sub-issue; the membership order is the order the map's frontier is worked in. Membership groups tickets onto a map; blocker edges sequence them.
+_Avoid_: parent-child (ambiguous with session trees), sub-issue (the tracker encoding, not the concept)

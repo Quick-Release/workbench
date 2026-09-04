@@ -1,0 +1,24 @@
+# Blocker edges come from two syntaxes, native wins where it exists, the frontier is computed fail-closed
+
+Status: accepted
+
+Ticket #47 asked how blocker edges enter the snapshot, how sources merge when more than one declares the same pair, and what the frontier computes exactly. The decision: edges are first-class records over the already-namespaced work-item ids (`GH-47`, `BQ-12`, …), gathered from exactly two syntaxes — GitHub native blocked-by (the `Blocked by:` body line remains the documented fallback where the dependencies feature is off) and the same line grammar in local ticket files, ledger rows inheriting their linked ticket file's line — so the chart's three sources collapse to two. Cross-source edges (a tracker issue blocked by a plan ticket or vice versa) are first-class, declared with qualified ids, resolved in the declaring file's home namespace first. Native wins at the repo level: when the dependencies feature answers, native edges are authoritative for issue↔issue pairs and same-namespace body lines are ignored — a UI-removed edge is not resurrected by a stale line — while lines remain the sole source where native is unavailable and for cross-source references native cannot express. Sub-issue reads are **map membership and order**, a separate relation, never blocker edges: membership groups tickets onto a map, blocker edges sequence them. The frontier is computed, never stored — a pure selector `frontier(tickets, blockerEdges, maps)` over `open ∧ unassigned ∧ all blockers closed`, where closed is closed (`state_reason` irrelevant), unassigned means no tracker assignee, and sources without an assignee concept are vacuously unclaimed. Unknown references **fail closed**: a dangling or unreadable blocker counts as open, with a sync warning, because a ticket wrongly looking grabbable silently violates its gate while one wrongly looking blocked is visible and self-correcting. `BlockerEdge` is `{blockedId, blockerId, source: github-native | blocked-by-line, sourceRef}` (issue URL or ticket-file path as provenance), stored as one flat top-level `blockerEdges` list — cross-source edges have no single home ticket — with Effect Schema coverage under the excess-property rejection matrix; map membership lands as `maps: {mapId, ticketIds[]}` in map order ("first in map order wins"), richer Map records waiting on #49. `dependencies: string` — a display copy truncated at 180 characters — is deleted in the same change and display derives from edges, ADR 0007's retire-and-derive move for `TicketStatus`.
+
+## Considered options
+
+- **Union of all declaring sources with per-edge provenance** — rejected: resurrects edges removed in the GitHub UI whenever a stale fallback line survives in the body.
+- **Per-pair precedence (native overrides per pair, lines fill the gaps)** — rejected: leaves removed-vs-never-migrated ambiguous for every gap; repo-level authority gives each pair exactly one counting syntax.
+- **The ledger as a third source** — rejected: the ledger parser already reads the linked ticket file's line; there are two syntaxes, not three.
+- **Sub-issues as blocker edges** — rejected: every map child would render blocked by its map.
+- **Fail-open unknown references** — rejected: a typo'd `Blocked by: GH-999` would silently ungate work.
+- **A full closed-issue sweep to evaluate blockers** — rejected: closed history is unbounded; targeted reads scale with edges, not history.
+- **Deprecation window for the `dependencies` string** — rejected: single-consumer internal tool, `renderToString` smoke tests catch breakage; ADR 0007 set the precedent.
+
+## Consequences
+
+- Markdown hygiene is sync's job: the three key aliases dedupe, self-edges drop with a warning, cycles surface in the sync message without auto-breaking, and dangling edges stay in the snapshot so the blocker graph can show the broken reference.
+- The tracker adapter (a dedicated module, distinct from the generic issue-list services) fetches: open issues with the full label array (ADR 0007's `workflow:` labels, `wayfinder:map` detection), assignee, and `issue_dependencies_summary`; the `blocked_by` list only where the count > 0; targeted per-issue reads of closed blockers, never a sweep; sub-issues per map-labelled issue only — all under a maxPages-style cap, degrading fail-closed with a warning, never a failed sync.
+- The generic service adapters stay untouched; Notion's `Dependencies` property keeps rendering as a display string until a host repo needs edges from it — the edge schema keeps that additive.
+- The markdown `Blocked by:` line stays a valid human encoding; what dies is storing a truncated copy of it.
+- Completes ADR 0007's retirement of stored `blocked`: display state derives from phase + triage + computed-blocked.
+- Unblocks the blocker-graph prototype (#51) and lets the state-machine rules (#52) treat the frontier as given.
