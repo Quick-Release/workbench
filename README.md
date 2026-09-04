@@ -86,6 +86,11 @@ tickets and plans; `pnpm sync` and `pnpm sync:demo` regenerate the snapshot
 only. Set `WORKBENCH_SOURCE_ROOT=/path/to/repository` to run against a
 different checkout.
 
+Environment variables (service tokens, the telemetry deploy token, the
+`WORKBENCH_*` overrides) live in a gitignored `.env`, loaded by the package
+scripts through [dotenvx](https://dotenvx.com). First run copies
+`.env.example` to `.env` for you; values already set in the shell always win.
+
 ## Configuration
 
 Copy `workbench.config.example.json` to `workbench.config.json` in the host
@@ -126,7 +131,8 @@ Supported service adapters are `asana` (project tasks, via `projectGid`),
 issue labels (using the same triage vocabulary as local records and any
 `statusMap` overrides), and both accept an optional `apiBaseUrl` for
 self-hosted instances. Tokens are read only from the named environment variables
-while `sync` runs; for GitHub, an authenticated `gh` CLI is used as a fallback
+while `sync` runs — put them in the gitignored `.env` (see above) or export
+them in the shell; for GitHub, an authenticated `gh` CLI is used as a fallback
 when the token variable is unset. Tokens are never written to the config or
 bundled into the browser. Service failures are reported in the snapshot and do
 not hide local Markdown records. Add future providers behind the adapter seam in

@@ -13,3 +13,8 @@ src/data.generated.ts
 
 # Firecrawl tool session scratch.
 .firecrawl/
+
+# Local dotenvx environment files; .env.example and .env.demo stay tracked.
+.env
+.env.local
+.env.*.local
