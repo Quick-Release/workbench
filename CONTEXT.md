@@ -68,6 +68,10 @@ _Avoid_: pipeline (implies a single linear track)
 The route most work travels: grill (grill-with-docs) → optional prototype detour (bridged by handoff both ways) → spec (to-spec) → tickets (to-tickets) → implement (driving TDD, closing with code review). One unbroken context window through tickets; each implement starts fresh.
 _Avoid_: pipeline, lifecycle
 
+**Session handoff**:
+The observed boundary where work passes between agent sessions — a child spawn, a `/clear` (visible only as a new session row), a `/compact`-then-continue, or a skill-to-skill transition on the main flow. The dashboard renders handoffs and never acts on them; the documents once written at these boundaries are not modeled.
+_Avoid_: handoff (bare — reads as the unmodeled document), session history (the whole timeline, not the boundary)
+
 **On-ramp**:
 A starting situation that generates work and then merges onto the main flow: triage, diagnosing-bugs, wayfinder.
 _Avoid_: entry point (too generic)
