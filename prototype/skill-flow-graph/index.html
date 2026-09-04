@@ -1,0 +1,497 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Skill-flow graph — prototype (issue #50)</title>
+<style>
+  :root {
+    --bg: #0a0a0b;
+    --panel: #141417;
+    --card: #18181b;
+    --border: #27272a;
+    --border-strong: #3f3f46;
+    --fg: #f4f4f5;
+    --muted: #a1a1aa;
+    --faint: #71717a;
+    --spine: #8b5cf6;
+    --onramp: #38bdf8;
+    --vocab: #34d399;
+    --primitive: #f59e0b;
+    --installed: #4ade80;
+    --progression: #d4d4d8;
+    --internal: #63636b;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font: 13px/1.45 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  header.bar {
+    display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+    padding: 10px 16px; border-bottom: 1px solid var(--border);
+  }
+  header.bar h1 { font-size: 14px; font-weight: 600; margin: 0; }
+  header.bar h1 span { color: var(--faint); font-weight: 400; }
+  .legend { display: flex; gap: 14px; align-items: center; color: var(--muted); font-size: 11.5px; flex-wrap: wrap; }
+  .legend .sw { display: inline-block; vertical-align: middle; margin-right: 5px; }
+  .legend .line { width: 22px; height: 0; border-top: 2px solid var(--progression); display: inline-block; vertical-align: middle; margin-right: 5px; }
+  .legend .line.dashed { border-top: 2px dashed var(--internal); }
+  .legend .line.dotted { border-top: 2px dotted var(--faint); }
+  .legend .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--installed); display: inline-block; vertical-align: middle; margin-right: 5px; }
+  .legend .dim { width: 12px; height: 12px; border-radius: 3px; background: var(--card); border: 1px solid var(--border); opacity: .45; display: inline-block; vertical-align: middle; margin-right: 5px; }
+  main { padding: 8px 0 0 8px; }
+  svg { display: block; width: 100%; height: auto; max-width: 1500px; }
+  footer { padding: 8px 16px 14px; color: var(--faint); font-size: 11.5px; }
+
+  /* detail panel */
+  #detail {
+    position: fixed; top: 52px; right: 12px; width: 320px; max-height: calc(100vh - 72px);
+    overflow-y: auto; background: var(--panel); border: 1px solid var(--border-strong);
+    border-radius: 10px; padding: 14px 16px; display: none; box-shadow: 0 8px 30px rgba(0,0,0,.5);
+  }
+  #detail.open { display: block; }
+  #detail h2 { margin: 0 26px 2px 0; font-size: 14px; }
+  #detail .cmd { color: var(--faint); font-size: 12px; margin-bottom: 8px; }
+  #detail .chips { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
+  .chip { font-size: 10.5px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--border-strong); color: var(--muted); }
+  .chip.installed { color: var(--installed); border-color: color-mix(in srgb, var(--installed) 45%, transparent); }
+  .chip.missing { color: var(--faint); }
+  #detail p.blurb { margin: 0 0 8px; color: var(--fg); }
+  #detail .when { color: var(--muted); margin: 0 0 10px; font-size: 12.5px; }
+  #detail .sec { border-top: 1px solid var(--border); padding-top: 8px; margin-top: 4px; font-size: 12.5px; }
+  #detail .sec b { display: block; font-size: 10.5px; text-transform: uppercase; letter-spacing: .06em; color: var(--faint); font-weight: 600; margin-bottom: 3px; }
+  #detail .sec a { color: var(--muted); text-decoration: none; cursor: pointer; }
+  #detail .sec a:hover { color: var(--fg); text-decoration: underline; }
+  #detail .kind { color: var(--faint); font-size: 11px; }
+  #installBtn {
+    margin-top: 12px; width: 100%; padding: 7px 0; border-radius: 8px; cursor: pointer;
+    border: 1px solid var(--border-strong); background: var(--card); color: var(--fg); font-size: 12.5px;
+  }
+  #installBtn:hover { border-color: var(--faint); }
+  #closeBtn {
+    position: absolute; top: 8px; right: 10px; background: none; border: 0; color: var(--faint);
+    font-size: 16px; cursor: pointer; padding: 2px 6px;
+  }
+  #closeBtn:hover { color: var(--fg); }
+
+  /* svg node styles */
+  .node { cursor: pointer; }
+  .node rect { fill: var(--card); stroke-width: 1.4; rx: 8; }
+  .node.dimmed { opacity: .42; }
+  .node.dimmed:hover, .node:hover rect { stroke-width: 2; }
+  .node.selected rect { stroke-width: 2.4; filter: drop-shadow(0 0 6px rgba(139,92,246,.35)); }
+  .node text { fill: var(--fg); font-size: 12px; font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+  .node .sub { fill: var(--faint); font-size: 9.5px; font-family: ui-sans-serif, system-ui, sans-serif; }
+  .node .idot { fill: var(--installed); }
+  .region-label { fill: var(--faint); font-size: 10px; letter-spacing: .08em; text-transform: uppercase; font-family: ui-sans-serif, system-ui, sans-serif; }
+  .edge { fill: none; }
+  .edge.progression { stroke: var(--progression); stroke-width: 1.5; }
+  .edge.internal { stroke: var(--internal); stroke-width: 1.3; stroke-dasharray: 5 4; }
+</style>
+</head>
+<body>
+
+<header class="bar">
+  <h1>skill-flow graph <span>· prototype for issue #50 · mock data</span></h1>
+  <div class="legend">
+    <span><span class="line"></span>progression &amp; merges</span>
+    <span><span class="line dashed"></span>runs internally</span>
+    <span><span class="dot"></span>installed</span>
+    <span><span class="dim"></span>not installed</span>
+    <span style="color:var(--faint)">click a node for detail</span>
+  </div>
+</header>
+
+<main>
+  <svg id="graph" viewBox="0 0 1500 880" role="img" aria-label="Skill flow graph prototype"></svg>
+</main>
+
+<footer>
+  Throwaway prototype — layout and rendering approach only. Classification and edges are a draft transcribed from the ask-matt map;
+  installed states are mocked (17 of 37). The install button is visual only. Designed to fit 1440×900 without pan/zoom or scroll.
+</footer>
+
+<aside id="detail">
+  <button id="closeBtn" aria-label="Close">✕</button>
+  <h2 id="dName"></h2>
+  <div class="cmd" id="dCmd"></div>
+  <div class="chips" id="dChips"></div>
+  <p class="blurb" id="dBlurb"></p>
+  <p class="when" id="dWhen"></p>
+  <div class="sec" id="dFlows"><b>Feeds into</b></div>
+  <div class="sec" id="dRuns"><b>Runs internally</b></div>
+  <div class="sec" id="dRunBy"><b>Run by</b></div>
+  <button id="installBtn"></button>
+</aside>
+
+<script>
+// ---------------------------------------------------------------------------
+// 1. DATA — draft classification transcribed from .agents/skills/ask-matt/SKILL.md
+//    and skills-lock.json categories. Region = visual slot; role = flow role.
+// ---------------------------------------------------------------------------
+const ROLE_TAG = {
+  'main-flow': 'main-flow step', 'on-ramp': 'on-ramp', 'standalone': 'standalone',
+  'vocabulary': 'vocabulary layer', 'primitive': 'primitive', 'none': 'unclassified',
+};
+
+const SKILLS = [
+  // — main-flow spine —
+  { id: 'grill-with-docs', name: 'grill-with-docs', category: 'engineering', role: 'main-flow', region: 'spine', installed: true,
+    blurb: 'Sharpens an idea by relentless interview, retaining what it learns in CONTEXT.md and ADRs.',
+    when: 'Start here for any idea, while working in a working directory.' },
+  { id: 'to-spec', name: 'to-spec', category: 'engineering', role: 'main-flow', region: 'spine', installed: true,
+    blurb: 'Turns the conversation into a specification for the issue tracker.',
+    when: 'The grilling settled every question; the build is a multi-session effort.' },
+  { id: 'to-tickets', name: 'to-tickets', category: 'engineering', role: 'main-flow', region: 'spine', installed: true,
+    blurb: 'Splits the spec into small tracer-bullet tickets with blocking edges.',
+    when: 'A spec exists; work must be split so each implement starts fresh.' },
+  { id: 'implement', name: 'implement', category: 'engineering', role: 'main-flow', region: 'spine', installed: true,
+    blurb: 'Builds one ticket by driving TDD internally, closing with a two-axis code review.',
+    when: 'A frontier ticket is picked; one unbroken session per ticket.' },
+  // — prototype detour (bridged by handoff both ways) —
+  { id: 'handoff', name: 'handoff', category: 'productivity', role: 'main-flow', region: 'detour', installed: true,
+    blurb: 'Writes a portable markdown handoff file to bridge a context boundary.',
+    when: 'New harness, new directory, colleague, or a side task forked mid-phase — here, bridging out to a prototype and back.' },
+  { id: 'prototype', name: 'prototype', category: 'engineering', role: 'main-flow', region: 'detour', installed: true,
+    blurb: 'A throwaway program that answers one design question a conversation cannot.',
+    when: 'A question needs a runnable answer — state, business logic, UI you have to see.' },
+  // — on-ramps —
+  { id: 'triage', name: 'triage', category: 'engineering', role: 'on-ramp', region: 'onramp', installed: true,
+    blurb: 'Moves incoming issues through triage roles and produces agent-ready briefs.',
+    when: 'Bugs and requests you didn\u2019t create are piling up. Its output merges at implement.' },
+  { id: 'diagnosing-bugs', name: 'diagnosing-bugs', category: 'engineering', role: 'on-ramp', region: 'onramp', installed: true,
+    blurb: 'Turns a hard bug into a reproducible, instrumented diagnosis loop, then fixes it with a regression test.',
+    when: 'The bug resists a first glance. Post-mortem hands off to improve-codebase-architecture.' },
+  { id: 'wayfinder', name: 'wayfinder', category: 'engineering', role: 'on-ramp', region: 'onramp', installed: true,
+    blurb: 'Charts a foggy effort as a map of decision tickets and resolves them one at a time.',
+    when: 'The effort is too big for one session. Merges at to-spec when the map clears — it hands off, it doesn\u2019t build.' },
+  // — vocabulary underlay + primitive —
+  { id: 'grilling', name: 'grilling', category: 'productivity', role: 'primitive', region: 'underlay', installed: true,
+    blurb: 'The interview primitive itself: rounds, the frontier, facts are the agent\u2019s job and decisions are yours.',
+    when: 'Directly, only when you want the interview with no wrapper around it.' },
+  { id: 'domain-modeling', name: 'domain-modeling', category: 'engineering', role: 'vocabulary', region: 'underlay', installed: true,
+    blurb: 'Sharpens the domain language: challenge terms, resolve overloads, record ADRs.',
+    when: 'The words, not the process, are the problem.' },
+  { id: 'codebase-design', name: 'codebase-design', category: 'engineering', role: 'vocabulary', region: 'underlay', installed: true,
+    blurb: 'The deep-module vocabulary for designing a module\u2019s shape: behaviour behind a small interface at a clean seam.',
+    when: 'Designing the chosen deepening opportunity; spoken by tdd and improve-codebase-architecture.' },
+  // — standalone shelf (edges to the flow first, then alphabetical) —
+  { id: 'tdd', name: 'tdd', category: 'engineering', role: 'standalone', region: 'shelf', installed: true,
+    blurb: 'Keeps implementation feedback tight with a red-green-refactor loop.',
+    when: 'You want one concrete behaviour built test-first, no spec needed. Also what implement drives internally.' },
+  { id: 'code-review', name: 'code-review', category: 'engineering', role: 'standalone', region: 'shelf', installed: true,
+    blurb: 'Two-axis review (Standards + Spec) of a diff against a fixed point.',
+    when: 'Any branch or PR to review. Also how implement closes out.' },
+  { id: 'improve-codebase-architecture', name: 'improve-codebase-architecture', category: 'engineering', role: 'standalone', region: 'shelf', installed: true,
+    blurb: 'Surveys the codebase for high-value deepening opportunities.',
+    when: 'Spare moments. Picking one generates an idea that enters the main flow at grill-with-docs.' },
+  { id: 'research', name: 'research', category: 'engineering', role: 'standalone', region: 'shelf', installed: true,
+    blurb: 'Delegates reading legwork to a background agent; leaves a cited findings file.',
+    when: 'The answer is in primary sources, not your head. Feed the file into grill-with-docs.' },
+  { id: 'to-questionnaire', name: 'to-questionnaire', category: 'productivity', role: 'standalone', region: 'shelf', installed: false,
+    blurb: 'Writes a questionnaire aimed at the gap in someone else\u2019s head.',
+    when: 'The blocker is knowledge you don\u2019t have and can\u2019t reach yourself.' },
+  { id: 'grill-me', name: 'grill-me', category: 'productivity', role: 'standalone', region: 'shelf', installed: false,
+    blurb: 'The same relentless interview as grill-with-docs, but stateless — it saves nothing locally.',
+    when: 'Sharpening a plan or a piece of writing with no repo under it.' },
+  { id: 'ask-matt', name: 'ask-matt', category: 'engineering', role: 'standalone', region: 'shelf', installed: true,
+    blurb: 'The router over this whole graph: asks which skill or flow fits your situation.',
+    when: 'You don\u2019t remember every skill, so ask.' },
+  { id: 'resolving-merge-conflicts', name: 'resolving-merge-conflicts', category: 'engineering', role: 'standalone', region: 'shelf', installed: false,
+    blurb: 'Works a merge or rebase conflict hunk by hunk, resolving by intent traced to each side\u2019s primary source.',
+    when: 'You are already mid-conflict. Never runs --abort.' },
+  { id: 'setup-matt-pocock-skills', name: 'setup-matt-pocock-skills', category: 'engineering', role: 'standalone', region: 'shelf', installed: true,
+    blurb: 'Configures the issue tracker, triage labels, and doc layout the other skills assume.',
+    when: 'Once, before your first engineering flow in a repo.' },
+  { id: 'wizard', name: 'wizard', category: 'engineering', role: 'standalone', region: 'shelf', installed: false,
+    blurb: 'Generates an interactive bash script for the steps only a human can take.',
+    when: 'Provisioning, credentials, CI secrets, third-party dashboards, one-off cutovers.' },
+  { id: 'wait-what', name: 'wait-what', category: 'productivity', role: 'standalone', region: 'shelf', installed: false,
+    blurb: 'The corrective for a message that didn\u2019t land: re-pitches it with the missing context.',
+    when: 'Mid-conversation, inside any other skill, right after the confusion.' },
+  { id: 'teach', name: 'teach', category: 'productivity', role: 'standalone', region: 'shelf', installed: false,
+    blurb: 'Learn a concept over multiple sessions, using the current directory as a stateful workspace.',
+    when: 'Understanding, not shipping, is the goal.' },
+  { id: 'writing-for-agents', name: 'writing-for-agents', category: 'productivity', role: 'standalone', region: 'shelf', installed: false,
+    blurb: 'The reference for writing documents agents consume: skills, AGENTS.md, pointed-at docs.',
+    when: 'Any document whose reader is an agent.' },
+  { id: 'git-guardrails-claude-code', name: 'git-guardrails-claude-code', category: 'misc', role: 'standalone', region: 'shelf', installed: false,
+    blurb: 'Guardrail configuration so git operations stay inside their guardrails.',
+    when: 'Set up once per harness; off every flow.' },
+  { id: 'migrate-to-shoehorn', name: 'migrate-to-shoehorn', category: 'misc', role: 'standalone', region: 'shelf', installed: false,
+    blurb: 'Migrates a repo onto the shoehorn layout.',
+    when: 'One-off migration; off every flow.' },
+  { id: 'scaffold-exercises', name: 'scaffold-exercises', category: 'misc', role: 'standalone', region: 'shelf', installed: false,
+    blurb: 'Scaffolds exercise material.',
+    when: 'Course-style repos; off every flow.' },
+  { id: 'setup-pre-commit', name: 'setup-pre-commit', category: 'misc', role: 'standalone', region: 'shelf', installed: false,
+    blurb: 'Sets up pre-commit hooks for the repo.',
+    when: 'One-off setup; off every flow.' },
+  // — upstream holding pen: in-progress, unclassified (shelf, not graph) —
+  { id: 'claude-handoff', name: 'claude-handoff', category: 'in-progress', role: 'none', region: 'pen', installed: false,
+    blurb: 'Handoff variant for Claude Code. Upstream work in progress.' },
+  { id: 'implement-spec', name: 'implement-spec', category: 'in-progress', role: 'none', region: 'pen', installed: false,
+    blurb: 'Implement from an OpenSpec-style change. Upstream work in progress.' },
+  { id: 'loop-me', name: 'loop-me', category: 'in-progress', role: 'none', region: 'pen', installed: false,
+    blurb: 'Loop a prompt on a schedule. Upstream work in progress.' },
+  { id: 'retro', name: 'retro', category: 'in-progress', role: 'none', region: 'pen', installed: false,
+    blurb: 'Run a retrospective. Upstream work in progress.' },
+  { id: 'setup-ts-deep-modules', name: 'setup-ts-deep-modules', category: 'in-progress', role: 'none', region: 'pen', installed: false,
+    blurb: 'Set up the TypeScript deep-modules scaffold. Upstream work in progress.' },
+  { id: 'writing-beats', name: 'writing-beats', category: 'in-progress', role: 'none', region: 'pen', installed: false,
+    blurb: 'Writing beats reference. Upstream work in progress.' },
+  { id: 'writing-fragments', name: 'writing-fragments', category: 'in-progress', role: 'none', region: 'pen', installed: false,
+    blurb: 'Writing fragments reference. Upstream work in progress.' },
+  { id: 'writing-shape', name: 'writing-shape', category: 'in-progress', role: 'none', region: 'pen', installed: false,
+    blurb: 'Writing shape reference. Upstream work in progress.' },
+];
+
+// kind ∈ next-step | hands-off-to | merges-onto | runs-internally | pairs-with
+const EDGES = [
+  // spine progression
+  { from: 'grill-with-docs', to: 'to-spec', kind: 'next-step' },
+  { from: 'to-spec', to: 'to-tickets', kind: 'next-step' },
+  { from: 'to-tickets', to: 'implement', kind: 'next-step' },
+  // prototype detour, bridged by handoff both ways
+  { from: 'grill-with-docs', to: 'handoff', kind: 'hands-off-to' },
+  { from: 'handoff', to: 'prototype', kind: 'next-step' },
+  { from: 'prototype', to: 'handoff', kind: 'next-step' },
+  { from: 'handoff', to: 'to-spec', kind: 'next-step' },
+  // on-ramps merging on
+  { from: 'wayfinder', to: 'to-spec', kind: 'merges-onto' },
+  { from: 'triage', to: 'implement', kind: 'merges-onto' },
+  { from: 'diagnosing-bugs', to: 'implement', kind: 'merges-onto' },
+  // feeds into the flow
+  { from: 'improve-codebase-architecture', to: 'grill-with-docs', kind: 'hands-off-to' },
+  { from: 'diagnosing-bugs', to: 'improve-codebase-architecture', kind: 'hands-off-to' },
+  { from: 'research', to: 'grill-with-docs', kind: 'hands-off-to' },
+  { from: 'to-questionnaire', to: 'grill-with-docs', kind: 'hands-off-to' },
+  // runs internally
+  { from: 'grill-with-docs', to: 'grilling', kind: 'runs-internally' },
+  { from: 'grill-me', to: 'grilling', kind: 'runs-internally' },
+  { from: 'grill-with-docs', to: 'domain-modeling', kind: 'runs-internally' },
+  { from: 'implement', to: 'tdd', kind: 'runs-internally' },
+  { from: 'implement', to: 'code-review', kind: 'runs-internally' },
+  { from: 'tdd', to: 'codebase-design', kind: 'runs-internally' },
+  { from: 'improve-codebase-architecture', to: 'codebase-design', kind: 'runs-internally' },
+];
+
+// ---------------------------------------------------------------------------
+// 2. LAYOUT — pure function from graph to positions. This is the part that
+//    ports to the real layout modules behind GraphView.
+// ---------------------------------------------------------------------------
+const NODE_W = { spine: 170, detour: 150, onramp: 170, underlay: 170, shelf: 180, pen: 180 };
+const NODE_H = { spine: 56, detour: 40, onramp: 40, underlay: 40, shelf: 38, pen: 38 };
+
+const SPINE_X = [45, 320, 570, 820];
+const SPINE_Y = 292;
+const DETOUR_POS = { 'handoff': [210, 168], 'prototype': [430, 168] };
+const ONRAMP_POS = { 'wayfinder': [45, 44], 'triage': [420, 44], 'diagnosing-bugs': [700, 44] };
+const UNDERLAY_X = [45, 265, 485];
+const UNDERLAY_Y = 470;
+const SHELF_X = 1080, SHELF_Y = 76, SHELF_PITCH = 45;
+const PEN_X = 1290;
+
+// Shelf order: edge-heavy skills near their targets first, then alphabetical.
+const SHELF_ORDER = [
+  'tdd', 'code-review', 'improve-codebase-architecture', 'research', 'to-questionnaire', 'grill-me',
+  'ask-matt', 'resolving-merge-conflicts', 'setup-matt-pocock-skills', 'wizard', 'wait-what', 'teach',
+  'writing-for-agents', 'git-guardrails-claude-code', 'migrate-to-shoehorn', 'scaffold-exercises', 'setup-pre-commit',
+];
+const PEN_ORDER = [
+  'claude-handoff', 'implement-spec', 'loop-me', 'retro',
+  'setup-ts-deep-modules', 'writing-beats', 'writing-fragments', 'writing-shape',
+];
+
+function layoutGraph(skills) {
+  const pos = {};
+  const spine = skills.filter(s => s.region === 'spine');
+  spine.forEach((s, i) => { pos[s.id] = { x: SPINE_X[i], y: SPINE_Y }; });
+  for (const s of skills) {
+    const w = NODE_W[s.region], h = NODE_H[s.region];
+    if (s.region === 'detour') pos[s.id] = { x: DETOUR_POS[s.id][0], y: DETOUR_POS[s.id][1] };
+    else if (s.region === 'onramp') pos[s.id] = { x: ONRAMP_POS[s.id][0], y: ONRAMP_POS[s.id][1] };
+    else if (s.region === 'underlay') {
+      const i = skills.filter(x => x.region === 'underlay').indexOf(s);
+      pos[s.id] = { x: UNDERLAY_X[i], y: UNDERLAY_Y };
+    } else if (s.region === 'shelf') {
+      const i = SHELF_ORDER.indexOf(s.id);
+      pos[s.id] = { x: SHELF_X, y: SHELF_Y + i * SHELF_PITCH };
+    } else if (s.region === 'pen') {
+      const i = PEN_ORDER.indexOf(s.id);
+      pos[s.id] = { x: PEN_X, y: SHELF_Y + i * SHELF_PITCH };
+    }
+    pos[s.id].w = w; pos[s.id].h = h;
+  }
+  return pos;
+}
+
+// Edge geometry: pick anchors by dominant direction, then a cubic curve.
+function edgePath(a, b) {
+  const acx = a.x + a.w / 2, bcx = b.x + b.w / 2;
+  const acy = a.y + a.h / 2, bcy = b.y + b.h / 2;
+  const dx = bcx - acx, dy = bcy - acy;
+  let p1, p2;
+  if (Math.abs(dy) >= Math.abs(dx) * 0.9) {
+    // vertical-dominant: bottom → top
+    const down = dy > 0;
+    p1 = [acx, down ? a.y + a.h : a.y];
+    p2 = [bcx, down ? b.y : b.y + b.h];
+  } else if (dx > 0) {
+    p1 = [a.x + a.w, acy]; p2 = [b.x, bcy];
+  } else {
+    p1 = [a.x, acy]; p2 = [b.x + b.w, bcy];
+  }
+  const mx = (p1[0] + p2[0]) / 2, my = (p1[1] + p2[1]) / 2;
+  const bow = 36; // arc the detour pair apart when both endpoints match
+  if (Math.abs(p1[0] - p2[0]) < 4 && Math.abs(p1[1] - p2[1]) < 4) {
+    return `M ${p1[0]} ${p1[1]} C ${p1[0] + 90} ${p1[1] - bow}, ${p2[0] + 90} ${p2[1] + bow}, ${p2[0]} ${p2[1]}`;
+  }
+  return `M ${p1[0]} ${p1[1]} C ${mx} ${p1[1]}, ${mx} ${p2[1]}, ${p2[0]} ${p2[1]}`;
+}
+
+// ---------------------------------------------------------------------------
+// 3. RENDER — plain SVG, dark tokens, one class per visual axis.
+// ---------------------------------------------------------------------------
+const NS = 'http://www.w3.org/2000/svg';
+const svg = document.getElementById('graph');
+const ROLE_COLOR = { 'main-flow': 'var(--spine)', 'on-ramp': 'var(--onramp)', 'vocabulary': 'var(--vocab)', 'primitive': 'var(--primitive)', 'standalone': 'var(--border-strong)', 'none': 'var(--border)' };
+
+function el(tag, attrs, text) {
+  const n = document.createElementNS(NS, tag);
+  for (const [k, v] of Object.entries(attrs || {})) n.setAttribute(k, v);
+  if (text != null) n.textContent = text;
+  return n;
+}
+
+let pos, selected = null;
+const state = { installed: Object.fromEntries(SKILLS.map(s => [s.id, s.installed])) };
+
+function render() {
+  svg.textContent = '';
+  pos = layoutGraph(SKILLS);
+
+  // defs: arrowheads per edge class
+  const defs = el('defs');
+  for (const [id, color] of [['arrow-progression', 'var(--progression)'], ['arrow-internal', 'var(--internal)']]) {
+    const m = el('marker', { id, viewBox: '0 0 10 10', refX: 9, refY: 5, markerWidth: 7, markerHeight: 7, orient: 'auto-start-reverse' });
+    m.appendChild(el('path', { d: 'M 0 1 L 9 5 L 0 9 z', fill: color }));
+    defs.appendChild(m);
+  }
+  svg.appendChild(defs);
+
+  // region labels
+  const labels = [
+    ['on-ramps — generate work, merge on', 45, 30],
+    ['main flow — idea → ship', 45, 276],
+    ['vocabulary + primitives — run underneath', 45, 458],
+    ['standalone — off the flow', SHELF_X, 60],
+    ['upstream · in progress — unclassified', PEN_X, 60],
+  ];
+  for (const [t, x, y] of labels) svg.appendChild(el('text', { x, y, class: 'region-label' }, t));
+
+  // edges under nodes
+  const edgeGroup = el('g');
+  for (const e of EDGES) {
+    const cls = e.kind === 'runs-internally' ? 'internal' : 'progression';
+    const p = el('path', {
+      d: edgePath(pos[e.from], pos[e.to]),
+      class: `edge ${cls}`,
+      'marker-end': `url(#arrow-${cls})`,
+    });
+    const t = el('title', {}, `${e.from} —${e.kind}→ ${e.to}`);
+    p.appendChild(t);
+    edgeGroup.appendChild(p);
+  }
+  svg.appendChild(edgeGroup);
+
+  // nodes
+  const nodeGroup = el('g');
+  for (const s of SKILLS) {
+    const p = pos[s.id];
+    const g = el('g', { class: `node${state.installed[s.id] ? '' : ' dimmed'}${selected === s.id ? ' selected' : ''}`, 'data-id': s.id, tabindex: 0 });
+    g.appendChild(el('rect', { x: p.x, y: p.y, width: p.w, height: p.h, rx: 8, stroke: ROLE_COLOR[s.role] }));
+    if (s.region === 'spine') {
+      g.appendChild(el('text', { x: p.x + 14, y: p.y + 25 }, s.name));
+      g.appendChild(el('text', { x: p.x + 14, y: p.y + 41, class: 'sub' }, ROLE_TAG[s.role]));
+    } else {
+      g.appendChild(el('text', { x: p.x + 12, y: p.y + 16 }, s.name));
+      g.appendChild(el('text', { x: p.x + 12, y: p.y + 29, class: 'sub' }, s.region === 'pen' ? 'in progress' : ROLE_TAG[s.role]));
+    }
+    if (state.installed[s.id]) g.appendChild(el('circle', { cx: p.x + p.w - 11, cy: p.y + 11, r: 3.5, class: 'idot' }));
+    const title = el('title', {}, `/${s.id} — ${s.blurb}`);
+    g.appendChild(title);
+    g.addEventListener('click', ev => { ev.stopPropagation(); select(s.id); });
+    nodeGroup.appendChild(g);
+  }
+  svg.appendChild(nodeGroup);
+}
+
+// ---------------------------------------------------------------------------
+// 4. INTERACTIONS — click-through detail, install affordance (visual only).
+// ---------------------------------------------------------------------------
+const panel = document.getElementById('detail');
+
+function edgesOf(id) {
+  return {
+    out: EDGES.filter(e => e.from === id),
+    in: EDGES.filter(e => e.to === id),
+  };
+}
+
+function chip(text, cls) { const c = document.createElement('span'); c.className = 'chip ' + cls; c.textContent = text; return c; }
+
+function linkList(container, entries) {
+  container.querySelectorAll('a').forEach(a => a.remove());
+  if (!entries.length) {
+    const span = document.createElement('span');
+    span.className = 'kind'; span.textContent = '—';
+    container.appendChild(span);
+    return;
+  }
+  for (const [label, id] of entries) {
+    const a = document.createElement('a');
+    a.textContent = label;
+    a.addEventListener('click', () => select(id));
+    container.appendChild(a);
+    container.appendChild(document.createTextNode(' '));
+  }
+}
+
+function select(id) {
+  selected = id;
+  const s = SKILLS.find(x => x.id === id);
+  const { out, in: inc } = edgesOf(id);
+  document.getElementById('dName').textContent = s.name;
+  document.getElementById('dCmd').textContent = '/' + s.id;
+  const chips = document.getElementById('dChips');
+  chips.textContent = '';
+  chips.appendChild(chip(ROLE_TAG[s.role], ''));
+  chips.appendChild(chip(s.category, ''));
+  chips.appendChild(chip(state.installed[id] ? 'installed' : 'not installed', state.installed[id] ? 'installed' : 'missing'));
+  document.getElementById('dBlurb').textContent = s.blurb;
+  document.getElementById('dWhen').textContent = s.when ? 'When: ' + s.when : '';
+  const KIND_LABEL = { 'next-step': 'next step', 'hands-off-to': 'hands off to', 'merges-onto': 'merges onto', 'runs-internally': 'runs', 'pairs-with': 'pairs with' };
+  linkList(document.getElementById('dFlows'), out.filter(e => e.kind !== 'runs-internally').map(e => [`${e.to} (${KIND_LABEL[e.kind]})`, e.to]));
+  linkList(document.getElementById('dRuns'), out.filter(e => e.kind === 'runs-internally').map(e => [e.to, e.to]));
+  linkList(document.getElementById('dRunBy'), inc.map(e => [`${e.from} (${KIND_LABEL[e.kind]})`, e.from]));
+  const btn = document.getElementById('installBtn');
+  btn.style.display = state.installed[id] ? 'none' : 'block';
+  btn.textContent = 'Install (visual only — would run the skills CLI)';
+  btn.onclick = () => { state.installed[id] = true; render(); select(id); };
+  panel.classList.add('open');
+  render();
+}
+
+function close() { selected = null; panel.classList.remove('open'); render(); }
+document.getElementById('closeBtn').addEventListener('click', close);
+document.addEventListener('keydown', e => { if (e.key === 'Escape') close(); });
+document.querySelector('main').addEventListener('click', e => { if (e.target === svg) close(); });
+
+render();
+</script>
+</body>
+</html>
