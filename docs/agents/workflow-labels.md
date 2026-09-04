@@ -10,11 +10,13 @@ Exactly one `workflow:*` label per issue. **No `workflow:` label means pre-flow*
 | ------------ | ------------------------ | ---------------------------------------------------------------------------------------------- |
 | grilling     | `workflow:grilling`      | grill-with-docs / grill-me starting a decision conversation (on-ramps route through grilling)   |
 | prototyping  | `workflow:prototyping`   | handoff — and back to `workflow:grilling` when the prototype answers the open questions         |
-| specced      | `workflow:specced`       | to-spec (also labels the effort's wayfinder map, if any)                                        |
-| ticketed     | `workflow:ticketed`      | to-tickets                                                                                      |
-| implementing | `workflow:implementing`  | implement at session start; also the on-ramp entry for triage briefs and diagnosing-bugs fixes  |
+| specced      | `workflow:specced`       | to-spec, written only when it completes — a bounced spec never left grilling (also labels the effort's wayfinder map, if any) |
+| ticketed     | `workflow:ticketed`      | to-tickets — the effort, and every spawned child at creation (children are born `workflow:ticketed` + `ready-for-agent`) |
+| implementing | `workflow:implementing`  | implement at session start (also on rework, re-stamping from reviewing); also the on-ramp entry for triage briefs and diagnosing-bugs fixes |
 | reviewing    | `workflow:reviewing`     | code-review                                                                                     |
-| shipped      | `workflow:shipped`       | implement's closing checklist, after merge                                                      |
+| shipped      | `workflow:shipped`       | the closing act of a completed work item — implement's closing checklist after merge for tickets; whoever closes a completed effort (map, spec parent) |
+
+The skill that spawns a work item stamps its initial labels at creation — to-tickets children are born `workflow:ticketed` + `ready-for-agent`; decision tickets are born unlabeled — and afterwards phase moves by the acting skill, triage state only by the triage skill. The full machines and the next-action rules live in [ADR 0010](../adr/0010-state-machines-and-next-action.md).
 
 Developers may hand-move any label at any time. If an issue wears two `workflow:` labels (hand-edit accident), the dashboard resolves to the furthest-along phase in flow order and surfaces a non-blocking warning — it never fails the sync.
 

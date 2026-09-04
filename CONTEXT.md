@@ -93,7 +93,7 @@ Where a work item sits on a skill flow — grilling, prototyping, specced, ticke
 _Avoid_: status (overloaded with triage state and ticket status)
 
 **Triage state**:
-The five tracker roles (needs-triage, needs-info, ready-for-agent, ready-for-human, wontfix) plus unlabeled, moved by the triage skill. Distinct from workflow phase.
+The five tracker roles (needs-triage, needs-info, ready-for-agent, ready-for-human, wontfix) plus unlabeled. Set at creation by the skill that spawns the work item; afterwards moved only by the triage skill. Distinct from workflow phase.
 _Avoid_: label (the label string is the encoding, not the concept)
 
 **Deferred**:
