@@ -102,10 +102,12 @@ export const collectTrackerState = async ({
 
   const maps = [];
   // ADR 0009: resolution records ride the same membership enumeration —
-  // closed children get one targeted comments read (never a sweep), sharing
-  // the targeted-read budget with work-item reads.
+  // closed children get one targeted comments read (never a sweep). The
+  // resolution reads carry their own cap so they never deplete the
+  // work-item read budget the work items and blocker edges depend on.
   const resolutions = [];
   let targetedReads = 0;
+  let resolutionReads = 0;
   let cappedReads = false;
   let cappedResolutions = 0;
   for (const mapIssue of mapIssues.issues) {
@@ -121,14 +123,15 @@ export const collectTrackerState = async ({
     warnings.push(...memberWarnings.map((warning) => `${record.id}: ${warning}`));
     const ticketIds = [];
     let cappedHere = 0;
+    let cappedResolutionsHere = 0;
     for (const member of members) {
       ticketIds.push(`GH-${member.number}`);
       if (!issuesByNumber.has(member.number)) issuesByNumber.set(member.number, member);
       if (member.state === "closed") {
-        if (targetedReads >= MAX_ISSUE_READS) {
-          cappedResolutions += 1;
+        if (resolutionReads >= MAX_ISSUE_READS) {
+          cappedResolutionsHere += 1;
         } else {
-          targetedReads += 1;
+          resolutionReads += 1;
           const { comments, warnings: commentWarnings } = await fetchIssueComments({
             repo,
             token,
@@ -164,12 +167,12 @@ export const collectTrackerState = async ({
         `${record.id}: targeted reads stopped at the ${MAX_ISSUE_READS} cap; ${cappedHere} member records not collected`,
       );
     }
-    if (cappedResolutions > 0) {
+    if (cappedResolutionsHere > 0) {
       cappedReads = true;
       warnings.push(
-        `${record.id}: targeted reads stopped at the ${MAX_ISSUE_READS} cap; ${cappedResolutions} resolution comments not collected`,
+        `${record.id}: targeted reads stopped at the ${MAX_ISSUE_READS} cap; ${cappedResolutionsHere} resolution comments not collected`,
       );
-      cappedResolutions = 0;
+      cappedResolutions += cappedResolutionsHere;
     }
     maps.push({
       mapId: record.id,

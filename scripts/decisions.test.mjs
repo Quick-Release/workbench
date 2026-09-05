@@ -201,11 +201,37 @@ test("a closed ticket without comments yields no resolution record", () => {
   );
 });
 
+test("post-close chatter never becomes the resolution; the last pre-close comment does", () => {
+  const issue = {
+    number: 50,
+    title: "T",
+    closed_at: "2026-09-02T12:00:00Z",
+  };
+  const comments = [
+    {
+      body: "Resolved by the prototype verdict.",
+      created_at: "2026-09-02T11:00:00Z",
+      html_url: "resolution",
+    },
+    {
+      body: "Follow-up chatter after the close.",
+      created_at: "2026-09-04T09:00:00Z",
+      html_url: "chatter",
+    },
+  ];
+
+  const record = resolutionDecisionFromIssue({ issue, comments });
+
+  strictEqual(record.statement, "Resolved by the prototype verdict.");
+  strictEqual(record.decidedAt, "2026-09-02T11:00:00Z");
+  strictEqual(record.sourceRef, "resolution");
+});
+
 test("a research note becomes an artifact with an RN slug id and optional silent linkage", () => {
   const linked = artifactFromResearchFile({
+    path: "docs/research/session-db-attribution.md",
     filename: "session-db-attribution.md",
     text: "# What the Session Database Can Attribute\n\nWork item: GH-42\n\n## Question\n",
-    rootDirectory: "/repo",
   });
 
   strictEqual(linked.record.id, "RN-session-db-attribution");
@@ -216,9 +242,9 @@ test("a research note becomes an artifact with an RN slug id and optional silent
   deepStrictEqual(linked.warnings, []);
 
   const unlinked = artifactFromResearchFile({
+    path: "docs/research/graph-rendering.md",
     filename: "graph-rendering.md",
     text: "# Graph rendering\n",
-    rootDirectory: "/repo",
   });
 
   strictEqual(unlinked.record.workItemId, null);
@@ -427,7 +453,7 @@ test("a failing comments read warns and never fails sync", async () => {
   match(warnings.join("\n"), /HTTP 500|unavailable/);
 });
 
-test("comment reads share the targeted-read cap with work-item reads and warn at the cap", async () => {
+test("resolution reads carry their own cap and never deplete work-item reads", async () => {
   const members = Array.from({ length: 260 }, (_, index) =>
     issue(index + 200, { state: "closed" }),
   );
@@ -440,14 +466,16 @@ test("comment reads share the targeted-read cap with work-item reads and warn at
 
   const { decisions, warnings } = await collect({ fetchImpl, maxPages: 1 });
 
-  // 250 reads of budget, two per closed member (work item + comments): the
-  // first 125 children yield resolutions, the rest are capped and warned.
-  strictEqual(decisions.length, 125);
+  // Each read family caps independently at 250: 250 resolutions survive even
+  // though the work-item reads hit their own cap on the same 260 members —
+  // under a shared budget the resolutions would have been the ones dropped.
+  strictEqual(decisions.length, 250);
   strictEqual(
     warnings.some((warning) => /250 cap/.test(warning)),
     true,
   );
-  match(warnings.join("\n"), /resolution/i);
+  match(warnings.join("\n"), /10 member records not collected/);
+  match(warnings.join("\n"), /10 resolution comments not collected/);
 });
 
 test("fetchIssueComments pages under the cap and filters to real comments", async () => {
