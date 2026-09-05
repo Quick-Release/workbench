@@ -14,8 +14,11 @@ import {
   parseDecisionRecord,
   parseOverviewData,
   parseTicketRecord,
+  parseTriageMoveRequest,
+  parseTriageMoveResult,
   parseTrackerMapRecord,
   parseWorkItemRecord,
+  parseWorkflowStatePayload,
 } from "./schema";
 
 const expectRejected = (input: unknown, pattern: RegExp) => {
@@ -503,5 +506,130 @@ describe("artifact record boundary", () => {
   it("rejects an artifact missing its path", () => {
     const { path: _omitted, ...incomplete } = artifact;
     expect(() => parseArtifactRecord(incomplete)).toThrow(/path/);
+  });
+});
+
+describe("workflow seam payload boundary", () => {
+  const workItem = {
+    id: "GH-59",
+    title: "Workflow read seam and the triage view",
+    url: "https://github.com/Quick-Release/workbench/issues/59",
+    state: "open",
+    assignees: [],
+    phase: "ticketed",
+    triageState: "ready-for-agent",
+    deferred: false,
+    category: "enhancement",
+    kind: null,
+    summary: "The execution seam serves workflow state.",
+  };
+
+  const payload = {
+    workItems: [workItem],
+    maps: [
+      {
+        mapId: "GH-41",
+        title: "Skills-ecosystem dashboard",
+        url: "https://github.com/Quick-Release/workbench/issues/41",
+        ticketIds: ["GH-59"],
+      },
+    ],
+    blockerEdges: [
+      {
+        blockedId: "GH-60",
+        blockerId: "GH-59",
+        source: "github-native",
+        sourceRef: "https://github.com/Quick-Release/workbench/issues/60",
+      },
+    ],
+    meta: { snapshot: "2026-09-05T12:00:00+01:00", repo: "Quick-Release/workbench" },
+  };
+
+  it("accepts the joined read payload over synced records", () => {
+    expect(parseWorkflowStatePayload(payload)).toEqual(payload);
+  });
+
+  it("rejects a payload with an excess top-level key", () => {
+    expect(() => parseWorkflowStatePayload({ ...payload, tickets: [] })).toThrow(/tickets/);
+  });
+
+  it("rejects a payload whose records carry excess properties", () => {
+    const drifted: unknown = {
+      ...payload,
+      workItems: [{ ...workItem, dependencies: "GH-55" }],
+    };
+    expect(() => parseWorkflowStatePayload(drifted)).toThrow(/dependencies/);
+  });
+
+  it("rejects a payload with an unknown triage state on a record", () => {
+    const drifted: unknown = {
+      ...payload,
+      workItems: [{ ...workItem, triageState: "ready" }],
+    };
+    expect(() => parseWorkflowStatePayload(drifted)).toThrow(/triageState/);
+  });
+
+  it("rejects a payload missing its provenance stamp", () => {
+    const { snapshot: _omitted, ...headless } = payload.meta;
+    const drifted: unknown = { ...payload, meta: headless };
+    expect(() => parseWorkflowStatePayload(drifted)).toThrow(/snapshot/);
+  });
+});
+
+describe("triage move request boundary", () => {
+  it("accepts a minimal label move", () => {
+    expect(parseTriageMoveRequest({ issueId: "GH-59", triageState: "needs-info" })).toEqual({
+      issueId: "GH-59",
+      triageState: "needs-info",
+    });
+  });
+
+  it("accepts a confirmed destructive move", () => {
+    expect(
+      parseTriageMoveRequest({ issueId: "GH-59", triageState: "wontfix", confirm: true }),
+    ).toEqual(expect.objectContaining({ triageState: "wontfix", confirm: true }));
+  });
+
+  it("rejects an unknown target triage state", () => {
+    expect(() => parseTriageMoveRequest({ issueId: "GH-59", triageState: "ready" })).toThrow(
+      /triageState/,
+    );
+  });
+
+  it("rejects a request with an excess property", () => {
+    expect(() =>
+      parseTriageMoveRequest({ issueId: "GH-59", triageState: "wontfix", force: true }),
+    ).toThrow(/force/);
+  });
+
+  it("rejects a request without its work item", () => {
+    expect(() => parseTriageMoveRequest({ triageState: "needs-info" })).toThrow(/issueId/);
+  });
+});
+
+describe("triage move result boundary", () => {
+  const result = {
+    message: "Moved GH-59 to ready-for-agent.",
+    issueId: "GH-59",
+    triageState: "ready-for-agent",
+    state: {
+      workItems: [],
+      maps: [],
+      blockerEdges: [],
+      meta: { snapshot: "2026-09-05T12:00:00+01:00", repo: "Quick-Release/workbench" },
+    },
+  };
+
+  it("accepts a move result carrying the updated state", () => {
+    expect(parseTriageMoveResult(result)).toEqual(result);
+  });
+
+  it("rejects a result with an excess property", () => {
+    expect(() => parseTriageMoveResult({ ...result, undo: true })).toThrow(/undo/);
+  });
+
+  it("rejects a result whose state fails the payload schema", () => {
+    const drifted: unknown = { ...result, state: { ...result.state, meta: {} } };
+    expect(() => parseTriageMoveResult(drifted)).toThrow(/snapshot/);
   });
 });

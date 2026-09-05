@@ -51,8 +51,13 @@ const renderShellAt = async (path: string) => {
     path: "/skills",
     component: () => <div>stub:skills</div>,
   });
+  const triageRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: "/triage",
+    component: () => <div>stub:triage</div>,
+  });
   const router = createRouter({
-    routeTree: rootRoute.addChildren([indexRoute, sessionsRoute, skillsRoute]),
+    routeTree: rootRoute.addChildren([indexRoute, sessionsRoute, skillsRoute, triageRoute]),
     history: createMemoryHistory({ initialEntries: [path] }),
   });
   await router.load();
@@ -91,6 +96,7 @@ describe("app shell (shadcn dashboard frame)", () => {
     const home = await renderShellAt("/");
     const sessions = await renderShellAt("/sessions");
     const skills = await renderShellAt("/skills");
+    const triage = await renderShellAt("/triage");
     expect(anchorFor(home, "/")).toContain('data-active="true"');
     expect(anchorFor(home, "/")).not.toContain('data-active="false"');
     expect(anchorFor(home, "/sessions")).toContain('data-active="false"');
@@ -98,6 +104,20 @@ describe("app shell (shadcn dashboard frame)", () => {
     expect(anchorFor(sessions, "/sessions")).toContain('data-active="true"');
     expect(anchorFor(sessions, "/")).toContain('data-active="false"');
     expect(anchorFor(skills, "/skills")).toContain('data-active="true"');
+    expect(anchorFor(triage, "/triage")).toContain('data-active="true"');
+  });
+
+  it("carries the Workflow nav group with its triage destination between the others", async () => {
+    const html = await renderShellAt("/");
+    const labels = [...html.matchAll(/data-slot="sidebar-group-label"[^>]*>([^<]+)</g)].map(
+      (match) => match[1],
+    );
+    expect(labels).toEqual(["Workspace", "Workflow"]);
+    const workspace = html.indexOf('data-slot="sidebar-group-label"');
+    const workflow = html.indexOf(">Workflow<");
+    const sessions = html.indexOf('href="/sessions"');
+    expect(workflow).toBeGreaterThan(workspace);
+    expect(sessions).toBeGreaterThan(workflow);
   });
 
   it("keeps the repository link external", async () => {

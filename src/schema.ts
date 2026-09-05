@@ -1,6 +1,6 @@
 import { Schema } from "effect";
 
-import type { OverviewData } from "./types";
+import type { OverviewData } from "./types.ts";
 import {
   artifactKinds,
   blockerEdgeSources,
@@ -13,7 +13,7 @@ import {
   triageStates,
   wayfinderKinds,
   workflowPhases,
-} from "./types";
+} from "./types.ts";
 export const TicketStatusSchema = Schema.Literals(ticketStatuses);
 
 export const TicketKindSchema = Schema.Literals(ticketKinds);
@@ -104,6 +104,33 @@ export const TrackerMapRecordSchema = Schema.Struct({
   title: Schema.String,
   url: Schema.String,
   ticketIds: Schema.Array(Schema.String),
+});
+
+// The execution seam's contracts (ticket #59): the workflow read payload and
+// the triage move action, validated in both directions at the seam boundary.
+export const WorkflowStateMetaSchema = Schema.Struct({
+  snapshot: Schema.String,
+  repo: Schema.String,
+});
+
+export const WorkflowStatePayloadSchema = Schema.Struct({
+  workItems: Schema.Array(WorkItemRecordSchema),
+  maps: Schema.Array(TrackerMapRecordSchema),
+  blockerEdges: Schema.Array(BlockerEdgeRecordSchema),
+  meta: WorkflowStateMetaSchema,
+});
+
+export const TriageMoveRequestSchema = Schema.Struct({
+  issueId: Schema.String,
+  triageState: TriageStateSchema,
+  confirm: Schema.optional(Schema.Boolean),
+});
+
+export const TriageMoveResultSchema = Schema.Struct({
+  message: Schema.String,
+  issueId: Schema.String,
+  triageState: TriageStateSchema,
+  state: WorkflowStatePayloadSchema,
 });
 
 export const PlanRecordSchema = Schema.Struct({
@@ -277,5 +304,17 @@ export const parseDecisionRecord = Schema.decodeUnknownSync(DecisionRecordSchema
 });
 
 export const parseArtifactRecord = Schema.decodeUnknownSync(ArtifactRecordSchema, {
+  onExcessProperty: "error",
+});
+
+export const parseWorkflowStatePayload = Schema.decodeUnknownSync(WorkflowStatePayloadSchema, {
+  onExcessProperty: "error",
+});
+
+export const parseTriageMoveRequest = Schema.decodeUnknownSync(TriageMoveRequestSchema, {
+  onExcessProperty: "error",
+});
+
+export const parseTriageMoveResult = Schema.decodeUnknownSync(TriageMoveResultSchema, {
   onExcessProperty: "error",
 });

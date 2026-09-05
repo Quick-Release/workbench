@@ -13,6 +13,7 @@ import { Route as IndexRouteImport } from './routes/index'
 import { Route as SessionsRouteImport } from './routes/sessions'
 import { Route as SkillsRouteImport } from './routes/skills'
 import { Route as ToolsRouteImport } from './routes/tools'
+import { Route as TriageRouteImport } from './routes/triage'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -34,18 +35,25 @@ const ToolsRoute = ToolsRouteImport.update({
   path: '/tools',
   getParentRoute: () => rootRouteImport,
 } as any)
+const TriageRoute = TriageRouteImport.update({
+  id: '/triage',
+  path: '/triage',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/sessions': typeof SessionsRoute
   '/skills': typeof SkillsRoute
   '/tools': typeof ToolsRoute
+  '/triage': typeof TriageRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/sessions': typeof SessionsRoute
   '/skills': typeof SkillsRoute
   '/tools': typeof ToolsRoute
+  '/triage': typeof TriageRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -53,13 +61,14 @@ export interface FileRoutesById {
   '/sessions': typeof SessionsRoute
   '/skills': typeof SkillsRoute
   '/tools': typeof ToolsRoute
+  '/triage': typeof TriageRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/sessions' | '/skills' | '/tools'
+  fullPaths: '/' | '/sessions' | '/skills' | '/tools' | '/triage'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/sessions' | '/skills' | '/tools'
-  id: '__root__' | '/' | '/sessions' | '/skills' | '/tools'
+  to: '/' | '/sessions' | '/skills' | '/tools' | '/triage'
+  id: '__root__' | '/' | '/sessions' | '/skills' | '/tools' | '/triage'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -67,6 +76,7 @@ export interface RootRouteChildren {
   SessionsRoute: typeof SessionsRoute
   SkillsRoute: typeof SkillsRoute
   ToolsRoute: typeof ToolsRoute
+  TriageRoute: typeof TriageRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -99,6 +109,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ToolsRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/triage': {
+      id: '/triage'
+      path: '/triage'
+      fullPath: '/triage'
+      preLoaderRoute: typeof TriageRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
@@ -107,6 +124,7 @@ const rootRouteChildren: RootRouteChildren = {
   SessionsRoute: SessionsRoute,
   SkillsRoute: SkillsRoute,
   ToolsRoute: ToolsRoute,
+  TriageRoute: TriageRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

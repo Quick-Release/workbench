@@ -102,6 +102,37 @@ export type BlockerEdgeRecord = {
   sourceRef: string;
 };
 
+// The execution seam's workflow read payload (ticket #59): the synced records
+// joined for live reads, with the snapshot stamp and repo as provenance.
+// Later tickets extend it with decisions and artifacts.
+export type WorkflowStateMeta = {
+  snapshot: string;
+  repo: string;
+};
+
+export type WorkflowStatePayload = {
+  workItems: readonly WorkItemRecord[];
+  maps: readonly TrackerMapRecord[];
+  blockerEdges: readonly BlockerEdgeRecord[];
+  meta: WorkflowStateMeta;
+};
+
+// The triage move action's contract: one work item, one target triage state.
+// `wontfix` is a refusal, so it moves only with `confirm: true` — the
+// dashboard's deliberate lens and confirmation.
+export type TriageMoveRequest = {
+  issueId: string;
+  triageState: TriageState;
+  confirm?: boolean;
+};
+
+export type TriageMoveResult = {
+  message: string;
+  issueId: string;
+  triageState: TriageState;
+  state: WorkflowStatePayload;
+};
+
 // ADR 0009: decisions collect at sync from exactly three sources — `adr`
 // (docs/adr files), `resolution` (the closing comment on a closed decision
 // ticket), and `spec` (one bundle per spec issue's Implementation-Decisions
