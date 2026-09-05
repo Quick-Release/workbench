@@ -24,7 +24,7 @@ The make-or-break criterion turned out **not** to discriminate: every candidate 
 - SSR: verified safe. The package is pure JavaScript (no React, no DOM): in plain Node, `import('@dagrejs/dagre')` succeeded with zero browser globals and `dagre.layout(g)` computed ranks/coordinates for a test graph. Its only dependency is `@dagrejs/graphlib` 4.0.5 (npm registry).
 - Bundle: 15.8 kB gzip / 46.8 kB minified, 1 dependency (Bundlephobia API).
 - React 19: N/A — no React peer dependency; layout is a pure function from graph to positions.
-- Maintenance: actively maintained — npm releases 3.0.0 (2026-03-22), 3.1.0 (2026-08-02), 3.1.1 (2026-08-08); repo pushed 2026-08-08; ~174 open issues; ~5.8k stars (npm registry; `gh api repos/dagrejs/dagre`). Note the GitHub *releases* page lags at v2.0.0 — npm is the live channel.
+- Maintenance: actively maintained — npm releases 3.0.0 (2026-03-22), 3.1.0 (2026-08-02), 3.1.1 (2026-08-08); repo pushed 2026-08-08; ~174 open issues; ~5.8k stars (npm registry; `gh api repos/dagrejs/dagre`). Note the GitHub _releases_ page lags at v2.0.0 — npm is the live channel.
 - License: MIT (npm registry).
 - Caveat: the unscoped `dagre` package (0.8.5) is dead — last publish 2019-12-03, still pulling `lodash` and `graphlib@2`. `@dagrejs/dagre` is the maintained continuation; only the scoped name qualifies.
 
@@ -55,7 +55,7 @@ Build **hand-rolled SVG for both graphs**, with layout computed by pure TypeScri
 3. **Rendering:** plain SVG elements styled with Tailwind 4 tokens (dark-only values per ADR 0002), so node/edge styling uses the exact same classes as the rest of the shell. Frontier highlighting is a class toggle computed from graph data.
 4. Keep everything behind the `GraphView` seam the wayfinding doc already requires, so the layout half stays swappable without touching the views.
 
-**Fallback path if the test seam or layout quality breaks:** swap the *layout* module — not the views — for `@dagrejs/dagre@3.1.1` (MIT, 15.8 kB gzip, 1 transitive dep, releases in March and August 2026). It was verified to import and lay out graphs in DOM-less Node, so it cannot break `renderToString`; rendering remains hand-rolled SVG either way. Adopt it deliberately if the hand-rolled DAG ordering produces unacceptable edge crossings or eats more maintenance time than 15.8 kB justifies.
+**Fallback path if the test seam or layout quality breaks:** swap the _layout_ module — not the views — for `@dagrejs/dagre@3.1.1` (MIT, 15.8 kB gzip, 1 transitive dep, releases in March and August 2026). It was verified to import and lay out graphs in DOM-less Node, so it cannot break `renderToString`; rendering remains hand-rolled SVG either way. Adopt it deliberately if the hand-rolled DAG ordering produces unacceptable edge crossings or eats more maintenance time than 15.8 kB justifies.
 
 **Ruled out:** `@xyflow/react` (works under `renderToString` only via the `initial*` provider pattern; ~60 kB gzip + zustand + a stylesheet to retheme + the Pro-gated attribution request, for interactivity a static dashboard never invokes) and `elkjs` (433 kB gzip and EPL/GPL licensing for layout quality ≤50 nodes doesn't need).
 
@@ -64,7 +64,7 @@ Build **hand-rolled SVG for both graphs**, with layout computed by pure TypeScri
 - **The controlled-prop trap if xyflow is ever revisited:** `<ReactFlow nodes={…}>` renders an empty shell server-side; only the `ReactFlowProvider` `initialNodes`/`initialEdges`/`initialWidth`/`initialHeight` pattern produces content under `renderToString` (verified). Any xyflow-based smoke test must use that pattern or it will pass vacuously.
 - **Node sizing:** hand-rolled SVG needs fixed node boxes (the graphs' labels are known strings, so generous fixed sizes work). If text measurement is ever needed, that is a browser-only concern and belongs in effects, never in initial render — the same discipline the sidebar cookie work recorded.
 - **Determinism:** own layout functions and dagre are both deterministic for identical input, so snapshot-style assertions in `renderToString` tests are stable.
-- **Interaction creep:** if a graph ever needs pan/zoom or dragging, that is the moment to re-evaluate xyflow behind the `GraphView` seam; this decision only fixes the *starting* point, per the seam's stated purpose.
+- **Interaction creep:** if a graph ever needs pan/zoom or dragging, that is the moment to re-evaluate xyflow behind the `GraphView` seam; this decision only fixes the _starting_ point, per the seam's stated purpose.
 - **Original `dagre` package:** must not be picked up transitively or by mistake; it has been unmaintained since 2019.
 
 ## Test implications

@@ -15,7 +15,7 @@ Ticket #44 asked whether the new dashboard views stay strictly visual. The decis
 
 ## Consequences
 
-- ADR 0001's consequence "the browser app still makes zero network calls" narrows to zero *remote* network calls; the localhost execution seam is excepted. Reporting still happens only in sync, and the telemetry contract is unchanged.
+- ADR 0001's consequence "the browser app still makes zero network calls" narrows to zero _remote_ network calls; the localhost execution seam is excepted. Reporting still happens only in sync, and the telemetry contract is unchanged.
 - Phase-1 action scope: triage-state moves, issue create/edit/comment, blocker-edge edits, sync trigger. Destructive or costly actions (close, wontfix, blocker-edge removal, and any future session spawn) confirm first; label moves fire directly; no undo in v1 — GitHub history is the audit log.
 - Static builds (no dev server) degrade action affordances to copy-the-command.
 - Starting agent sessions from the dashboard is the declared destination but gets its own decision; until then the session database is observed, never acted on.

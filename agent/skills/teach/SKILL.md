@@ -1,6 +1,7 @@
 ---
 description: "Teach the user a new skill or concept, within this workspace."
 ---
+
 The user has asked you to teach them something. This is a stateful request - they intend to learn the topic over multiple sessions.
 
 ## Teaching Workspace
