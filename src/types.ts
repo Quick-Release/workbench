@@ -15,6 +15,69 @@ export const ticketKinds = ["ledger", "plan-ticket", "external"] as const;
 
 export const serviceStatuses = ["connected", "skipped", "error"] as const;
 
+export const skillFlowRoles = [
+  "main-flow",
+  "on-ramp",
+  "standalone",
+  "vocabulary",
+  "primitive",
+] as const;
+
+export type SkillFlowRole = (typeof skillFlowRoles)[number];
+
+export const skillFlowEdgeKinds = [
+  "merges-onto",
+  "delegates-to",
+  "pairs-with",
+  "runs-internally",
+  "hands-off-to",
+  "next-step",
+] as const;
+
+export type SkillFlowEdgeKind = (typeof skillFlowEdgeKinds)[number];
+
+export type SkillRecord = {
+  id: string;
+  category: string;
+  source: string;
+};
+
+export type SkillFlowEdge = {
+  from: string;
+  to: string;
+  kind: SkillFlowEdgeKind;
+};
+
+export type SkillClassification = {
+  role: SkillFlowRole | null;
+  blurb: string;
+  when: string;
+};
+
+export type SkillStatusRecord = {
+  id: string;
+  category: string;
+  source: string;
+  installed: boolean;
+  description?: string;
+};
+
+export type SkillSourceStatus = {
+  id: string;
+  source: string;
+  repositoryUrl: string;
+  installCommand: string;
+  installed: boolean;
+  installedSkillCount: number;
+  totalSkillCount: number;
+};
+
+export type SkillsStatus = {
+  sources: readonly SkillSourceStatus[];
+  skills: readonly SkillStatusRecord[];
+  message?: string;
+};
+
 export type TicketRecord = {
   id: string;
   title: string;
@@ -180,5 +243,7 @@ export type OverviewData = {
   tickets: readonly TicketRecord[];
   plans: readonly PlanRecord[];
   changes: readonly SpecChangeRecord[];
+  skills: readonly SkillRecord[];
+  skillInstalls: readonly string[];
   sessions: SessionUsage;
 };

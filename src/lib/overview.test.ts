@@ -131,6 +131,8 @@ const data = {
     sessionsByDay: [],
     sessions: [],
   },
+  skills: [{ id: "tdd", category: "engineering", source: "matt-pocock" }],
+  skillInstalls: ["tdd"],
 } satisfies OverviewData;
 
 describe("workbench selectors", () => {

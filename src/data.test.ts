@@ -2,7 +2,15 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { overviewData } from "./data";
 import { overviewData as generatedData } from "./data.generated";
-import { parseOverviewData, parseTicketRecord } from "./schema";
+import { offlineFallbackCatalog, skillFlowClassification, skillFlowEdges } from "./data/skill-flow";
+import {
+  parseOverviewData,
+  parseSkillClassification,
+  parseSkillFlowEdge,
+  parseSkillRecord,
+  parseSkillsStatus,
+  parseTicketRecord,
+} from "./schema";
 
 const expectRejected = (input: unknown, pattern: RegExp) => {
   expect(() => parseOverviewData(input)).toThrow(pattern);
@@ -202,5 +210,117 @@ describe("overview data boundary", () => {
   it("rejects data missing the sessions key entirely", () => {
     const { sessions: _omitted, ...withoutSessions } = generatedData;
     expectRejected(withoutSessions, /sessions/);
+  });
+});
+
+describe("skills catalog boundary", () => {
+  it("decodes a skill record with its source", () => {
+    expect(parseSkillRecord({ id: "tdd", category: "engineering", source: "matt-pocock" })).toEqual(
+      { id: "tdd", category: "engineering", source: "matt-pocock" },
+    );
+  });
+
+  it("rejects a skill record with an excess field and a missing category", () => {
+    expect(() => parseSkillRecord({ id: "tdd", extra: true })).toThrow(/extra/);
+    expect(() => parseSkillRecord({ id: "tdd", source: "matt-pocock" })).toThrow(/category/);
+  });
+
+  it("decodes a skill flow edge only over the six-verb vocabulary", () => {
+    expect(parseSkillFlowEdge({ from: "implement", to: "tdd", kind: "runs-internally" })).toEqual({
+      from: "implement",
+      to: "tdd",
+      kind: "runs-internally",
+    });
+    expect(() => parseSkillFlowEdge({ from: "a", to: "b", kind: "requires" })).toThrow(/kind/);
+    expect(() =>
+      parseSkillFlowEdge({ from: "a", to: "b", kind: "next-step", dashed: true }),
+    ).toThrow(/dashed/);
+  });
+
+  it("accepts every curated classification entry and flow edge through the schemas", () => {
+    expect(Object.keys(skillFlowClassification).length).toBe(offlineFallbackCatalog.length);
+    for (const entry of Object.values(skillFlowClassification)) {
+      expect(() => parseSkillClassification(entry)).not.toThrow();
+    }
+    for (const edge of skillFlowEdges) {
+      expect(() => parseSkillFlowEdge(edge)).not.toThrow();
+    }
+  });
+
+  it("keeps every flow edge endpoint inside the curated catalog", () => {
+    const ids = new Set(offlineFallbackCatalog.map((skill) => skill.id));
+    for (const edge of skillFlowEdges) {
+      expect(ids.has(edge.from)).toBe(true);
+      expect(ids.has(edge.to)).toBe(true);
+    }
+  });
+
+  it("decodes the generated catalog and installed snapshot on import", () => {
+    expect(generatedData.skills.length).toBeGreaterThanOrEqual(offlineFallbackCatalog.length);
+    expect(generatedData.skills.every((skill) => skill.category.length > 0)).toBe(true);
+    expect(Array.isArray(generatedData.skillInstalls)).toBe(true);
+  });
+
+  it("rejects a generated payload whose catalog entry carries an unknown category field", () => {
+    const drifted: unknown = {
+      ...generatedData,
+      skills: [{ id: "tdd", category: "engineering", source: "matt-pocock", blurb: "x" }],
+    };
+    expectRejected(drifted, /blurb/);
+  });
+
+  it("decodes the execution-seam skills payload with live installed state", () => {
+    const status = {
+      sources: [
+        {
+          id: "matt-pocock",
+          source: "mattpocock/skills",
+          repositoryUrl: "https://github.com/mattpocock/skills",
+          installCommand: "npx skills@latest add mattpocock/skills --all",
+          installed: true,
+          installedSkillCount: 1,
+          totalSkillCount: 1,
+        },
+      ],
+      skills: [
+        {
+          id: "tdd",
+          category: "engineering",
+          source: "matt-pocock",
+          installed: true,
+          description: "Tight loops.",
+        },
+        { id: "wizard", category: "engineering", source: "matt-pocock", installed: false },
+      ],
+    };
+    expect(parseSkillsStatus(status).skills).toHaveLength(2);
+  });
+
+  it("rejects a seam payload with an unknown field, a bad installed flag, or a non-numeric count", () => {
+    const base = {
+      sources: [
+        {
+          id: "matt-pocock",
+          source: "mattpocock/skills",
+          repositoryUrl: "https://github.com/mattpocock/skills",
+          installCommand: "npx skills@latest add mattpocock/skills --all",
+          installed: false,
+          installedSkillCount: 0,
+          totalSkillCount: 1,
+        },
+      ],
+      skills: [{ id: "tdd", category: "engineering", source: "matt-pocock", installed: true }],
+    };
+    expect(() => parseSkillsStatus(base)).not.toThrow();
+    expect(() => parseSkillsStatus({ ...base, unexpected: true })).toThrow(/excess/);
+    expect(() =>
+      parseSkillsStatus({ ...base, skills: [{ ...base.skills[0], installed: "yes" }] }),
+    ).toThrow(/installed/);
+    expect(() =>
+      parseSkillsStatus({
+        ...base,
+        sources: [{ ...base.sources[0], installedSkillCount: "many" }],
+      }),
+    ).toThrow(/installedSkillCount/i);
   });
 });

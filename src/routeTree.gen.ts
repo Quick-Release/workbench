@@ -10,8 +10,8 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as FlowRouteImport } from './routes/flow'
 import { Route as SessionsRouteImport } from './routes/sessions'
-import { Route as SkillsRouteImport } from './routes/skills'
 import { Route as ToolsRouteImport } from './routes/tools'
 
 const IndexRoute = IndexRouteImport.update({
@@ -19,14 +19,14 @@ const IndexRoute = IndexRouteImport.update({
   path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const FlowRoute = FlowRouteImport.update({
+  id: '/flow',
+  path: '/flow',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const SessionsRoute = SessionsRouteImport.update({
   id: '/sessions',
   path: '/sessions',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const SkillsRoute = SkillsRouteImport.update({
-  id: '/skills',
-  path: '/skills',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ToolsRoute = ToolsRouteImport.update({
@@ -37,35 +37,35 @@ const ToolsRoute = ToolsRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/flow': typeof FlowRoute
   '/sessions': typeof SessionsRoute
-  '/skills': typeof SkillsRoute
   '/tools': typeof ToolsRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/flow': typeof FlowRoute
   '/sessions': typeof SessionsRoute
-  '/skills': typeof SkillsRoute
   '/tools': typeof ToolsRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/flow': typeof FlowRoute
   '/sessions': typeof SessionsRoute
-  '/skills': typeof SkillsRoute
   '/tools': typeof ToolsRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/sessions' | '/skills' | '/tools'
+  fullPaths: '/' | '/flow' | '/sessions' | '/tools'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/sessions' | '/skills' | '/tools'
-  id: '__root__' | '/' | '/sessions' | '/skills' | '/tools'
+  to: '/' | '/flow' | '/sessions' | '/tools'
+  id: '__root__' | '/' | '/flow' | '/sessions' | '/tools'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  FlowRoute: typeof FlowRoute
   SessionsRoute: typeof SessionsRoute
-  SkillsRoute: typeof SkillsRoute
   ToolsRoute: typeof ToolsRoute
 }
 
@@ -78,18 +78,18 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/flow': {
+      id: '/flow'
+      path: '/flow'
+      fullPath: '/flow'
+      preLoaderRoute: typeof FlowRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/sessions': {
       id: '/sessions'
       path: '/sessions'
       fullPath: '/sessions'
       preLoaderRoute: typeof SessionsRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/skills': {
-      id: '/skills'
-      path: '/skills'
-      fullPath: '/skills'
-      preLoaderRoute: typeof SkillsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/tools': {
@@ -104,8 +104,8 @@ declare module '@tanstack/react-router' {
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  FlowRoute: FlowRoute,
   SessionsRoute: SessionsRoute,
-  SkillsRoute: SkillsRoute,
   ToolsRoute: ToolsRoute,
 }
 export const routeTree = rootRouteImport

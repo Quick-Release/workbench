@@ -1,12 +1,64 @@
 import { Schema } from "effect";
 
-import type { OverviewData } from "./types";
-import { serviceStatuses, ticketKinds, ticketStatuses } from "./types";
+import type { OverviewData, SkillClassification, SkillFlowEdge, SkillsStatus } from "./types";
+import {
+  serviceStatuses,
+  skillFlowEdgeKinds,
+  skillFlowRoles,
+  ticketKinds,
+  ticketStatuses,
+} from "./types";
 export const TicketStatusSchema = Schema.Literals(ticketStatuses);
 
 export const TicketKindSchema = Schema.Literals(ticketKinds);
 
 export const ServiceStatusSchema = Schema.Literals(serviceStatuses);
+
+export const SkillFlowRoleSchema = Schema.NullOr(Schema.Literals(skillFlowRoles));
+
+export const SkillFlowEdgeKindSchema = Schema.Literals(skillFlowEdgeKinds);
+
+export const SkillRecordSchema = Schema.Struct({
+  id: Schema.String,
+  category: Schema.String,
+  source: Schema.String,
+});
+
+export const SkillFlowEdgeSchema = Schema.Struct({
+  from: Schema.String,
+  to: Schema.String,
+  kind: SkillFlowEdgeKindSchema,
+});
+
+export const SkillClassificationSchema = Schema.Struct({
+  role: SkillFlowRoleSchema,
+  blurb: Schema.String,
+  when: Schema.String,
+});
+
+export const SkillStatusRecordSchema = Schema.Struct({
+  id: Schema.String,
+  category: Schema.String,
+  source: Schema.String,
+  installed: Schema.Boolean,
+  description: Schema.optional(Schema.String),
+});
+
+export const SkillSourceStatusSchema = Schema.Struct({
+  id: Schema.String,
+  source: Schema.String,
+  repositoryUrl: Schema.String,
+  installCommand: Schema.String,
+  installed: Schema.Boolean,
+  installedSkillCount: Schema.Number,
+  totalSkillCount: Schema.Number,
+});
+
+export const SkillsStatusSchema = Schema.Struct({
+  sources: Schema.Array(SkillSourceStatusSchema),
+  skills: Schema.Array(SkillStatusRecordSchema),
+  message: Schema.optional(Schema.String),
+});
 
 export const TicketRecordSchema = Schema.Struct({
   id: Schema.String,
@@ -159,6 +211,8 @@ export const OverviewDataSchema = Schema.Struct({
   tickets: Schema.Array(TicketRecordSchema),
   plans: Schema.Array(PlanRecordSchema),
   changes: Schema.Array(SpecChangeRecordSchema),
+  skills: Schema.Array(SkillRecordSchema),
+  skillInstalls: Schema.Array(Schema.String),
   sessions: SessionUsageSchema,
 });
 
@@ -173,3 +227,20 @@ export const parseOverviewData: (input: unknown) => OverviewData = Schema.decode
 export const parseTicketRecord = Schema.decodeUnknownSync(TicketRecordSchema, {
   onExcessProperty: "error",
 });
+
+export const parseSkillRecord = Schema.decodeUnknownSync(SkillRecordSchema, {
+  onExcessProperty: "error",
+});
+
+export const parseSkillFlowEdge: (input: unknown) => SkillFlowEdge = Schema.decodeUnknownSync(
+  SkillFlowEdgeSchema,
+  { onExcessProperty: "error" },
+);
+
+export const parseSkillClassification: (input: unknown) => SkillClassification =
+  Schema.decodeUnknownSync(SkillClassificationSchema, { onExcessProperty: "error" });
+
+export const parseSkillsStatus: (input: unknown) => SkillsStatus = Schema.decodeUnknownSync(
+  SkillsStatusSchema,
+  { onExcessProperty: "error" },
+);

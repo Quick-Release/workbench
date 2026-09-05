@@ -775,3 +775,69 @@ code {
     scroll-behavior: auto;
   }
 }
+
+/* Flow graph (GraphView seam) — hand-rolled SVG over the shell tokens. */
+.graph-view {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.graph-region-label {
+  fill: var(--faint);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.graph-edge {
+  fill: none;
+}
+
+.graph-edge-progression {
+  stroke: var(--white-dim);
+  stroke-width: 1.5;
+}
+
+.graph-edge-internal {
+  stroke: var(--faint);
+  stroke-width: 1.3;
+  stroke-dasharray: 5 4;
+}
+
+.graph-node {
+  cursor: pointer;
+}
+
+.graph-node rect {
+  fill: var(--panel-hi);
+  stroke-width: 1.4;
+}
+
+.graph-node:hover rect,
+.graph-node:focus-visible rect {
+  stroke-width: 2;
+}
+
+.graph-node-dimmed {
+  opacity: 0.42;
+}
+
+.graph-node-selected rect {
+  stroke-width: 2.4;
+}
+
+.graph-node-label {
+  fill: var(--ink);
+  font-size: 12px;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+}
+
+.graph-node-sub {
+  fill: var(--faint);
+  font-size: 9.5px;
+}
+
+.graph-node-dot {
+  fill: var(--good);
+}
