@@ -5,6 +5,12 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 
 import {
+  parseIssueCommentRequest,
+  parseIssueCommentResult,
+  parseIssueCreateRequest,
+  parseIssueCreateResult,
+  parseIssueEditRequest,
+  parseIssueEditResult,
   parseTriageMoveRequest,
   parseTriageMoveResult,
   parseWorkflowStatePayload,
@@ -21,6 +27,9 @@ const APP_DIRECTORY = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 const WORKFLOW_ROUTE = /^\/api\/workflow\/?$/;
 const TRIAGE_ROUTE = /^\/api\/workflow\/triage\/?$/;
+const ISSUE_EDIT_ROUTE = /^\/api\/workflow\/issue\/edit\/?$/;
+const ISSUE_COMMENT_ROUTE = /^\/api\/workflow\/issue\/comment\/?$/;
+const ISSUE_CREATE_ROUTE = /^\/api\/workflow\/issue\/create\/?$/;
 
 // The seam imports the generated snapshot module — its only syntax is the
 // erasable kind (a type-only import and `satisfies`), so plain Node loads it.
@@ -65,6 +74,50 @@ const issueFromGhView = (payload) => ({
 
 const byIssueNumber = (left, right) => Number(left.id.slice(3)) - Number(right.id.slice(3));
 
+const issueNumberFrom = (issueId) => /^GH-(\d+)$/.exec(issueId)?.[1];
+
+// Read the issue back through the same label grammar sync uses, so the
+// served state stays tracker-derived rather than drifting from it. A write
+// that succeeded but cannot be read back is a 502, not silence.
+const readIssueRecord = async (number, state, run, cwd) => {
+  const readBack = await run(
+    "gh",
+    [
+      "issue",
+      "view",
+      number,
+      "--repo",
+      state.meta.repo,
+      "--json",
+      "number,title,url,state,assignees,labels,body",
+    ],
+    cwd,
+  );
+  const { record: derived } = deriveWorkItem(issueFromGhView(JSON.parse(readBack.stdout)));
+  return derived;
+};
+
+const readBackOrFail = async (issueId, number, state, run, cwd, verb) => {
+  try {
+    return { record: await readIssueRecord(number, state, run, cwd) };
+  } catch (error) {
+    return {
+      failure: {
+        ok: false,
+        status: 502,
+        message: `${verb} succeeded but reading ${issueId} back failed: ${messageFrom(error)}`,
+      },
+    };
+  }
+};
+
+const upsertRecord = (state, record) => ({
+  ...state,
+  workItems: [...state.workItems.filter((item) => item.id !== record.id), record].sort(
+    byIssueNumber,
+  ),
+});
+
 export const applyTriageMove = async ({ issueId, triageState, confirm, state, run, cwd }) => {
   if (triageState === "wontfix" && confirm !== true)
     return {
@@ -72,7 +125,7 @@ export const applyTriageMove = async ({ issueId, triageState, confirm, state, ru
       status: 422,
       message: `${issueId}: wontfix is a refusal — repeat the move with confirm to refuse it`,
     };
-  const number = /^GH-(\d+)$/.exec(issueId)?.[1];
+  const number = issueNumberFrom(issueId);
   if (!number)
     return {
       ok: false,
@@ -97,45 +150,200 @@ export const applyTriageMove = async ({ issueId, triageState, confirm, state, ru
       message: `gh label write failed for ${issueId}: ${messageFrom(error)}`,
     };
   }
-  // Read the issue back through the same label grammar sync uses, so the
-  // served state stays tracker-derived rather than drifting from it.
-  let record;
-  try {
-    const readBack = await run(
-      "gh",
-      [
-        "issue",
-        "view",
-        number,
-        "--repo",
-        state.meta.repo,
-        "--json",
-        "number,title,url,state,assignees,labels,body",
-      ],
-      cwd,
-    );
-    const { record: derived } = deriveWorkItem(issueFromGhView(JSON.parse(readBack.stdout)));
-    record = derived;
-  } catch (error) {
-    return {
-      ok: false,
-      status: 502,
-      message: `label write succeeded but reading ${issueId} back failed: ${messageFrom(error)}`,
-    };
-  }
-  const workItems = [...state.workItems.filter((item) => item.id !== record.id), record].sort(
-    byIssueNumber,
-  );
+  const back = await readBackOrFail(issueId, number, state, run, cwd, "label write");
+  if (back.failure) return back.failure;
   return {
     ok: true,
     result: {
       message: `${issueId} moved to ${triageState}.`,
       issueId,
       triageState,
-      state: { ...state, workItems },
+      state: upsertRecord(state, back.record),
     },
   };
 };
+
+// ADR 0005 phase-1 issue actions (ticket #60): an edit overwrites the
+// issue's title or body, so it moves only with `confirm: true` — the seam
+// enforces the deliberate beat the dashboard renders.
+export const applyIssueEdit = async ({ issueId, title, body, confirm, state, run, cwd }) => {
+  if (confirm !== true)
+    return {
+      ok: false,
+      status: 422,
+      message: `${issueId}: editing overwrites the issue — repeat the edit with confirm to save it`,
+    };
+  if (!title && !body)
+    return {
+      ok: false,
+      status: 400,
+      message: `${issueId}: nothing to edit — pass a title or a body`,
+    };
+  const number = issueNumberFrom(issueId);
+  if (!number)
+    return {
+      ok: false,
+      status: 400,
+      message: `"${issueId}" is not a tracker issue id; only GH-numbered items edit here`,
+    };
+  try {
+    const args = ["issue", "edit", number, "--repo", state.meta.repo];
+    if (title) args.push("--title", title);
+    if (body) args.push("--body", body);
+    await run("gh", args, cwd);
+  } catch (error) {
+    return {
+      ok: false,
+      status: 502,
+      message: `gh issue edit failed for ${issueId}: ${messageFrom(error)}`,
+    };
+  }
+  const back = await readBackOrFail(issueId, number, state, run, cwd, "edit");
+  if (back.failure) return back.failure;
+  return {
+    ok: true,
+    result: { message: `${issueId} updated.`, issueId, state: upsertRecord(state, back.record) },
+  };
+};
+
+// ADR 0005 phase-1 issue actions (ticket #60): commenting is additive, so it
+// fires directly — `gh` answers with the new comment's url.
+export const applyIssueComment = async ({ issueId, body, state, run, cwd }) => {
+  if (!body.trim())
+    return {
+      ok: false,
+      status: 400,
+      message: "an empty comment is not worth a write — say something first",
+    };
+  const number = issueNumberFrom(issueId);
+  if (!number)
+    return {
+      ok: false,
+      status: 400,
+      message: `"${issueId}" is not a tracker issue id; only GH-numbered items take comments here`,
+    };
+  try {
+    const written = await run(
+      "gh",
+      ["issue", "comment", number, "--repo", state.meta.repo, "--body", body],
+      cwd,
+    );
+    return {
+      ok: true,
+      result: {
+        message: `Commented on ${issueId}.`,
+        issueId,
+        commentUrl: written.stdout.trim(),
+      },
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      status: 502,
+      message: `gh issue comment failed for ${issueId}: ${messageFrom(error)}`,
+    };
+  }
+};
+
+// Creating is additive like commenting; `gh` answers with the new issue's
+// url, and the created issue is read back so the served state stays
+// tracker-derived.
+export const applyIssueCreate = async ({ title, body, state, run, cwd }) => {
+  try {
+    const args = ["issue", "create", "--repo", state.meta.repo, "--title", title];
+    if (body) args.push("--body", body);
+    const created = await run("gh", args, cwd);
+    const number = /\/issues\/(\d+)/.exec(created.stdout)?.[1];
+    if (!number)
+      return {
+        ok: false,
+        status: 502,
+        message: `gh issue create did not name the new issue's url: ${created.stdout.trim()}`,
+      };
+    const record = await readIssueRecord(number, state, run, cwd);
+    return {
+      ok: true,
+      result: {
+        message: `${record.id} created.`,
+        issueId: record.id,
+        state: upsertRecord(state, record),
+      },
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      status: 502,
+      message: `gh issue create failed: ${messageFrom(error)}`,
+    };
+  }
+};
+
+// Shared POST plumbing for the seam's actions: decode the request through
+// its schema, load the joined state, apply, and encode the result back
+// through its schema — everything crossing the seam passes both directions.
+const handleWorkflowAction = async ({
+  body,
+  parseRequest,
+  encode,
+  apply,
+  appDirectory,
+  hostRoot,
+  run,
+}) => {
+  let raw;
+  try {
+    raw = JSON.parse(body ?? "");
+  } catch {
+    return { status: 400, json: { message: "request body is not valid JSON" } };
+  }
+  let request;
+  try {
+    request = parseRequest(raw);
+  } catch (error) {
+    return { status: 400, json: { message: messageFrom(error) } };
+  }
+  let state;
+  try {
+    state = parseWorkflowStatePayload(await loadWorkflowState(appDirectory));
+  } catch (error) {
+    return {
+      status: 500,
+      json: {
+        message: `workflow state unavailable (${messageFrom(error)}); run pnpm sync and retry`,
+      },
+    };
+  }
+  const outcome = await apply({ ...request, state, run, cwd: hostRoot });
+  if (!outcome.ok) return { status: outcome.status, json: { message: outcome.message } };
+  return { status: 200, json: encode(outcome.result) };
+};
+
+const POST_ROUTES = [
+  {
+    route: TRIAGE_ROUTE,
+    parseRequest: parseTriageMoveRequest,
+    encode: parseTriageMoveResult,
+    apply: applyTriageMove,
+  },
+  {
+    route: ISSUE_EDIT_ROUTE,
+    parseRequest: parseIssueEditRequest,
+    encode: parseIssueEditResult,
+    apply: applyIssueEdit,
+  },
+  {
+    route: ISSUE_COMMENT_ROUTE,
+    parseRequest: parseIssueCommentRequest,
+    encode: parseIssueCommentResult,
+    apply: applyIssueComment,
+  },
+  {
+    route: ISSUE_CREATE_ROUTE,
+    parseRequest: parseIssueCreateRequest,
+    encode: parseIssueCreateResult,
+    apply: applyIssueCreate,
+  },
+];
 
 // The seam handler behind the dev-server middleware: pure enough to test
 // without vite, returning null for routes it does not own.
@@ -163,33 +371,11 @@ export const handleWorkflowApi = async ({
     }
   }
 
-  if (method === "POST" && TRIAGE_ROUTE.test(pathname)) {
-    let raw;
-    try {
-      raw = JSON.parse(body ?? "");
-    } catch {
-      return { status: 400, json: { message: "request body is not valid JSON" } };
+  if (method === "POST") {
+    for (const action of POST_ROUTES) {
+      if (!action.route.test(pathname)) continue;
+      return handleWorkflowAction({ ...action, body, appDirectory, hostRoot, run });
     }
-    let request;
-    try {
-      request = parseTriageMoveRequest(raw);
-    } catch (error) {
-      return { status: 400, json: { message: messageFrom(error) } };
-    }
-    let state;
-    try {
-      state = parseWorkflowStatePayload(await loadWorkflowState(appDirectory));
-    } catch (error) {
-      return {
-        status: 500,
-        json: {
-          message: `workflow state unavailable (${messageFrom(error)}); run pnpm sync and retry`,
-        },
-      };
-    }
-    const outcome = await applyTriageMove({ ...request, state, run, cwd: hostRoot });
-    if (!outcome.ok) return { status: outcome.status, json: { message: outcome.message } };
-    return { status: 200, json: parseTriageMoveResult(outcome.result) };
   }
 
   return null;
@@ -203,12 +389,15 @@ const readBody = (request) =>
     request.on("error", rejectBody);
   });
 
+const isWorkflowRoute = (pathname) =>
+  WORKFLOW_ROUTE.test(pathname) || POST_ROUTES.some((action) => action.route.test(pathname));
+
 export const workflowApiPlugin = () => ({
   name: "workbench-workflow-api",
   configureServer(server) {
     server.middlewares.use(async (request, response, next) => {
       const url = new URL(request.url ?? "/", "http://localhost");
-      if (!WORKFLOW_ROUTE.test(url.pathname) && !TRIAGE_ROUTE.test(url.pathname)) return next();
+      if (!isWorkflowRoute(url.pathname)) return next();
       const hostRoot = resolve(process.env.WORKBENCH_SOURCE_ROOT || server.config.root);
       const body = request.method === "POST" ? await readBody(request) : undefined;
       const handled = await handleWorkflowApi({

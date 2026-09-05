@@ -2,6 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import type { BlockerEdgeRecord, TrackerMapRecord, TicketRecord, WorkItemRecord } from "../types";
 import {
+  effortFor,
   frontier,
   frontierItemFromTicket,
   frontierItemFromWorkItem,
@@ -156,5 +157,24 @@ describe("frontier selector", () => {
     const edges = [edge("BQ-12", "GH-47", "blocked-by-line")];
 
     expect(frontier(items, edges, []).map((item) => item.id)).toEqual(["GH-47"]);
+  });
+});
+
+describe("effortFor", () => {
+  const maps: TrackerMapRecord[] = [
+    {
+      mapId: "GH-41",
+      title: "Skills-ecosystem dashboard",
+      url: "https://github.com/example/project/issues/41",
+      ticketIds: ["GH-42", "GH-43"],
+    },
+  ];
+
+  it("names a map child's effort as its map", () => {
+    expect(effortFor("GH-42", maps)).toBe("GH-41");
+  });
+
+  it("names no effort for an item outside every map", () => {
+    expect(effortFor("GH-60", maps)).toBeNull();
   });
 });

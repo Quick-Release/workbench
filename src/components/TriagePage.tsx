@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Eye, Inbox } from "lucide-react";
+import { Eye, Inbox, Plus } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -25,6 +25,7 @@ type TriageRowProps = {
   onMove: (target: TriageState) => void;
   onConfirm: () => void;
   onCancel: () => void;
+  onOpenIssue: () => void;
 };
 
 // One triage row: the work item beside its move affordance — a native select
@@ -40,6 +41,7 @@ export function TriageRow({
   onMove,
   onConfirm,
   onCancel,
+  onOpenIssue,
 }: TriageRowProps) {
   const command = staticMoveCommand(record);
   return (
@@ -50,14 +52,14 @@ export function TriageRow({
     >
       <div className="min-w-0">
         <p className="flex flex-wrap items-center gap-2 text-sm font-medium">
-          <a
-            href={record.url}
-            target="_blank"
-            rel="noreferrer"
+          <button
+            type="button"
+            data-slot="issue-link"
+            onClick={onOpenIssue}
             className="font-mono text-xs underline-offset-4 hover:underline"
           >
             {record.id}
-          </a>
+          </button>
           <span className="truncate">{record.title}</span>
           {record.phase && <Badge variant="outline">{record.phase}</Badge>}
           {record.triageState !== "unlabeled" && (
@@ -133,6 +135,8 @@ type TriagePageProps = {
   lens: TriageLens;
   onLensChange: (lens: TriageLens) => void;
   onMove: (issueId: string, triageState: TriageState) => void;
+  onOpenIssue: (issueId: string) => void;
+  onNewIssue: () => void;
   pendingId: string | null;
   message: string | null;
 };
@@ -155,6 +159,8 @@ export function TriagePage({
   lens,
   onLensChange,
   onMove,
+  onOpenIssue,
+  onNewIssue,
   pendingId,
   message,
 }: TriagePageProps) {
@@ -178,6 +184,7 @@ export function TriagePage({
       },
       onConfirm: () => setConfirmingId(record.id),
       onCancel: () => setConfirmingId(null),
+      onOpenIssue: () => onOpenIssue(record.id),
     };
   };
 
@@ -199,15 +206,21 @@ export function TriagePage({
           <Inbox className="size-5 text-muted-foreground" />
           <h1 className="text-2xl font-semibold">Triage</h1>
         </div>
-        <Button
-          size="sm"
-          variant={lens === "wontfix" ? "secondary" : "outline"}
-          aria-pressed={lens === "wontfix"}
-          onClick={() => onLensChange(lens === "wontfix" ? "none" : "wontfix")}
-        >
-          <Eye />
-          Refused
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button size="sm" variant="outline" onClick={onNewIssue}>
+            <Plus />
+            New issue
+          </Button>
+          <Button
+            size="sm"
+            variant={lens === "wontfix" ? "secondary" : "outline"}
+            aria-pressed={lens === "wontfix"}
+            onClick={() => onLensChange(lens === "wontfix" ? "none" : "wontfix")}
+          >
+            <Eye />
+            Refused
+          </Button>
+        </div>
       </div>
       <p className="max-w-2xl text-sm text-muted-foreground">
         Fresh work in, parked work out — the triage skill's surface. Inline moves write the tracker

@@ -73,3 +73,10 @@ export const frontier = (
     return leftOrder - rightOrder || numberSuffix(left.id) - numberSuffix(right.id);
   });
 };
+
+// The "show in graph" effort an item belongs to (ticket #60's detail
+// grammar): its map, when it is a map child. Anything else — edge
+// participants outside a map — names no effort the snapshot can prove; the
+// blocker graph's ticket owns the wider effort semantics.
+export const effortFor = (issueId: string, maps: readonly TrackerMapRecord[]): string | null =>
+  maps.find((map) => map.ticketIds.includes(issueId))?.mapId ?? null;

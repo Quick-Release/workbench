@@ -59,7 +59,9 @@ const withSnapshot = async (data) => {
 };
 
 // A stubbed `gh`: every invocation is recorded, and the nth call resolves
-// from `responses` (a string rejects with it as the tool's stderr).
+// from `responses` (a string rejects with it as the tool's stderr, an object
+// with a `stdout` key passes through verbatim, anything else is served the
+// way `gh --json` prints: JSON-encoded on stdout).
 const runStub = (responses = []) => {
   const calls = [];
   const run = async (command, args, cwd) => {
@@ -67,6 +69,7 @@ const runStub = (responses = []) => {
     const next = responses[calls.length - 1];
     if (typeof next === "string")
       throw Object.assign(new Error(`gh failed: ${next}`), { stderr: next });
+    if (next && typeof next === "object" && "stdout" in next) return next;
     return { stdout: JSON.stringify(next ?? null) };
   };
   return { calls, run };
@@ -328,4 +331,239 @@ test("a move on a non-issue namespaced id is rejected", async () => {
   });
   strictEqual(handled.status, 400);
   strictEqual(calls.length, 0);
+});
+
+test("an issue comment shells out to gh and answers the comment url", async () => {
+  const directory = await withSnapshot(snapshot([workItem(7)]));
+  const commentUrl = `https://github.com/${REPO}/issues/7#issuecomment-311`;
+  const { calls, run } = runStub([{ stdout: `${commentUrl}\n` }]);
+  const handled = await handleWorkflowApi({
+    method: "POST",
+    pathname: "/api/workflow/issue/comment",
+    body: JSON.stringify({ issueId: "GH-7", body: "Settled with the reporter." }),
+    appDirectory: directory,
+    hostRoot: HOST_ROOT,
+    run,
+  });
+  strictEqual(handled.status, 200);
+  deepStrictEqual(calls, [
+    {
+      command: "gh",
+      args: ["issue", "comment", "7", "--repo", REPO, "--body", "Settled with the reporter."],
+      cwd: HOST_ROOT,
+    },
+  ]);
+  strictEqual(handled.json.issueId, "GH-7");
+  strictEqual(handled.json.commentUrl, commentUrl);
+  ok(/commented on GH-7/i.test(handled.json.message), handled.json.message);
+});
+
+test("an empty comment is rejected without shelling out", async () => {
+  const directory = await withSnapshot(snapshot([workItem(7)]));
+  const { calls, run } = runStub();
+  const handled = await handleWorkflowApi({
+    method: "POST",
+    pathname: "/api/workflow/issue/comment",
+    body: JSON.stringify({ issueId: "GH-7", body: "   " }),
+    appDirectory: directory,
+    hostRoot: HOST_ROOT,
+    run,
+  });
+  strictEqual(handled.status, 400);
+  strictEqual(calls.length, 0);
+});
+
+test("a failed comment write surfaces the tool's message with a 502", async () => {
+  const directory = await withSnapshot(snapshot([workItem(7)]));
+  const { calls, run } = runStub(["issue not found"]);
+  const handled = await handleWorkflowApi({
+    method: "POST",
+    pathname: "/api/workflow/issue/comment",
+    body: JSON.stringify({ issueId: "GH-7", body: "hello" }),
+    appDirectory: directory,
+    hostRoot: HOST_ROOT,
+    run,
+  });
+  strictEqual(handled.status, 502);
+  ok(/issue not found/.test(handled.json.message), handled.json.message);
+  strictEqual(calls.length, 1);
+});
+
+test("an issue edit shells out with the given fields and serves the re-read record", async () => {
+  const directory = await withSnapshot(snapshot([workItem(7, "needs-triage")]));
+  const { calls, run } = runStub([{}, ghIssueView({ title: "Retitled", body: "New body." })]);
+  const handled = await handleWorkflowApi({
+    method: "POST",
+    pathname: "/api/workflow/issue/edit",
+    body: JSON.stringify({ issueId: "GH-7", title: "Retitled", body: "New body.", confirm: true }),
+    appDirectory: directory,
+    hostRoot: HOST_ROOT,
+    run,
+  });
+  strictEqual(handled.status, 200);
+  deepStrictEqual(calls[0], {
+    command: "gh",
+    args: ["issue", "edit", "7", "--repo", REPO, "--title", "Retitled", "--body", "New body."],
+    cwd: HOST_ROOT,
+  });
+  strictEqual(calls[1].args[0], "issue", "expected the read-back after the write");
+  strictEqual(handled.json.message, "GH-7 updated.");
+  strictEqual(handled.json.issueId, "GH-7");
+  strictEqual(handled.json.state.workItems[0].title, "Retitled");
+});
+
+test("an edit that changes only the title passes no --body", async () => {
+  const directory = await withSnapshot(snapshot([workItem(7)]));
+  const { calls, run } = runStub([{}, ghIssueView({ title: "Retitled" })]);
+  const handled = await handleWorkflowApi({
+    method: "POST",
+    pathname: "/api/workflow/issue/edit",
+    body: JSON.stringify({ issueId: "GH-7", title: "Retitled", confirm: true }),
+    appDirectory: directory,
+    hostRoot: HOST_ROOT,
+    run,
+  });
+  strictEqual(handled.status, 200);
+  ok(!calls[0].args.includes("--body"), `unexpected --body in ${calls[0].args}`);
+});
+
+test("an edit without confirmation is rejected without shelling out", async () => {
+  const directory = await withSnapshot(snapshot([workItem(7)]));
+  const { calls, run } = runStub();
+  const handled = await handleWorkflowApi({
+    method: "POST",
+    pathname: "/api/workflow/issue/edit",
+    body: JSON.stringify({ issueId: "GH-7", title: "Retitled", body: "New body." }),
+    appDirectory: directory,
+    hostRoot: HOST_ROOT,
+    run,
+  });
+  strictEqual(handled.status, 422);
+  ok(/confirm/i.test(handled.json.message), handled.json.message);
+  strictEqual(calls.length, 0);
+});
+
+test("an edit with nothing to change is rejected without shelling out", async () => {
+  const directory = await withSnapshot(snapshot([workItem(7)]));
+  const { calls, run } = runStub();
+  const handled = await handleWorkflowApi({
+    method: "POST",
+    pathname: "/api/workflow/issue/edit",
+    body: JSON.stringify({ issueId: "GH-7", confirm: true }),
+    appDirectory: directory,
+    hostRoot: HOST_ROOT,
+    run,
+  });
+  strictEqual(handled.status, 400);
+  ok(/title or a body/i.test(handled.json.message), handled.json.message);
+  strictEqual(calls.length, 0);
+});
+
+test("an edit whose read-back fails surfaces the tool's message with a 502", async () => {
+  const directory = await withSnapshot(snapshot([workItem(7)]));
+  const { calls, run } = runStub([{}, "read-back blew up"]);
+  const handled = await handleWorkflowApi({
+    method: "POST",
+    pathname: "/api/workflow/issue/edit",
+    body: JSON.stringify({ issueId: "GH-7", title: "Retitled", confirm: true }),
+    appDirectory: directory,
+    hostRoot: HOST_ROOT,
+    run,
+  });
+  strictEqual(handled.status, 502);
+  ok(/GH-7/.test(handled.json.message), handled.json.message);
+  strictEqual(calls.length, 2);
+});
+
+test("an issue create shells out, reads the new issue back, and upserts it", async () => {
+  const directory = await withSnapshot(snapshot([]));
+  const { calls, run } = runStub([
+    { stdout: `https://github.com/${REPO}/issues/99\n` },
+    ghIssueView({ number: 99, title: "Fresh capture", body: "The body." }),
+  ]);
+  const handled = await handleWorkflowApi({
+    method: "POST",
+    pathname: "/api/workflow/issue/create",
+    body: JSON.stringify({ title: "Fresh capture", body: "The body." }),
+    appDirectory: directory,
+    hostRoot: HOST_ROOT,
+    run,
+  });
+  strictEqual(handled.status, 200);
+  deepStrictEqual(calls[0], {
+    command: "gh",
+    args: ["issue", "create", "--repo", REPO, "--title", "Fresh capture", "--body", "The body."],
+    cwd: HOST_ROOT,
+  });
+  strictEqual(calls[1].args[0], "issue", "expected the read-back after the create");
+  strictEqual(handled.json.message, "GH-99 created.");
+  strictEqual(handled.json.issueId, "GH-99");
+  deepStrictEqual(
+    handled.json.state.workItems.map((item) => item.id),
+    ["GH-99"],
+  );
+});
+
+test("a title-only create passes no --body", async () => {
+  const directory = await withSnapshot(snapshot([]));
+  const { calls, run } = runStub([
+    { stdout: `https://github.com/${REPO}/issues/99\n` },
+    ghIssueView({ number: 99, title: "Fresh capture" }),
+  ]);
+  const handled = await handleWorkflowApi({
+    method: "POST",
+    pathname: "/api/workflow/issue/create",
+    body: JSON.stringify({ title: "Fresh capture" }),
+    appDirectory: directory,
+    hostRoot: HOST_ROOT,
+    run,
+  });
+  strictEqual(handled.status, 200);
+  ok(!calls[0].args.includes("--body"), `unexpected --body in ${calls[0].args}`);
+});
+
+test("a create whose stdout names no issue url fails with a 502", async () => {
+  const directory = await withSnapshot(snapshot([]));
+  const { calls, run } = runStub([{ stdout: "something went wrong\n" }]);
+  const handled = await handleWorkflowApi({
+    method: "POST",
+    pathname: "/api/workflow/issue/create",
+    body: JSON.stringify({ title: "Fresh capture" }),
+    appDirectory: directory,
+    hostRoot: HOST_ROOT,
+    run,
+  });
+  strictEqual(handled.status, 502);
+  ok(/url/i.test(handled.json.message), handled.json.message);
+  strictEqual(calls.length, 1);
+});
+
+test("request bodies that fail the issue-action schemas are rejected naming the path", async () => {
+  const directory = await withSnapshot(snapshot([workItem(7)]));
+  const cases = [
+    ["/api/workflow/issue/comment", { issueId: "GH-7", body: "hi", force: true }, /force/],
+    ["/api/workflow/issue/comment", { issueId: "GH-7" }, /body/],
+    ["/api/workflow/issue/edit", { issueId: "GH-7", title: 4, confirm: true }, /title/],
+    [
+      "/api/workflow/issue/edit",
+      { issueId: "BQ-12", title: "x", confirm: true },
+      /tracker issue id/,
+    ],
+    ["/api/workflow/issue/create", { title: "x", labels: ["bug"] }, /labels/],
+    ["/api/workflow/issue/create", { body: "no title" }, /title/],
+    ["/api/workflow/issue/edit", "{not json", /json/i],
+  ];
+  for (const [pathname, body, pattern] of cases) {
+    const { run } = runStub();
+    const handled = await handleWorkflowApi({
+      method: "POST",
+      pathname,
+      body: typeof body === "string" ? body : JSON.stringify(body),
+      appDirectory: directory,
+      hostRoot: HOST_ROOT,
+      run,
+    });
+    strictEqual(handled.status, 400, `${pathname}: ${JSON.stringify(body)}`);
+    ok(pattern.test(handled.json.message), `expected ${handled.json.message} to match ${pattern}`);
+  }
 });

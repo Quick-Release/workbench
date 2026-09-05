@@ -133,6 +133,44 @@ export const TriageMoveResultSchema = Schema.Struct({
   state: WorkflowStatePayloadSchema,
 });
 
+// The issue actions (ticket #60): comment and create are additive, edit
+// overwrites — its `confirm` flag is the deliberate beat, enforced at the
+// seam, before a write replaces the issue's title or body.
+export const IssueEditRequestSchema = Schema.Struct({
+  issueId: Schema.String,
+  title: Schema.optional(Schema.String),
+  body: Schema.optional(Schema.String),
+  confirm: Schema.optional(Schema.Boolean),
+});
+
+export const IssueEditResultSchema = Schema.Struct({
+  message: Schema.String,
+  issueId: Schema.String,
+  state: WorkflowStatePayloadSchema,
+});
+
+export const IssueCommentRequestSchema = Schema.Struct({
+  issueId: Schema.String,
+  body: Schema.String,
+});
+
+export const IssueCommentResultSchema = Schema.Struct({
+  message: Schema.String,
+  issueId: Schema.String,
+  commentUrl: Schema.String,
+});
+
+export const IssueCreateRequestSchema = Schema.Struct({
+  title: Schema.String,
+  body: Schema.optional(Schema.String),
+});
+
+export const IssueCreateResultSchema = Schema.Struct({
+  message: Schema.String,
+  issueId: Schema.String,
+  state: WorkflowStatePayloadSchema,
+});
+
 export const PlanRecordSchema = Schema.Struct({
   id: Schema.String,
   title: Schema.String,
@@ -316,5 +354,29 @@ export const parseTriageMoveRequest = Schema.decodeUnknownSync(TriageMoveRequest
 });
 
 export const parseTriageMoveResult = Schema.decodeUnknownSync(TriageMoveResultSchema, {
+  onExcessProperty: "error",
+});
+
+export const parseIssueEditRequest = Schema.decodeUnknownSync(IssueEditRequestSchema, {
+  onExcessProperty: "error",
+});
+
+export const parseIssueEditResult = Schema.decodeUnknownSync(IssueEditResultSchema, {
+  onExcessProperty: "error",
+});
+
+export const parseIssueCommentRequest = Schema.decodeUnknownSync(IssueCommentRequestSchema, {
+  onExcessProperty: "error",
+});
+
+export const parseIssueCommentResult = Schema.decodeUnknownSync(IssueCommentResultSchema, {
+  onExcessProperty: "error",
+});
+
+export const parseIssueCreateRequest = Schema.decodeUnknownSync(IssueCreateRequestSchema, {
+  onExcessProperty: "error",
+});
+
+export const parseIssueCreateResult = Schema.decodeUnknownSync(IssueCreateResultSchema, {
   onExcessProperty: "error",
 });

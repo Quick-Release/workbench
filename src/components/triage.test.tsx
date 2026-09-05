@@ -49,6 +49,8 @@ const renderPage = (overrides: Partial<Parameters<typeof TriagePage>[0]> = {}) =
       lens="none"
       onLensChange={() => {}}
       onMove={() => {}}
+      onOpenIssue={() => {}}
+      onNewIssue={() => {}}
       pendingId={null}
       message={null}
       {...overrides}
@@ -96,6 +98,8 @@ describe("triage view lanes", () => {
         lens="none"
         onLensChange={() => {}}
         onMove={() => {}}
+        onOpenIssue={() => {}}
+        onNewIssue={() => {}}
         pendingId={null}
         message={null}
       />,
@@ -113,6 +117,8 @@ describe("triage view lanes", () => {
         lens="none"
         onLensChange={() => {}}
         onMove={() => {}}
+        onOpenIssue={() => {}}
+        onNewIssue={() => {}}
         pendingId={null}
         message={null}
       />,
@@ -134,6 +140,8 @@ describe("the wontfix lens", () => {
         lens="none"
         onLensChange={() => {}}
         onMove={() => {}}
+        onOpenIssue={() => {}}
+        onNewIssue={() => {}}
         pendingId={null}
         message={null}
       />,
@@ -152,6 +160,8 @@ describe("the wontfix lens", () => {
         lens="wontfix"
         onLensChange={() => {}}
         onMove={() => {}}
+        onOpenIssue={() => {}}
+        onNewIssue={() => {}}
         pendingId={null}
         message={null}
       />,
@@ -174,6 +184,7 @@ describe("triage move affordances", () => {
         onMove={() => {}}
         onConfirm={() => {}}
         onCancel={() => {}}
+        onOpenIssue={() => {}}
       />,
     );
     expect(html).toContain('data-slot="native-select"');
@@ -192,6 +203,7 @@ describe("triage move affordances", () => {
         onMove={() => {}}
         onConfirm={() => {}}
         onCancel={() => {}}
+        onOpenIssue={() => {}}
       />,
     );
     expect(withoutComments(confirming)).toContain("Refuse GH-11?");
@@ -207,6 +219,7 @@ describe("triage move affordances", () => {
         onMove={() => {}}
         onConfirm={() => {}}
         onCancel={() => {}}
+        onOpenIssue={() => {}}
       />,
     );
     expect(withoutComments(idle)).not.toContain("Refuse GH-11?");
@@ -223,6 +236,7 @@ describe("triage move affordances", () => {
         onMove={() => {}}
         onConfirm={() => {}}
         onCancel={() => {}}
+        onOpenIssue={() => {}}
       />,
     );
     expect(html).toContain("<code");
@@ -241,6 +255,7 @@ describe("triage move affordances", () => {
         onMove={() => {}}
         onConfirm={() => {}}
         onCancel={() => {}}
+        onOpenIssue={() => {}}
       />,
     );
     expect(html).toContain("Refusal is terminal");
@@ -258,6 +273,7 @@ describe("triage move affordances", () => {
         onMove={() => {}}
         onConfirm={() => {}}
         onCancel={() => {}}
+        onOpenIssue={() => {}}
       />,
     );
     expect(html).toContain("Moving");
@@ -268,5 +284,20 @@ describe("triage page feedback", () => {
   it("renders the last move message", () => {
     const html = renderPage({ message: "GH-8 moved to ready-for-agent." });
     expect(html).toContain("GH-8 moved to ready-for-agent.");
+  });
+});
+
+describe("the panel's triage entries", () => {
+  it("opens the detail panel from a row's id", () => {
+    const html = renderPage();
+    // Five of the six fixtures render a lane row — the map child belongs to
+    // no lane here.
+    expect(html.match(/data-slot="issue-link"/g)?.length).toBe(5);
+    expect(html).not.toContain('data-slot="issue-detail-panel"');
+  });
+
+  it("offers the new-issue entry in the header", () => {
+    const html = renderPage();
+    expect(html).toContain("New issue");
   });
 });

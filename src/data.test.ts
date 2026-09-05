@@ -12,6 +12,12 @@ import {
   parseArtifactRecord,
   parseBlockerEdgeRecord,
   parseDecisionRecord,
+  parseIssueCommentRequest,
+  parseIssueCommentResult,
+  parseIssueCreateRequest,
+  parseIssueCreateResult,
+  parseIssueEditRequest,
+  parseIssueEditResult,
   parseOverviewData,
   parseTicketRecord,
   parseTriageMoveRequest,
@@ -631,5 +637,80 @@ describe("triage move result boundary", () => {
   it("rejects a result whose state fails the payload schema", () => {
     const drifted: unknown = { ...result, state: { ...result.state, meta: {} } };
     expect(() => parseTriageMoveResult(drifted)).toThrow(/snapshot/);
+  });
+});
+
+describe("issue action request boundaries", () => {
+  it("accepts an edit with its fields and confirmation", () => {
+    expect(
+      parseIssueEditRequest({ issueId: "GH-60", title: "T", body: "B", confirm: true }),
+    ).toEqual({ issueId: "GH-60", title: "T", body: "B", confirm: true });
+  });
+
+  it("accepts an edit that names only the fields being written", () => {
+    expect(parseIssueEditRequest({ issueId: "GH-60", title: "T" })).toEqual({
+      issueId: "GH-60",
+      title: "T",
+    });
+    expect(parseIssueEditRequest({ issueId: "GH-60" })).toEqual({ issueId: "GH-60" });
+  });
+
+  it("rejects an edit with an excess property", () => {
+    expect(() => parseIssueEditRequest({ issueId: "GH-60", state: "open" })).toThrow(/state/);
+  });
+
+  it("accepts a comment request and rejects a drifted one", () => {
+    expect(parseIssueCommentRequest({ issueId: "GH-60", body: "Settled." })).toEqual({
+      issueId: "GH-60",
+      body: "Settled.",
+    });
+    expect(() => parseIssueCommentRequest({ issueId: 60, body: "Settled." })).toThrow(/issueId/);
+    expect(() => parseIssueCommentRequest({ issueId: "GH-60", body: "hi", undo: true })).toThrow(
+      /undo/,
+    );
+  });
+
+  it("accepts a create request without a body and rejects a drifted one", () => {
+    expect(parseIssueCreateRequest({ title: "Fresh capture" })).toEqual({
+      title: "Fresh capture",
+    });
+    expect(parseIssueCreateRequest({ title: "Fresh capture", body: "The body." })).toEqual({
+      title: "Fresh capture",
+      body: "The body.",
+    });
+    expect(() => parseIssueCreateRequest({ body: "no title" })).toThrow(/title/);
+    expect(() => parseIssueCreateRequest({ title: "x", labels: ["bug"] })).toThrow(/labels/);
+  });
+});
+
+describe("issue action result boundaries", () => {
+  const state = {
+    workItems: [],
+    maps: [],
+    blockerEdges: [],
+    meta: { snapshot: "2026-09-05T12:00:00+01:00", repo: "Quick-Release/workbench" },
+  };
+
+  it("accepts an edit result carrying the updated state and rejects drift", () => {
+    const result = { message: "GH-60 updated.", issueId: "GH-60", state };
+    expect(parseIssueEditResult(result)).toEqual(result);
+    expect(() => parseIssueEditResult({ ...result, extra: 1 })).toThrow(/extra/);
+  });
+
+  it("accepts a comment result with the comment url and rejects drift", () => {
+    const result = {
+      message: "Commented on GH-60.",
+      issueId: "GH-60",
+      commentUrl: "https://github.com/Quick-Release/workbench/issues/60#issuecomment-1",
+    };
+    expect(parseIssueCommentResult(result)).toEqual(result);
+    expect(() => parseIssueCommentResult({ ...result, commentId: 1 })).toThrow(/commentId/);
+  });
+
+  it("accepts a create result carrying the new issue and rejects drift", () => {
+    const result = { message: "GH-99 created.", issueId: "GH-99", state };
+    expect(parseIssueCreateResult(result)).toEqual(result);
+    const drifted: unknown = { ...result, state: { ...state, meta: {} } };
+    expect(() => parseIssueCreateResult(drifted)).toThrow(/snapshot/);
   });
 });

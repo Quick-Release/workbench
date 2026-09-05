@@ -133,6 +133,44 @@ export type TriageMoveResult = {
   state: WorkflowStatePayload;
 };
 
+// The issue actions' contracts (ticket #60, ADR 0005 phase-1): comment is
+// additive and fires directly; edit overwrites the issue, so it moves only
+// with `confirm: true` — the dashboard's deliberate beat before overwriting.
+export type IssueEditRequest = {
+  issueId: string;
+  title?: string;
+  body?: string;
+  confirm?: boolean;
+};
+
+export type IssueEditResult = {
+  message: string;
+  issueId: string;
+  state: WorkflowStatePayload;
+};
+
+export type IssueCommentRequest = {
+  issueId: string;
+  body: string;
+};
+
+export type IssueCommentResult = {
+  message: string;
+  issueId: string;
+  commentUrl: string;
+};
+
+export type IssueCreateRequest = {
+  title: string;
+  body?: string;
+};
+
+export type IssueCreateResult = {
+  message: string;
+  issueId: string;
+  state: WorkflowStatePayload;
+};
+
 // ADR 0009: decisions collect at sync from exactly three sources — `adr`
 // (docs/adr files), `resolution` (the closing comment on a closed decision
 // ticket), and `spec` (one bundle per spec issue's Implementation-Decisions
