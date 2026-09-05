@@ -2,6 +2,8 @@
 
 Status: accepted
 
+Work item: GH-46
+
 Ticket #46 asked how a tracker issue declares workflow phase and category/kind, and how the eight `TicketStatus` values, the five triage roles, and the workflow phases unify. The decision: namespaced labels, written by the skill that makes each move — `workflow:<phase>` for phase (exactly one per issue; **absent means pre-flow**: no flow skill has touched the work), the existing `wayfinder:*` labels for decision-ticket kind, the default `bug`/`enhancement` labels for category (implementation-bound issues only), and a standalone `deferred` parking label orthogonal to both machines. Triage state and workflow phase stay orthogonal — one vocabulary cannot represent an issue that is simultaneously specced and ready-for-agent, which is exactly the conflation `normalizeStatus` already suffers. `blocked` is never encoded: it is computed from blocker edges (#47). The eight-value `TicketStatus` retires as stored state (`complete`→shipped, `in-progress`→implementing, `ready`→ready-for-agent, `gated`→ready-for-human, `needs-development`/`planned`→ticketed, `blocked`→computed, `deferred`→the `deferred` label); display state derives from phase + triage + computed-blocked. The canonical vocabulary home is `docs/agents/workflow-labels.md`, parsed by the sync script, so humans, skills, and dashboard share one source. Decision tickets (map children) carry no phase label — their phase derives from type plus open/closed/claimed state; the map itself carries phase like any issue.
 
 ## Considered options

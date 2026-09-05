@@ -2,7 +2,10 @@ import { Schema } from "effect";
 
 import type { OverviewData } from "./types";
 import {
+  artifactKinds,
   blockerEdgeSources,
+  decisionSources,
+  decisionStatuses,
   serviceStatuses,
   ticketKinds,
   ticketStatuses,
@@ -64,6 +67,36 @@ export const WorkItemRecordSchema = Schema.Struct({
   category: TrackerCategorySchema,
   kind: WayfinderKindSchema,
   summary: Schema.String,
+});
+
+// ADR 0009: one decision record per source conclusion — `statement` carries
+// the full resolution comment for resolution records and is null elsewhere;
+// `status`/`supersedes`/`decidedAt` are null wherever their source doesn't
+// declare them.
+export const DecisionSourceSchema = Schema.Literals(decisionSources);
+
+export const DecisionStatusSchema = Schema.NullOr(Schema.Literals(decisionStatuses));
+
+export const DecisionRecordSchema = Schema.Struct({
+  id: Schema.String,
+  source: DecisionSourceSchema,
+  workItemId: Schema.NullOr(Schema.String),
+  title: Schema.String,
+  statement: Schema.NullOr(Schema.String),
+  status: DecisionStatusSchema,
+  supersedes: Schema.NullOr(Schema.String),
+  decidedAt: Schema.NullOr(Schema.String),
+  sourceRef: Schema.String,
+});
+
+export const ArtifactKindSchema = Schema.Literals(artifactKinds);
+
+export const ArtifactRecordSchema = Schema.Struct({
+  id: Schema.String,
+  kind: ArtifactKindSchema,
+  path: Schema.String,
+  title: Schema.String,
+  workItemId: Schema.NullOr(Schema.String),
 });
 
 export const TrackerMapRecordSchema = Schema.Struct({
@@ -210,6 +243,8 @@ export const OverviewDataSchema = Schema.Struct({
   workItems: Schema.Array(WorkItemRecordSchema),
   maps: Schema.Array(TrackerMapRecordSchema),
   blockerEdges: Schema.Array(BlockerEdgeRecordSchema),
+  decisions: Schema.Array(DecisionRecordSchema),
+  artifacts: Schema.Array(ArtifactRecordSchema),
   sessions: SessionUsageSchema,
 });
 
@@ -234,5 +269,13 @@ export const parseTrackerMapRecord = Schema.decodeUnknownSync(TrackerMapRecordSc
 });
 
 export const parseBlockerEdgeRecord = Schema.decodeUnknownSync(BlockerEdgeRecordSchema, {
+  onExcessProperty: "error",
+});
+
+export const parseDecisionRecord = Schema.decodeUnknownSync(DecisionRecordSchema, {
+  onExcessProperty: "error",
+});
+
+export const parseArtifactRecord = Schema.decodeUnknownSync(ArtifactRecordSchema, {
   onExcessProperty: "error",
 });

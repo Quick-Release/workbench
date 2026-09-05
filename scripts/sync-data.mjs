@@ -9,6 +9,11 @@ import {
 } from "./sessions.mjs";
 import { demoSourceRoot, resolveSourceRoot } from "./source-root.mjs";
 import { lineEdgesForTicketFile, mergeBlockerEdges } from "./tracker/edges.mjs";
+import {
+  collectAdrDecisions,
+  collectResearchArtifacts,
+  sortDecisions,
+} from "./tracker/decisions.mjs";
 import { collectTrackerState } from "./tracker/index.mjs";
 import { readdir, readFile, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, join, relative, resolve } from "node:path";
@@ -463,6 +468,20 @@ const main = async () => {
     vocabularyPath: join(rootDirectory, "docs", "agents", "workflow-labels.md"),
   });
 
+  // ADR 0009: decisions and artifacts collect at sync. The tracker-sourced
+  // half (resolutions, spec bundles) rides collectTrackerState; the two file
+  // walks are local conventions that fail soft to empty arrays on host repos
+  // lacking them.
+  const adrCollection = await collectAdrDecisions({
+    directory: join(docsDirectory, "adr"),
+  });
+  const researchCollection = await collectResearchArtifacts({
+    directory: join(docsDirectory, "research"),
+    rootDirectory,
+  });
+  const decisions = sortDecisions([...tracker.decisions, ...adrCollection.decisions]);
+  const artifacts = researchCollection.artifacts;
+
   const planFiles = (await walk(plansDirectory)).filter((path) => path.endsWith(".md"));
   const planTicketFiles = planFiles.filter((path) => relativePath(path).includes("/tickets/"));
   const genericTickets = [];
@@ -528,7 +547,9 @@ const main = async () => {
   // Tracker-side hygiene re-reports over the combined list (cross-source
   // cycles and dangling refs now resolved against ledger ids too); the
   // channel prints each distinct message once.
-  const trackerWarnings = [...new Set([...tracker.warnings, ...blockerEdges.warnings])];
+  const trackerWarnings = [
+    ...new Set([...tracker.warnings, ...blockerEdges.warnings, ...adrCollection.warnings]),
+  ];
 
   const sources = [];
   sources.push({ label: "Tracker", path: `github / repo ${repo}` });
@@ -549,6 +570,14 @@ const main = async () => {
       label: "Change proposals",
       path: `${relativePath(changesDirectory)}/*/`,
     });
+  }
+  // ADR 0009: the decision sources name themselves even when a host repo
+  // lacks the convention — the empty entry is the honest report.
+  if (decisions.length > 0 || adrCollection.exists) {
+    sources.push({ label: "Decisions", path: `${relativePath(docsDirectory)}/adr` });
+  }
+  if (artifacts.length > 0 || researchCollection.exists) {
+    sources.push({ label: "Research notes", path: `${relativePath(docsDirectory)}/research` });
   }
   for (const service of serviceStatuses) {
     sources.push({
@@ -579,6 +608,8 @@ const main = async () => {
     workItems: tracker.workItems,
     maps: tracker.maps,
     blockerEdges: blockerEdges.edges,
+    decisions,
+    artifacts,
     sessions,
   };
   await writeFile(
@@ -589,7 +620,8 @@ const main = async () => {
     `Synced ${tickets.length} tickets, ${plans.length} plans, ${changes.length} OpenSpec changes, and ${serviceTickets.length} service tasks.` +
       (sessions.enabled
         ? ` Sessions: ${sessions.sessions.length} tracked (${sessions.perModel.length} models).`
-        : " Sessions sync disabled."),
+        : " Sessions sync disabled.") +
+      ` Decisions: ${decisions.length} (${artifacts.length} artifacts).`,
   );
   if (trackerWarnings.length > 0) {
     console.log(`Tracker warnings (${trackerWarnings.length}):`);

@@ -3,6 +3,8 @@
 **Date:** 2026-09-04
 **Sources:** primary only — the local ZCode CLI sqlite database itself, inspected on this date via `node:sqlite` (`DatabaseSync`, opened `readOnly`) against a **temporary copy** of `db.sqlite` + its `-wal`/`-shm` siblings (same method as `scripts/sessions.mjs:54-60`; the live WAL database was never opened or written). Evidence is schema introspection (`sqlite_master`, `PRAGMA table_info`, `PRAGMA index_list`), row counts, and distinct enum-ish values (`tool_name`, `task_type`, `status`, `query_source`, `session_entry.type`, `title_source`, `finish_reason`) plus metadata columns only (titles are included, as they already enter the repo's snapshot). **No prompt or response content was read or quoted; session ids are redacted to short prefixes.** Companion to `docs/research/agent-session-usage-page.md` (2026-09-03), which this doc supersedes on row counts — the database was recreated between the two dates (`schema_migration` now holds 18 migrations, `session.version` = 0.16.5) and gained columns (`session.time_compacting`, `session.time_archived`, `model_usage.task_type`, `model_usage.mode`, `model_usage.logical_request_id`).
 
+Work item: GH-42
+
 ## Question
 
 What can the session database attribute per session that a dashboard's session / context-handoff views need: skill invocations, `/clear` and `/compact` boundaries, subagent parent/child trees, task types, and anything else useful for phase boundaries or context hygiene? (Ticket #42.)

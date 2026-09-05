@@ -2,6 +2,8 @@
 
 Status: accepted
 
+Work item: GH-7
+
 ## Context
 
 Re-skinning the workbench app shell to the shadcn-ui-kit-dashboard layout (issue #7) forced three decisions the prior research note (`docs/research/app-shell-shadcn-dashboard.md`) flagged as open, one of which overturns a choice recorded in `docs/research/shadcn-adoption.md` §7 ("`--radius: 0rem` — the design is deliberately sharp").

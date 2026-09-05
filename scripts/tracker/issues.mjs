@@ -124,4 +124,50 @@ export const fetchIssue = async ({ repo, token, apiBase, issueNumber, fetchImpl 
   }
 };
 
+// ADR 0009: the closing resolution comment of a closed decision ticket, read
+// only for map children the membership enumeration already named — never a
+// sweep. Same paged walk and degradation as the issue lists.
+export const fetchIssueComments = async ({
+  repo,
+  token,
+  apiBase,
+  issueNumber,
+  fetchImpl,
+  maxPages,
+}) => {
+  const comments = [];
+  const warnings = [];
+  for (let page = 1, hasMore = true; hasMore && page <= maxPages; page += 1) {
+    let payload;
+    try {
+      payload = await requestJson(
+        fetchImpl,
+        issuesUrl(apiBase, repo, `/${issueNumber}/comments`, { per_page: PER_PAGE, page }),
+        { headers: headers(token) },
+        "tracker",
+      );
+    } catch (error) {
+      warnings.push(
+        comments.length === 0
+          ? `GH-${issueNumber} comments unavailable (${error instanceof Error ? error.message : "read failed"}); no resolution collected`
+          : `GH-${issueNumber} comments unavailable (${error instanceof Error ? error.message : "read failed"}); collected the first ${comments.length}`,
+      );
+      return { comments, warnings };
+    }
+    const returned = Array.isArray(payload)
+      ? payload.filter(
+          (entry) => entry && typeof entry === "object" && typeof entry.body === "string",
+        )
+      : [];
+    comments.push(...returned);
+    hasMore = returned.length === PER_PAGE;
+    if (!hasMore) break;
+    if (page === maxPages)
+      warnings.push(
+        `GH-${issueNumber} comments stopped at the ${maxPages}-page cap; showing the first ${comments.length}`,
+      );
+  }
+  return { comments, warnings };
+};
+
 export const apiBaseFrom = (apiBaseUrl) => (httpUrl(apiBaseUrl) || GITHUB_API).replace(/\/+$/, "");

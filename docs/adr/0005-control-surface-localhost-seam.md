@@ -2,6 +2,8 @@
 
 Status: accepted
 
+Work item: GH-44
+
 Ticket #44 asked whether the new dashboard views stay strictly visual. The decision reverses that lean: the new views are a control surface — they render the host repo's planning state live and start actions from the UI. The rationale is architecture purity, stated as one invariant: the browser talks only to the localhost `/api/*` **execution seam**; behind the seam the server shells out to the tools a Developer would run by hand (`gh`, `pnpm sync`, the skills CLI); everything crossing the seam in either direction passes the Effect Schema boundary. There is no separate setup-action category — the existing skills-install and tools-setup endpoints are the first members of the one seam, and new views reuse it.
 
 ## Considered options
