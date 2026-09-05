@@ -91,33 +91,45 @@ export const adrDecisionFromText = ({ filename, text, sourceRef }) => {
   };
 };
 
-// The ADR walk: every top-level `NNNN-slug.md`, sorted by id, never a
-// recursive sweep. A missing directory fails soft — `exists: false` so sync
-// can report the convention it did not find.
-export const collectAdrDecisions = async ({ directory, readdir, readFile }) => {
+// Shared walk skeleton for the two local conventions: every top-level file
+// matching `pattern`, sorted, read through `readText`; a missing directory
+// fails soft with `exists: false` so sync can report the convention it did
+// not find. Unreadable files are skipped with a warning.
+const walkTopLevelFiles = async ({ directory, pattern, what }, readdir, readFile) => {
   const readDir = readdir ?? (await import("node:fs/promises")).readdir;
   const readText = readFile ?? (await import("node:fs/promises")).readFile;
   let names = [];
-  let present = true;
+  let exists = true;
   try {
     names = (await readDir(directory, { withFileTypes: true }))
-      .filter((entry) => entry.isFile() && ADR_FILENAME.test(entry.name))
+      .filter((entry) => entry.isFile() && pattern.test(entry.name))
       .map((entry) => entry.name)
       .sort();
   } catch {
-    present = false;
+    exists = false;
   }
-
-  const decisions = [];
+  const files = [];
   const warnings = [];
   for (const name of names) {
-    let text = "";
     try {
-      text = await readText(joinPath(directory, name));
+      files.push({ name, text: await readText(joinPath(directory, name)) });
     } catch {
-      warnings.push(`ADR-${name.match(ADR_FILENAME)?.[1] ?? name}: file unreadable; skipped`);
-      continue;
+      warnings.push(`${what} ${name}: file unreadable; skipped`);
     }
+  }
+  return { files, warnings, exists };
+};
+
+// The ADR walk: every top-level `NNNN-slug.md`, never a recursive sweep.
+export const collectAdrDecisions = async ({ directory, readdir, readFile }) => {
+  const { files, warnings, exists } = await walkTopLevelFiles(
+    { directory, pattern: ADR_FILENAME, what: "ADR" },
+    readdir,
+    readFile,
+  );
+
+  const decisions = [];
+  for (const { name, text } of files) {
     const parsed = adrDecisionFromText({
       filename: name,
       text,
@@ -126,7 +138,7 @@ export const collectAdrDecisions = async ({ directory, readdir, readFile }) => {
     decisions.push(parsed.record);
     warnings.push(...parsed.warnings);
   }
-  return { decisions: sortDecisions(decisions), warnings, exists: present };
+  return { decisions: sortDecisions(decisions), warnings, exists };
 };
 
 // `spec`: one bundle record per spec issue's Implementation-Decisions
@@ -145,10 +157,17 @@ export const specDecisionFromIssue = (issue) => {
 };
 
 // `resolution`: the closing resolution comment on a closed decision ticket —
-// the last comment under this repo's resolve-then-close convention — carried
-// in full, uncapped, with the comment timestamp as decidedAt.
+// under this repo's resolve-then-close convention the last comment posted at
+// or before the close, so post-close chatter never becomes the statement —
+// carried in full, uncapped, with the comment timestamp as decidedAt.
 export const resolutionDecisionFromIssue = ({ issue, comments }) => {
-  const closing = comments?.length > 0 ? comments[comments.length - 1] : null;
+  const closedAt = issue?.closed_at ? Date.parse(issue.closed_at) : null;
+  const candidates = (comments ?? []).filter((comment) => {
+    if (closedAt === null) return true;
+    const at = comment?.created_at ? Date.parse(comment.created_at) : null;
+    return at === null || at <= closedAt;
+  });
+  const closing = candidates.length > 0 ? candidates[candidates.length - 1] : null;
   if (!closing) return null;
   return decisionRecord({
     id: `GH-${issue.number}`,
@@ -173,19 +192,14 @@ const researchSlug = (filename) =>
     .replace(/^-+|-+$/g, "");
 
 // Artifacts are research notes only: H1 as title, optional `Work item:` linkage
-// that is silent when absent, path relative to the repo root.
-export const artifactFromResearchFile = ({ filename, text, rootDirectory }) => {
-  const relative = (path) => {
-    const parts = path.split(/[\\/]/);
-    const marker = parts.lastIndexOf("docs");
-    return marker === -1 ? path : parts.slice(marker).join("/");
-  };
+// that is silent when absent, `path` the caller's repo-relative ref.
+export const artifactFromResearchFile = ({ path, filename, text }) => {
   const rawWorkItem = declaredLine(text, "Work item");
   return {
     record: {
       id: `RN-${researchSlug(filename)}`,
       kind: "research-note",
-      path: relative(joinPath(rootDirectory ?? "", "docs/research", filename)),
+      path,
       title: titleFrom(text),
       workItemId: rawWorkItem ? workItemRefFrom(rawWorkItem) : null,
     },
@@ -196,30 +210,23 @@ export const artifactFromResearchFile = ({ filename, text, rootDirectory }) => {
 // The research-note walk: every top-level markdown file under docs/research,
 // sorted by filename. Missing directory fails soft like the ADR walk.
 export const collectResearchArtifacts = async ({ directory, rootDirectory, readdir, readFile }) => {
-  const readDir = readdir ?? (await import("node:fs/promises")).readdir;
-  const readText = readFile ?? (await import("node:fs/promises")).readFile;
-  let names = [];
-  let present = true;
-  try {
-    names = (await readDir(directory, { withFileTypes: true }))
-      .filter((entry) => entry.isFile() && RESEARCH_FILENAME.test(entry.name))
-      .map((entry) => entry.name)
-      .sort();
-  } catch {
-    present = false;
-  }
+  const { files, exists } = await walkTopLevelFiles(
+    { directory, pattern: RESEARCH_FILENAME, what: "research note" },
+    readdir,
+    readFile,
+  );
+  // Repo-relative base of the walked directory, so the record's path is
+  // computed from the directory actually read, never assumed.
+  const base =
+    rootDirectory && directory.startsWith(rootDirectory)
+      ? directory.slice(rootDirectory.length).replace(/^[\\/]+/, "")
+      : directory;
 
-  const artifacts = [];
-  for (const name of names) {
-    let text = "";
-    try {
-      text = await readText(joinPath(directory, name));
-    } catch {
-      continue;
-    }
-    artifacts.push(artifactFromResearchFile({ filename: name, text, rootDirectory }).record);
-  }
-  return { artifacts, exists: present };
+  const artifacts = files.map(
+    ({ name, text }) =>
+      artifactFromResearchFile({ path: joinPath(base, name), filename: name, text }).record,
+  );
+  return { artifacts, exists };
 };
 
 const numberSuffix = (id) => Number(id.slice(id.lastIndexOf("-") + 1)) || 0;
