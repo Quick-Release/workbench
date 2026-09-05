@@ -9,6 +9,13 @@ import {
 } from "./sessions.mjs";
 import { collectSkillsCatalog } from "./skills-catalog.mjs";
 import { demoSourceRoot, resolveSourceRoot } from "./source-root.mjs";
+import { lineEdgesForTicketFile, mergeBlockerEdges } from "./tracker/edges.mjs";
+import {
+  collectAdrDecisions,
+  collectResearchArtifacts,
+  sortDecisions,
+} from "./tracker/decisions.mjs";
+import { collectTrackerState } from "./tracker/index.mjs";
 import { readdir, readFile, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -246,11 +253,6 @@ const progressFrom = (text) => {
   };
 };
 
-const dependenciesFrom = (text) => {
-  const match = text.match(/^\s*(?:[-*]\s*)?(?:Dependencies|Blocked by|Depends on)\s*:\s*(.+)$/im);
-  return match ? shorten(match[1], 180) : "—";
-};
-
 const humanize = (value) =>
   value
     .split("/")
@@ -302,8 +304,7 @@ const planGroupFrom = (path) => {
   return humanize(parts.slice(plansIndex + 1, ticketsIndex).join("/"));
 };
 
-const recordFromFile = async (path, repositoryUrl, branch, kind = "plan-ticket") => {
-  const text = await readText(path);
+const recordFromFile = (path, text, repositoryUrl, branch, kind = "plan-ticket") => {
   const filename = path.split(/[\\/]/).pop() || "";
   const id = ticketIdFrom(text, filename);
   if (!id) return null;
@@ -319,7 +320,6 @@ const recordFromFile = async (path, repositoryUrl, branch, kind = "plan-ticket")
     statusDetail: rawStatus === "Not explicitly stated" ? "" : rawStatus,
     group,
     lane: sectionParagraph(text, ["Phase", "Milestone", "Lane"]) || "Planning",
-    dependencies: dependenciesFrom(text),
     summary: summaryFrom(text),
     sourcePath: relativePath(path),
     sourceUrl: sourceUrlFor(repositoryUrl, branch, relativePath(path)),
@@ -328,7 +328,7 @@ const recordFromFile = async (path, repositoryUrl, branch, kind = "plan-ticket")
   };
 };
 
-const parseDashboardLedger = async (repositoryUrl, branch) => {
+const parseDashboardLedger = async (repositoryUrl, branch, sourceTexts) => {
   const ledgerPath = join(docsDirectory, "dashboard-plan/status.md");
   const text = await readText(ledgerPath);
   const records = [];
@@ -337,6 +337,8 @@ const parseDashboardLedger = async (repositoryUrl, branch) => {
     const [, id, rawStatus, title, link] = match;
     const sourcePath = resolve(dirname(ledgerPath), (link || "").split("#")[0]);
     const sourceText = await readText(sourcePath);
+    if (sourceText)
+      sourceTexts.push({ id, text: sourceText, sourcePath: relativePath(sourcePath) });
     const status = canonicalStatus[rawStatus] || normalizeStatus(rawStatus);
     records.push({
       id,
@@ -346,7 +348,6 @@ const parseDashboardLedger = async (repositoryUrl, branch) => {
       statusDetail: `Canonical ledger: ${rawStatus}`,
       group: "Dashboard",
       lane: sectionParagraph(sourceText, ["Milestone", "Phase", "Lane"]) || "Dashboard backlog",
-      dependencies: dependenciesFrom(sourceText),
       summary: sourceText ? summaryFrom(sourceText) : "No ticket file found.",
       sourcePath: relativePath(sourcePath),
       sourceUrl: sourceUrlFor(repositoryUrl, branch, relativePath(sourcePath)),
@@ -480,6 +481,25 @@ const main = async () => {
       })
     : sessionUsageDisabled();
 
+  const tracker = await collectTrackerState({
+    repo,
+    vocabularyPath: join(rootDirectory, "docs", "agents", "workflow-labels.md"),
+  });
+
+  // ADR 0009: decisions and artifacts collect at sync. The tracker-sourced
+  // half (resolutions, spec bundles) rides collectTrackerState; the two file
+  // walks are local conventions that fail soft to empty arrays on host repos
+  // lacking them.
+  const adrCollection = await collectAdrDecisions({
+    directory: join(docsDirectory, "adr"),
+  });
+  const researchCollection = await collectResearchArtifacts({
+    directory: join(docsDirectory, "research"),
+    rootDirectory,
+  });
+  const decisions = sortDecisions([...tracker.decisions, ...adrCollection.decisions]);
+  const artifacts = researchCollection.artifacts;
+
   const previous = (await previousGeneratedData()) ?? { skills: [] };
   const skillsCatalog = await collectSkillsCatalog({
     rootDirectory,
@@ -489,11 +509,16 @@ const main = async () => {
   const planFiles = (await walk(plansDirectory)).filter((path) => path.endsWith(".md"));
   const planTicketFiles = planFiles.filter((path) => relativePath(path).includes("/tickets/"));
   const genericTickets = [];
+  const ticketFileTexts = [];
   for (const path of planTicketFiles) {
-    const record = await recordFromFile(path, repositoryUrl, branch);
-    if (record) genericTickets.push(record);
+    const text = await readText(path);
+    if (!text) continue;
+    const record = recordFromFile(path, text, repositoryUrl, branch);
+    if (!record) continue;
+    genericTickets.push(record);
+    ticketFileTexts.push({ id: record.id, text, sourcePath: relativePath(path) });
   }
-  const dashboardTickets = await parseDashboardLedger(repositoryUrl, branch);
+  const dashboardTickets = await parseDashboardLedger(repositoryUrl, branch, ticketFileTexts);
   const ticketMap = new Map(genericTickets.map((ticket) => [ticket.id, ticket]));
   for (const ticket of dashboardTickets) ticketMap.set(ticket.id, ticket);
   for (const ticket of serviceTickets) ticketMap.set(ticket.id, ticket);
@@ -527,7 +552,31 @@ const main = async () => {
     .sort();
   const changes = await parseSpecChanges(changeDirectories, repositoryUrl, branch);
 
+  // ADR 0008: one flat top-level blockerEdges list. Repo-level native
+  // precedence was already applied tracker-side to the two tracker syntaxes;
+  // local ticket-file lines are a separate declaring surface it never gates
+  // (a file's own id is never a tracker id), so the final merge runs with
+  // native precedence off and unions the two.
+  const blockerEdges = mergeBlockerEdges({
+    nativeEdges: tracker.blockerEdges,
+    nativeAvailable: false,
+    lineEdges: ticketFileTexts.flatMap(({ id, text, sourcePath }) =>
+      lineEdgesForTicketFile({ id, text, sourcePath }),
+    ),
+    knownIds: new Set([
+      ...tracker.workItems.map((item) => item.id),
+      ...tickets.map((ticket) => ticket.id),
+    ]),
+  });
+  // Tracker-side hygiene re-reports over the combined list (cross-source
+  // cycles and dangling refs now resolved against ledger ids too); the
+  // channel prints each distinct message once.
+  const trackerWarnings = [
+    ...new Set([...tracker.warnings, ...blockerEdges.warnings, ...adrCollection.warnings]),
+  ];
+
   const sources = [];
+  sources.push({ label: "Tracker", path: `github / repo ${repo}` });
   if (dashboardTickets.length > 0) {
     sources.push({
       label: "Status ledger",
@@ -545,6 +594,14 @@ const main = async () => {
       label: "Change proposals",
       path: `${relativePath(changesDirectory)}/*/`,
     });
+  }
+  // ADR 0009: the decision sources name themselves even when a host repo
+  // lacks the convention — the empty entry is the honest report.
+  if (decisions.length > 0 || adrCollection.exists) {
+    sources.push({ label: "Decisions", path: `${relativePath(docsDirectory)}/adr` });
+  }
+  if (artifacts.length > 0 || researchCollection.exists) {
+    sources.push({ label: "Research notes", path: `${relativePath(docsDirectory)}/research` });
   }
   for (const service of serviceStatuses) {
     sources.push({
@@ -577,6 +634,11 @@ const main = async () => {
     tickets,
     plans,
     changes,
+    workItems: tracker.workItems,
+    maps: tracker.maps,
+    blockerEdges: blockerEdges.edges,
+    decisions,
+    artifacts,
     skills: skillsCatalog.skills,
     skillInstalls: skillsCatalog.installedIds,
     sessions,
@@ -590,8 +652,17 @@ const main = async () => {
       (skillsCatalog.degraded ? " Skills catalog fell back to curated data." : "") +
       (sessions.enabled
         ? ` Sessions: ${sessions.sessions.length} tracked (${sessions.perModel.length} models).`
-        : " Sessions sync disabled."),
+        : " Sessions sync disabled.") +
+      ` Decisions: ${decisions.length} (${artifacts.length} artifacts).`,
   );
+  if (trackerWarnings.length > 0) {
+    console.log(`Tracker warnings (${trackerWarnings.length}):`);
+    for (const warning of trackerWarnings) console.log(`  - ${warning}`);
+  } else {
+    console.log(
+      `Tracker: ${tracker.workItems.length} work items, ${tracker.maps.length} maps, no warnings.`,
+    );
+  }
 };
 
 await main();

@@ -2,6 +2,8 @@
 
 Status: accepted
 
+Work item: GH-45
+
 Ticket #45 asked where Skill and SkillFlowEdge records come from at sync time. The decision splits the two by what actually changes upstream. The **Catalog** (which skills exist, id + category) is fetched from `mattpocock/skills` at sync time: one recursive trees call enumerating `skills/**/SKILL.md`, so category comes from the upstream directory path. **Classification** (flow role, skill flow edges, one-line blurbs, the offline fallback id list) lives in a curated typed module in this repo (`src/data/skill-flow.ts`) that shadows the ask-matt map's prose, edge by edge. The split is forced by the sources: upstream has no structured flow data anywhere, and `SKILL.md` frontmatter carries only `name`/`description`, so no fetch can ever produce edges — while hand-curating the catalog would pin its freshness to workbench releases for data a fetch gets for free. Installed state is never stored as truth: the seam reads disk (lockfile + well-known skill directories) per request, per ADR 0005. The browser always renders the full Catalog — uninstalled entries dimmed with a way to install. Scope is the Matt ecosystem only; `source` on the record keeps multi-source additive, and the multi-repo fog stays fog.
 
 ## Considered options

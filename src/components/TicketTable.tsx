@@ -40,11 +40,6 @@ const ticketColumns = ticketHelper.columns([
     header: "Stream / lane",
     cell: ({ row }) => <TicketStreamCell ticket={row.original} />,
   }),
-  ticketHelper.accessor("dependencies", {
-    id: "dependencies",
-    header: "Dependencies",
-    cell: ({ row }) => <TicketDependenciesCell ticket={row.original} />,
-  }),
   ticketHelper.accessor(
     (ticket) =>
       ticket.progress.total > 0 ? ticket.progress.done / ticket.progress.total : undefined,
@@ -208,10 +203,6 @@ function TicketStreamCell({ ticket }: Readonly<{ ticket: TicketRecord }>) {
       </small>
     </>
   );
-}
-
-function TicketDependenciesCell({ ticket }: Readonly<{ ticket: TicketRecord }>) {
-  return <span className="dependency-text">{ticket.dependencies}</span>;
 }
 
 function TicketProgressCell({ ticket }: Readonly<{ ticket: TicketRecord }>) {

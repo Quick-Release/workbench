@@ -74,11 +74,11 @@ Entities (proposed snapshot records; every entity carries source path/URL for
 traceability):
 
 - **Skill** — `{id, name, category: engineering|productivity, flowRole:
-  main-flow-step | on-ramp | standalone | vocabulary-layer | primitive,
-  description, inputs, outputs, sourcePath, repoUrl, installed}`. Source:
+main-flow-step | on-ramp | standalone | vocabulary-layer | primitive,
+description, inputs, outputs, sourcePath, repoUrl, installed}`. Source:
   installed SKILL.md frontmatter + directory, classified by the Ask Matt map.
 - **SkillFlowEdge** — `{from, to, kind: merges-onto | delegates-to |
-  pairs-with | runs-internally | hands-off-to | next-step}`. Source: the Ask
+pairs-with | runs-internally | hands-off-to | next-step}`. Source: the Ask
   Matt map (`ask-matt/SKILL.md`). Examples: grill-with-docs →prototype
   (hands-off-to, both directions via handoff); triage/wayfinder/
   improve-codebase-architecture → grilling (runs-internally); grill-me +
@@ -87,28 +87,28 @@ traceability):
   codebase-design; wayfinder merges-onto main flow at to-spec.
 - **WorkItem** — one polymorphic record family unifying what `TicketRecord`,
   `PlanRecord`, `SpecChangeRecord`, and GitHub issues represent: `{id, title,
-  triageState, category: bug | enhancement | none, workflowPhase, kind:
-  issue | plan-ticket | ledger-row | openspec-change, progress, assignee,
-  isExternal, source}`.
+triageState, category: bug | enhancement | none, workflowPhase, kind:
+issue | plan-ticket | ledger-row | openspec-change, progress, assignee,
+isExternal, source}`.
 - **BlockerEdge** — `{blockedId, blockerId, source: github-native |
-  markdown-blocked-by | ledger}`. Enables the frontier computation everywhere.
+markdown-blocked-by | ledger}`. Enables the frontier computation everywhere.
 - **Decision** — `{id, title, status: proposed | accepted | superseded, date,
-  origin: adr | map-ticket-resolution | spec-implementation-decision,
-  contextPointers[]}`. Sources: `docs/adr/*`, closed wayfinder tickets'
+origin: adr | map-ticket-resolution | spec-implementation-decision,
+contextPointers[]}`. Sources: `docs/adr/*`, closed wayfinder tickets'
   resolution comments, spec implementation-decision sections.
 - **Artifact** — `{id, kind: spec | ticket | research-note | prototype-branch
-  | handoff-doc | architecture-report | questionnaire | wizard-script,
-  path/url, producedBy: skillId, linksTo: WorkItem | Decision}`.
+| handoff-doc | architecture-report | questionnaire | wizard-script,
+path/url, producedBy: skillId, linksTo: WorkItem | Decision}`.
 - **Session** — `{id, parent, taskType, title, directory, started, usage,
-  phase?, skillsInvoked?}` (fields after `usage` pending research).
+phase?, skillsInvoked?}` (fields after `usage` pending research).
 - **ContextHandoff** — `{fromSession, toSession, mechanism: continue | clear |
-  compact | handoff-doc | background-handoff | subagent, atPhaseBoundary}` —
+compact | handoff-doc | background-handoff | subagent, atPhaseBoundary}` —
   derived from session trees + handoff conventions; mostly fog until research
   lands.
 - **Map** (wayfinder) — `{id, destination, notes, decisionsSoFar[],
-  notYetSpecified[], outOfScope[], tickets: MapTicket[]}`; **MapTicket** —
+notYetSpecified[], outOfScope[], tickets: MapTicket[]}`; **MapTicket** —
   `{id, type: research | prototype | grilling | task, state, claimedBy,
-  blockers[], resolution}`.
+blockers[], resolution}`.
 - **Service** — existing `ExternalServiceStatus` (connected/skipped/error).
 
 Key relationships: WorkItem 1..n BlockerEdge; Skill n..n SkillFlowEdge;
@@ -245,20 +245,20 @@ Frontier (takeable now): the two research tickets, then the unblocked
 grilling decisions. Downstream: prototypes after their inputs are decided,
 the state machine after its inputs, IA last.
 
-| Order | Ticket | Type | Blocked by |
-| ----- | ------ | ---- | ---------- |
-| 1 | What the session database can attribute | research | — |
-| 2 | Graph rendering approach for flow and blocker graphs | research | — |
-| 3 | Confirm the read-only boundary for new views | grilling | — |
-| 4 | Sources of truth for the skills catalog and flow edges | grilling | — |
-| 5 | How the tracker encodes phase and kind | grilling | — |
-| 6 | Structured blocker edges and the frontier | grilling | — |
-| 7 | Live seam: snapshot refresh vs dev-server API | grilling | — |
-| 8 | Decision and artifact modeling | grilling | — |
-| 9 | Prototype: the skill-flow graph | prototype | rendering approach; catalog sources |
-| 10 | Prototype: blocker graph and frontier | prototype | rendering approach; blocker edges |
-| 11 | The workflow state machine and next-action rules | grilling | session research; phase encoding; blocker edges; live seam; decision modeling |
-| 12 | Information architecture for the new views | grilling | state machine; both prototypes |
+| Order | Ticket                                                 | Type      | Blocked by                                                                    |
+| ----- | ------------------------------------------------------ | --------- | ----------------------------------------------------------------------------- |
+| 1     | What the session database can attribute                | research  | —                                                                             |
+| 2     | Graph rendering approach for flow and blocker graphs   | research  | —                                                                             |
+| 3     | Confirm the read-only boundary for new views           | grilling  | —                                                                             |
+| 4     | Sources of truth for the skills catalog and flow edges | grilling  | —                                                                             |
+| 5     | How the tracker encodes phase and kind                 | grilling  | —                                                                             |
+| 6     | Structured blocker edges and the frontier              | grilling  | —                                                                             |
+| 7     | Live seam: snapshot refresh vs dev-server API          | grilling  | —                                                                             |
+| 8     | Decision and artifact modeling                         | grilling  | —                                                                             |
+| 9     | Prototype: the skill-flow graph                        | prototype | rendering approach; catalog sources                                           |
+| 10    | Prototype: blocker graph and frontier                  | prototype | rendering approach; blocker edges                                             |
+| 11    | The workflow state machine and next-action rules       | grilling  | session research; phase encoding; blocker edges; live seam; decision modeling |
+| 12    | Information architecture for the new views             | grilling  | state machine; both prototypes                                                |
 
 Fog (in the map's Not-yet-specified, not ticketed): multi-repo ecosystem scope
 (hangs on catalog sources), skill-invocation attribution (hangs on session

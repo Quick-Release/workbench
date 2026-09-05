@@ -1,5 +1,5 @@
 import { Link, linkOptions, useRouterState } from "@tanstack/react-router";
-import { Activity, GitBranch, ReceiptText, Wrench } from "lucide-react";
+import { Activity, GitBranch, Inbox, ReceiptText, Rocket, ScrollText, Wrench } from "lucide-react";
 import {
   SidebarGroup,
   SidebarGroupContent,
@@ -13,70 +13,97 @@ import {
 // including the required search defaults.
 const overviewLink = linkOptions({
   to: "/",
-  search: { q: "", status: "all", source: "all", stream: "all", view: "all" },
-});
-const flowLink = linkOptions({
-  to: "/flow",
-  search: { favorites: false, skill: "" },
+  search: { q: "", status: "all", source: "all", stream: "all", view: "all", issue: undefined },
 });
 const sessionsLink = linkOptions({
   to: "/sessions",
   search: { subagents: "all" },
 });
 const toolsLink = linkOptions({ to: "/tools" });
+const flowLink = linkOptions({
+  to: "/flow",
+  search: { favorites: false, skill: "" },
+});
+const triageLink = linkOptions({ to: "/triage", search: {} });
+const inFlightLink = linkOptions({ to: "/in-flight" });
+const decisionsLink = linkOptions({ to: "/decisions" });
 
 type NavItem = { title: string; icon: typeof ReceiptText } & (
   | typeof overviewLink
   | typeof flowLink
   | typeof sessionsLink
   | typeof toolsLink
+  | typeof triageLink
+  | typeof inFlightLink
+  | typeof decisionsLink
 );
 
-// Sidebar order per the IA decision (spec #54, ticket #53): Overview ·
-// Workflow (flow, triage, blockers, in-flight, decisions) · Agent sessions ·
-// Tools. The Workflow group grows one destination per landing ticket.
-export const navGroups: Array<{ label: string; items: NavItem[] }> = [
-  { label: "Overview", items: [{ title: "Overview", icon: ReceiptText, ...overviewLink }] },
-  {
-    label: "Workflow",
-    items: [{ title: "Skill flow", icon: GitBranch, ...flowLink }],
-  },
-  {
-    label: "Workspace",
-    items: [
-      { title: "Agent sessions", icon: Activity, ...sessionsLink },
-      { title: "Tools", icon: Wrench, ...toolsLink },
-    ],
-  },
+// Spec #54's sidebar order: Overview, then the Workflow destination group,
+// then Agent sessions and Tools. The Workflow group grows one destination
+// per landing ticket.
+const overviewItems: NavItem[] = [{ title: "Overview", icon: ReceiptText, ...overviewLink }];
+
+const workflowItems: NavItem[] = [
+  { title: "Skill flow", icon: GitBranch, ...flowLink },
+  { title: "Triage", icon: Inbox, ...triageLink },
+  { title: "In flight", icon: Rocket, ...inFlightLink },
+  { title: "Decisions", icon: ScrollText, ...decisionsLink },
 ];
 
-export function NavMain({ groups = navGroups }: { groups?: typeof navGroups }) {
-  const pathname = useRouterState({ select: (state) => state.location.pathname });
+const closingItems: NavItem[] = [
+  { title: "Agent sessions", icon: Activity, ...sessionsLink },
+  { title: "Tools", icon: Wrench, ...toolsLink },
+];
 
+const NavMenu = ({ items }: { items: NavItem[] }) => {
+  const pathname = useRouterState({ select: (state) => state.location.pathname });
+  return (
+    <SidebarMenu>
+      {items.map((item) => {
+        const { title, icon: Icon, ...link } = item;
+        return (
+          <SidebarMenuItem key={link.to}>
+            <SidebarMenuButton asChild isActive={pathname === link.to} tooltip={title}>
+              <Link {...link}>
+                <Icon />
+                <span>{title}</span>
+              </Link>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+        );
+      })}
+    </SidebarMenu>
+  );
+};
+
+export function NavMain({
+  overview = overviewItems,
+  workflow = workflowItems,
+  closing = closingItems,
+}: {
+  overview?: NavItem[];
+  workflow?: NavItem[];
+  closing?: NavItem[];
+}) {
   return (
     <>
-      {groups.map((group) => (
-        <SidebarGroup key={group.label}>
-          <SidebarGroupLabel>{group.label}</SidebarGroupLabel>
-          <SidebarGroupContent>
-            <SidebarMenu>
-              {group.items.map((item) => {
-                const { title, icon: Icon, ...link } = item;
-                return (
-                  <SidebarMenuItem key={link.to}>
-                    <SidebarMenuButton asChild isActive={pathname === link.to} tooltip={title}>
-                      <Link {...link}>
-                        <Icon />
-                        <span>{title}</span>
-                      </Link>
-                    </SidebarMenuButton>
-                  </SidebarMenuItem>
-                );
-              })}
-            </SidebarMenu>
-          </SidebarGroupContent>
-        </SidebarGroup>
-      ))}
+      <SidebarGroup>
+        <SidebarGroupLabel>Workspace</SidebarGroupLabel>
+        <SidebarGroupContent>
+          <NavMenu items={overview} />
+        </SidebarGroupContent>
+      </SidebarGroup>
+      <SidebarGroup>
+        <SidebarGroupLabel>Workflow</SidebarGroupLabel>
+        <SidebarGroupContent>
+          <NavMenu items={workflow} />
+        </SidebarGroupContent>
+      </SidebarGroup>
+      <SidebarGroup>
+        <SidebarGroupContent>
+          <NavMenu items={closing} />
+        </SidebarGroupContent>
+      </SidebarGroup>
     </>
   );
 }

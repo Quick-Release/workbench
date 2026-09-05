@@ -3,6 +3,8 @@
 **Date:** 2026-09-04
 **Sources:** primary only — the local ZCode CLI sqlite database itself, inspected on this date via `node:sqlite` (`DatabaseSync`, opened `readOnly`) against a **temporary copy** of `db.sqlite` + its `-wal`/`-shm` siblings (same method as `scripts/sessions.mjs:54-60`; the live WAL database was never opened or written). Evidence is schema introspection (`sqlite_master`, `PRAGMA table_info`, `PRAGMA index_list`), row counts, and distinct enum-ish values (`tool_name`, `task_type`, `status`, `query_source`, `session_entry.type`, `title_source`, `finish_reason`) plus metadata columns only (titles are included, as they already enter the repo's snapshot). **No prompt or response content was read or quoted; session ids are redacted to short prefixes.** Companion to `docs/research/agent-session-usage-page.md` (2026-09-03), which this doc supersedes on row counts — the database was recreated between the two dates (`schema_migration` now holds 18 migrations, `session.version` = 0.16.5) and gained columns (`session.time_compacting`, `session.time_archived`, `model_usage.task_type`, `model_usage.mode`, `model_usage.logical_request_id`).
 
+Work item: GH-42
+
 ## Question
 
 What can the session database attribute per session that a dashboard's session / context-handoff views need: skill invocations, `/clear` and `/compact` boundaries, subagent parent/child trees, task types, and anything else useful for phase boundaries or context hygiene? (Ticket #42.)
@@ -13,20 +15,20 @@ What can the session database attribute per session that a dashboard's session /
 
 ## Inventory (row counts measured 2026-09-04)
 
-| table | rows | role for the dashboard |
-|---|---|---|
-| `session` | 6 | one row per session (interactive or subagent) |
-| `model_usage` | 64 | one row per model request; the phase/context timeline |
-| `tool_usage` | 107 | one row per tool call, incl. Skill |
-| `part` | 328 | message parts (transcript; avoid — content) |
-| `message` | 73 | messages (transcript; avoid — content) |
-| `session_entry` | 11 | runtime events (types below) |
-| `todo` | 9 | per-session todo list with status |
-| `turn_usage` | 3 | per-turn rollups (sparse — see Limitations) |
-| `session_input`, `input_history` | 3, 3 | queued/prompted inputs (metadata only) |
-| `schema_migration` | 18 | schema versioning |
-| `local_setting`, `permission` | 1, 0 | settings |
-| `session_target`, `session_task_link`, `workflow_*` | 0 | orchestration scaffolding, empty locally |
+| table                                               | rows | role for the dashboard                                |
+| --------------------------------------------------- | ---- | ----------------------------------------------------- |
+| `session`                                           | 6    | one row per session (interactive or subagent)         |
+| `model_usage`                                       | 64   | one row per model request; the phase/context timeline |
+| `tool_usage`                                        | 107  | one row per tool call, incl. Skill                    |
+| `part`                                              | 328  | message parts (transcript; avoid — content)           |
+| `message`                                           | 73   | messages (transcript; avoid — content)                |
+| `session_entry`                                     | 11   | runtime events (types below)                          |
+| `todo`                                              | 9    | per-session todo list with status                     |
+| `turn_usage`                                        | 3    | per-turn rollups (sparse — see Limitations)           |
+| `session_input`, `input_history`                    | 3, 3 | queued/prompted inputs (metadata only)                |
+| `schema_migration`                                  | 18   | schema versioning                                     |
+| `local_setting`, `permission`                       | 1, 0 | settings                                              |
+| `session_target`, `session_task_link`, `workflow_*` | 0    | orchestration scaffolding, empty locally              |
 
 Key columns beyond `scripts/sessions.mjs`'s subset: `session` adds `time_compacting`, `time_archived`, `revert`, `title_source`, `title_message_id`, `time_title_updated`, `version`, `share_url`, `summary_additions/deletions/files/diffs`; `model_usage` adds `logical_request_id`, `attempt_index`, `mode`, `task_type`, `finish_reason`, `context_exceeded`, `time_to_first_token_ms`, `reasoning_tokens`, `tool_call_count`, `retry_count`; `tool_usage` adds `side_effect_scope`, `read_only`, `destructive`, `approval_status`, byte sizes, `running`-capable `status`. Join-friendly indexes exist: `session_parent_idx`, `session_task_type_idx`, `tool_usage_session_turn_idx`, `model_usage_session_turn_idx`.
 
@@ -34,7 +36,7 @@ Key columns beyond `scripts/sessions.mjs`'s subset: `session` adds `time_compact
 
 ### 1. Skill invocations per session — YES
 
-`tool_usage.tool_name` distinct values (count / distinct sessions): `Read` 58/5, `Bash` 34/5, `Edit` 6/2, **`Skill` 4/3**, `TodoWrite` 3/1, `Agent` 3/1, `Write` 2/1, `WebFetch` 1/1, `TaskOutput` 1/1. `tool_usage.session_id` is `NOT NULL` and 0 of the 4 Skill rows are NULL, so `GROUP BY session_id` attributes them directly (local join check: one interactive session has 1, two `sess_subagent_*` sessions have 1 and 2). Skill rows are `read_only=1, destructive=0, approval_status='none'`, status `completed` 1 / `error` 3 — errors are visible, so failed invocations count too. **Caveat:** the row records only the generic name `Skill`; *which* skill ran lives in the call arguments (content, out of bounds), so the dashboard can chart "skill invocations per session" but not per-named-skill usage from metadata alone.
+`tool_usage.tool_name` distinct values (count / distinct sessions): `Read` 58/5, `Bash` 34/5, `Edit` 6/2, **`Skill` 4/3**, `TodoWrite` 3/1, `Agent` 3/1, `Write` 2/1, `WebFetch` 1/1, `TaskOutput` 1/1. `tool_usage.session_id` is `NOT NULL` and 0 of the 4 Skill rows are NULL, so `GROUP BY session_id` attributes them directly (local join check: one interactive session has 1, two `sess_subagent_*` sessions have 1 and 2). Skill rows are `read_only=1, destructive=0, approval_status='none'`, status `completed` 1 / `error` 3 — errors are visible, so failed invocations count too. **Caveat:** the row records only the generic name `Skill`; _which_ skill ran lives in the call arguments (content, out of bounds), so the dashboard can chart "skill invocations per session" but not per-named-skill usage from metadata alone.
 
 ### 2. `/clear` and `/compact` boundaries — NO (schema hooks only, all unpopulated)
 

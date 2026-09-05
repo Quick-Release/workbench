@@ -9,7 +9,7 @@ On an open GitHub PR page in our web UI, the user clicks a button and a CLI runs
 
 ## TL;DR
 
-**Recommended: a small local helper daemon listening on `127.0.0.1` (HTTP + SSE/WebSocket), triggered by the web UI, plus a GitHub Actions `workflow_dispatch` fallback when the helper isn't running.** The local daemon is the only option that needs no Mac app bundle, no browser extension, no App Store/notarization story, streams output back to the UI naturally, and is exactly the pattern dev tools (Vite, ttyd, Electron debuggers) already normalize for users. Deep links (`myapp://`) work but give you launch-with-no-feedback and require shipping a `.app` (LaunchServices registration; notarization if distributed outside `brew`); browser native messaging works but only via an installed extension and a per-browser host manifest, and a **webpage cannot call `connectNative` directly** — it must relay through the extension. ttyd/xterm.js is the fast path to *visible* terminal output in the browser if we want the user to literally watch the review run. As a server-side fallback, `POST /repos/{owner}/{repo}/actions/workflows/{id}/dispatches` runs the same two CLIs in CI with zero local setup.
+**Recommended: a small local helper daemon listening on `127.0.0.1` (HTTP + SSE/WebSocket), triggered by the web UI, plus a GitHub Actions `workflow_dispatch` fallback when the helper isn't running.** The local daemon is the only option that needs no Mac app bundle, no browser extension, no App Store/notarization story, streams output back to the UI naturally, and is exactly the pattern dev tools (Vite, ttyd, Electron debuggers) already normalize for users. Deep links (`myapp://`) work but give you launch-with-no-feedback and require shipping a `.app` (LaunchServices registration; notarization if distributed outside `brew`); browser native messaging works but only via an installed extension and a per-browser host manifest, and a **webpage cannot call `connectNative` directly** — it must relay through the extension. ttyd/xterm.js is the fast path to _visible_ terminal output in the browser if we want the user to literally watch the review run. As a server-side fallback, `POST /repos/{owner}/{repo}/actions/workflows/{id}/dispatches` runs the same two CLIs in CI with zero local setup.
 
 **Concrete invocations (verified):**
 
@@ -45,7 +45,7 @@ Chrome's model ([Native messaging, developer.chrome.com](https://developer.chrom
 
 **Can a webpage trigger it? Not directly — but effectively yes via relay.** Per the messaging docs ([developer.chrome.com](https://developer.chrome.com/docs/extensions/develop/concepts/messaging)), a webpage on an `externally_connectable.matches` origin can call `chrome.runtime.sendMessage(extensionId, msg)` (guarded by `if (chrome && chrome.runtime)`); the extension receives it in `onMessageExternal` and forwards to the native host. So: page → extension service worker → host binary → CLI. The reverse direction is restricted ("it is not possible to send a message from an extension to a web page"), but the port/`postMessage` channel gives you streaming back through the content-script relay.
 
-Assessment: solid security model (origin allowlist + extension review + host allowlist), real streaming, but **setup burden** = install extension from store *and* run a host-manifest installer; **maintenance** = extension + host + Firefox/Safari parity (Firefox supports the same protocol with its own manifests and `allowed_extensions`).
+Assessment: solid security model (origin allowlist + extension review + host allowlist), real streaming, but **setup burden** = install extension from store _and_ run a host-manifest installer; **maintenance** = extension + host + Firefox/Safari parity (Firefox supports the same protocol with its own manifests and `allowed_extensions`).
 
 ## 3. Local daemon on 127.0.0.1 (recommended)
 
@@ -53,7 +53,7 @@ A small helper (Node/Bun script, run via `brew services`/`launchd`/`npx workbenc
 
 - **Security — DNS rebinding is the threat that matters.** A malicious page can rebind its DNS to `127.0.0.1` after first load, satisfying same-origin policy while its JavaScript talks to your unauthenticated local server ([GitHub Engineering, "Localhost dangers: CORS and DNS rebinding"](https://github.blog/security/application-security/localhost-dangers-cors-and-dns-rebinding/)). Mitigations, per that post: (1) require auth on sensitive endpoints (rebound requests "cannot contain cookies"/tokens of your app), (2) **validate the `Host` header** against an approved local name, (3) check `Origin` against an allowlist. Practically: bind loopback only, require a per-install bearer token (written to `~/.workbench/helper-token` and injected into the UI via the Worker, or exchanged at pairing time), reject non-allowlisted `Origin`/`Host`, and make the API **schema-typed, enumerated commands** — never accept an arbitrary command string from the page (that's remote code execution by design).
 - **Streaming:** trivial — SSE/WS chunked stdout straight into the UI. Claude-Code-style `stream-json` (below) maps 1:1 onto this.
-- **Setup burden:** one `npx`/`brew` command; no app bundle, no notarization (notarization is a Gatekeeper requirement for *distributed apps*, not for scripts the user runs themselves — see Apple Developer notarization docs).
+- **Setup burden:** one `npx`/`brew` command; no app bundle, no notarization (notarization is a Gatekeeper requirement for _distributed apps_, not for scripts the user runs themselves — see Apple Developer notarization docs).
 - **Maintenance:** one small TypeScript program; can live in this repo (`scripts/` or a `packages/helper`), reusing our Effect stack.
 
 This is also the architecture of every dev tool our users already trust: Vite/dev servers on localhost, and ttyd (below) by default.
@@ -62,9 +62,9 @@ This is also the architecture of every dev tool our users already trust: Vite/de
 
 [ttyd](https://github.com/tsl0922/ttyd) ("a simple command-line tool for sharing terminal over the web", MIT, 12.3k stars) runs a command in a PTY and serves it over WebSocket, rendered with **xterm.js/WebGL2**. Straight from the README: `ttyd bash` (port **7681**, read-only by default), `-p/--port`, `-c user:pass` basic auth, `-W/--writable` to let clients type, `-S/-C/-K` for TLS, `-m` max clients, `-O/--check-origin` to "block cross-origin WebSockets", `-i` to bind an interface **or a Unix socket**. The `-O` and `-i` flags are exactly the origin-check/loopback hygiene from §3.
 
-Use here: the helper spawns `ttyd -p 0 -c :$TOKEN zsh` (or embeds xterm.js + node-pty directly in our own helper), and the PR page renders the live review in an embedded terminal. Options in the family: wetty (Node), GoTTY (Go) — both listed as ttyd alternatives in its README. This is the only option where the user *sees their terminal* running the command, which matches the stated desire ("runs on their Mac terminal").
+Use here: the helper spawns `ttyd -p 0 -c :$TOKEN zsh` (or embeds xterm.js + node-pty directly in our own helper), and the PR page renders the live review in an embedded terminal. Options in the family: wetty (Node), GoTTY (Go) — both listed as ttyd alternatives in its README. This is the only option where the user _sees their terminal_ running the command, which matches the stated desire ("runs on their Mac terminal").
 
-Trade-offs: interactive shell in the browser is a bigger attack surface than an enumerated-command API; read-only mode + token + origin check mitigates. Best treated as an optional *view* layered on the §3 helper, not the trigger mechanism itself.
+Trade-offs: interactive shell in the browser is a bigger attack surface than an enumerated-command API; read-only mode + token + origin check mitigates. Best treated as an optional _view_ layered on the §3 helper, not the trigger mechanism itself.
 
 ## 5. Existing products / protocols
 
@@ -84,13 +84,13 @@ The Worker calls `POST /repos/{owner}/{repo}/actions/workflows/{workflow_id}/dis
 
 ## Comparison
 
-| Option | End-user setup | Security | Streams output to UI | macOS specifics | Maintenance |
-| --- | --- | --- | --- | --- | --- |
-| 1. Deep link + native app | Install+launch a signed `.app` | Weak: scheme squatting, unverified URL args, browser prompt only | No (fire-and-forget; needs §3 anyway) | LaunchServices, `CFBundleURLTypes`, notarization if distributed | High (native target) |
-| 2. Extension + native messaging | Extension from store + host-manifest installer | Strong: origin allowlist, no wildcards, host allowlist | Yes (via port relay) | Per-browser manifest paths | High (extension + host + Firefox parity) |
-| 3. Local daemon on 127.0.0.1 **(recommended)** | One `npx`/`brew` command | Good, if: loopback bind, token auth, Host/Origin validation, enumerated commands | Yes, natively (SSE/WS) | None beyond launchd/brew services | Low (TS in this repo) |
-| 4. ttyd / xterm.js view | Same as §3 (it's the helper's UI layer) | Good with `-O`/`-c`/token; read-only default | Yes — real terminal rendering | None | Low-medium |
-| 6. Actions `workflow_dispatch` | None | GitHub-native (secrets, tokens) | Yes via runs API/jobs logs | None | Low (one workflow file) |
+| Option                                         | End-user setup                                 | Security                                                                         | Streams output to UI                  | macOS specifics                                                 | Maintenance                              |
+| ---------------------------------------------- | ---------------------------------------------- | -------------------------------------------------------------------------------- | ------------------------------------- | --------------------------------------------------------------- | ---------------------------------------- |
+| 1. Deep link + native app                      | Install+launch a signed `.app`                 | Weak: scheme squatting, unverified URL args, browser prompt only                 | No (fire-and-forget; needs §3 anyway) | LaunchServices, `CFBundleURLTypes`, notarization if distributed | High (native target)                     |
+| 2. Extension + native messaging                | Extension from store + host-manifest installer | Strong: origin allowlist, no wildcards, host allowlist                           | Yes (via port relay)                  | Per-browser manifest paths                                      | High (extension + host + Firefox parity) |
+| 3. Local daemon on 127.0.0.1 **(recommended)** | One `npx`/`brew` command                       | Good, if: loopback bind, token auth, Host/Origin validation, enumerated commands | Yes, natively (SSE/WS)                | None beyond launchd/brew services                               | Low (TS in this repo)                    |
+| 4. ttyd / xterm.js view                        | Same as §3 (it's the helper's UI layer)        | Good with `-O`/`-c`/token; read-only default                                     | Yes — real terminal rendering         | None                                                            | Low-medium                               |
+| 6. Actions `workflow_dispatch`                 | None                                           | GitHub-native (secrets, tokens)                                                  | Yes via runs API/jobs logs            | None                                                            | Low (one workflow file)                  |
 
 ## Recommended architecture for this repo
 

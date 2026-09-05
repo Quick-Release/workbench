@@ -29,6 +29,11 @@ const data = {
   tickets: [],
   plans: [],
   changes: [],
+  workItems: [],
+  maps: [],
+  blockerEdges: [],
+  decisions: [],
+  artifacts: [],
   skills: catalog,
   skillInstalls: ["tdd", "implement", "grill-with-docs"],
   sessions: {

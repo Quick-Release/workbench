@@ -51,8 +51,13 @@ const renderShellAt = async (path: string) => {
     path: "/flow",
     component: () => <div>stub:flow</div>,
   });
+  const triageRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: "/triage",
+    component: () => <div>stub:triage</div>,
+  });
   const router = createRouter({
-    routeTree: rootRoute.addChildren([indexRoute, sessionsRoute, flowRoute]),
+    routeTree: rootRoute.addChildren([indexRoute, sessionsRoute, flowRoute, triageRoute]),
     history: createMemoryHistory({ initialEntries: [path] }),
   });
   await router.load();
@@ -91,6 +96,7 @@ describe("app shell (shadcn dashboard frame)", () => {
     const home = await renderShellAt("/");
     const sessions = await renderShellAt("/sessions");
     const flow = await renderShellAt("/flow");
+    const triage = await renderShellAt("/triage");
     expect(anchorFor(home, "/")).toContain('data-active="true"');
     expect(anchorFor(home, "/")).not.toContain('data-active="false"');
     expect(anchorFor(home, "/sessions")).toContain('data-active="false"');
@@ -98,6 +104,24 @@ describe("app shell (shadcn dashboard frame)", () => {
     expect(anchorFor(sessions, "/sessions")).toContain('data-active="true"');
     expect(anchorFor(sessions, "/")).toContain('data-active="false"');
     expect(anchorFor(flow, "/flow")).toContain('data-active="true"');
+    expect(anchorFor(triage, "/triage")).toContain('data-active="true"');
+  });
+
+  it("carries the Workflow nav group led by Skill flow between the others", async () => {
+    const html = await renderShellAt("/");
+    const labels = [...html.matchAll(/data-slot="sidebar-group-label"[^>]*>([^<]+)</g)].map(
+      (match) => match[1],
+    );
+    expect(labels).toEqual(["Workspace", "Workflow"]);
+    const workspace = html.indexOf('data-slot="sidebar-group-label"');
+    const workflow = html.indexOf(">Workflow<");
+    const flow = html.indexOf('href="/flow');
+    const triage = html.indexOf('href="/triage"');
+    const sessions = html.indexOf('href="/sessions"');
+    expect(workflow).toBeGreaterThan(workspace);
+    expect(flow).toBeGreaterThan(workflow);
+    expect(triage).toBeGreaterThan(flow);
+    expect(sessions).toBeGreaterThan(triage);
   });
 
   it("keeps the repository link external", async () => {

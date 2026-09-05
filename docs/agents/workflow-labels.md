@@ -6,15 +6,15 @@ Skills move work through the skill flow; this file maps those moves to the label
 
 Exactly one `workflow:*` label per issue. **No `workflow:` label means pre-flow**: no flow skill has touched the work yet. A triaged issue with no phase label is on the shelf, not in the flow.
 
-| Phase        | Label                    | Written by                                                                                     |
-| ------------ | ------------------------ | ---------------------------------------------------------------------------------------------- |
-| grilling     | `workflow:grilling`      | grill-with-docs / grill-me starting a decision conversation (on-ramps route through grilling)   |
-| prototyping  | `workflow:prototyping`   | handoff — and back to `workflow:grilling` when the prototype answers the open questions         |
-| specced      | `workflow:specced`       | to-spec (also labels the effort's wayfinder map, if any)                                        |
-| ticketed     | `workflow:ticketed`      | to-tickets                                                                                      |
-| implementing | `workflow:implementing`  | implement at session start; also the on-ramp entry for triage briefs and diagnosing-bugs fixes  |
-| reviewing    | `workflow:reviewing`     | code-review                                                                                     |
-| shipped      | `workflow:shipped`       | implement's closing checklist, after merge                                                      |
+| Phase        | Label                   | Written by                                                                                     |
+| ------------ | ----------------------- | ---------------------------------------------------------------------------------------------- |
+| grilling     | `workflow:grilling`     | grill-with-docs / grill-me starting a decision conversation (on-ramps route through grilling)  |
+| prototyping  | `workflow:prototyping`  | handoff — and back to `workflow:grilling` when the prototype answers the open questions        |
+| specced      | `workflow:specced`      | to-spec (also labels the effort's wayfinder map, if any)                                       |
+| ticketed     | `workflow:ticketed`     | to-tickets                                                                                     |
+| implementing | `workflow:implementing` | implement at session start; also the on-ramp entry for triage briefs and diagnosing-bugs fixes |
+| reviewing    | `workflow:reviewing`    | code-review                                                                                    |
+| shipped      | `workflow:shipped`      | implement's closing checklist, after merge                                                     |
 
 Developers may hand-move any label at any time. If an issue wears two `workflow:` labels (hand-edit accident), the dashboard resolves to the furthest-along phase in flow order and surfaces a non-blocking warning — it never fails the sync.
 
@@ -22,18 +22,18 @@ Developers may hand-move any label at any time. If an issue wears two `workflow:
 
 ## Category
 
-| Category    | Label         | Meaning                     |
-| ----------- | ------------- | --------------------------- |
-| bug         | `bug`         | Something isn't working     |
-| enhancement | `enhancement` | New feature or request      |
+| Category    | Label         | Meaning                 |
+| ----------- | ------------- | ----------------------- |
+| bug         | `bug`         | Something isn't working |
+| enhancement | `enhancement` | New feature or request  |
 
 Absent label = no category (chores, docs, research). Category belongs to implementation-bound issues only — maps and decision tickets never carry it.
 
 ## Parking
 
-| State    | Label      | Meaning                                                                                    |
-| -------- | ---------- | ------------------------------------------------------------------------------------------ |
-| deferred | `deferred` | Parked: not being worked now, not refused. Orthogonal to triage state and workflow phase.   |
+| State    | Label      | Meaning                                                                                   |
+| -------- | ---------- | ----------------------------------------------------------------------------------------- |
+| deferred | `deferred` | Parked: not being worked now, not refused. Orthogonal to triage state and workflow phase. |
 
 `wontfix` is refusal (a triage state); `deferred` is parking with intent to revisit.
 

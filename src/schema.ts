@@ -1,13 +1,27 @@
 import { Schema } from "effect";
 
-import type { OverviewData, SkillClassification, SkillFlowEdge, SkillsStatus } from "./types";
+import type {
+  OverviewData,
+  SkillClassification,
+  SkillFlowEdge,
+  SkillsStatus,
+  SyncTriggerRequest,
+} from "./types.ts";
 import {
+  artifactKinds,
+  blockerEdgeSources,
+  decisionSources,
+  decisionStatuses,
   serviceStatuses,
   skillFlowEdgeKinds,
   skillFlowRoles,
   ticketKinds,
   ticketStatuses,
-} from "./types";
+  trackerCategories,
+  triageStates,
+  wayfinderKinds,
+  workflowPhases,
+} from "./types.ts";
 export const TicketStatusSchema = Schema.Literals(ticketStatuses);
 
 export const TicketKindSchema = Schema.Literals(ticketKinds);
@@ -60,6 +74,14 @@ export const SkillsStatusSchema = Schema.Struct({
   message: Schema.optional(Schema.String),
 });
 
+export const WorkflowPhaseSchema = Schema.NullOr(Schema.Literals(workflowPhases));
+
+export const TriageStateSchema = Schema.Literals(triageStates);
+
+export const WayfinderKindSchema = Schema.NullOr(Schema.Literals(wayfinderKinds));
+
+export const TrackerCategorySchema = Schema.NullOr(Schema.Literals(trackerCategories));
+
 export const TicketRecordSchema = Schema.Struct({
   id: Schema.String,
   title: Schema.String,
@@ -68,13 +90,151 @@ export const TicketRecordSchema = Schema.Struct({
   statusDetail: Schema.String,
   group: Schema.String,
   lane: Schema.String,
-  dependencies: Schema.String,
   summary: Schema.String,
   sourcePath: Schema.String,
   sourceUrl: Schema.String,
   kind: TicketKindSchema,
   externalSource: Schema.optional(Schema.String),
   progress: Schema.Struct({ done: Schema.Number, total: Schema.Number }),
+});
+
+export const BlockerEdgeSourceSchema = Schema.Literals(blockerEdgeSources);
+
+// ADR 0008: `{blockedId, blockerId, source, sourceRef}` — the issue URL or
+// ticket-file path the edge was declared at, as provenance.
+export const BlockerEdgeRecordSchema = Schema.Struct({
+  blockedId: Schema.String,
+  blockerId: Schema.String,
+  source: BlockerEdgeSourceSchema,
+  sourceRef: Schema.String,
+});
+
+export const WorkItemRecordSchema = Schema.Struct({
+  id: Schema.String,
+  title: Schema.String,
+  url: Schema.String,
+  state: Schema.Literals(["open", "closed"]),
+  assignees: Schema.Array(Schema.String),
+  phase: WorkflowPhaseSchema,
+  triageState: TriageStateSchema,
+  deferred: Schema.Boolean,
+  category: TrackerCategorySchema,
+  kind: WayfinderKindSchema,
+  summary: Schema.String,
+});
+
+// ADR 0009: one decision record per source conclusion — `statement` carries
+// the full resolution comment for resolution records and is null elsewhere;
+// `status`/`supersedes`/`decidedAt` are null wherever their source doesn't
+// declare them.
+export const DecisionSourceSchema = Schema.Literals(decisionSources);
+
+export const DecisionStatusSchema = Schema.NullOr(Schema.Literals(decisionStatuses));
+
+export const DecisionRecordSchema = Schema.Struct({
+  id: Schema.String,
+  source: DecisionSourceSchema,
+  workItemId: Schema.NullOr(Schema.String),
+  title: Schema.String,
+  statement: Schema.NullOr(Schema.String),
+  status: DecisionStatusSchema,
+  supersedes: Schema.NullOr(Schema.String),
+  decidedAt: Schema.NullOr(Schema.String),
+  sourceRef: Schema.String,
+});
+
+export const ArtifactKindSchema = Schema.Literals(artifactKinds);
+
+export const ArtifactRecordSchema = Schema.Struct({
+  id: Schema.String,
+  kind: ArtifactKindSchema,
+  path: Schema.String,
+  title: Schema.String,
+  workItemId: Schema.NullOr(Schema.String),
+});
+
+export const TrackerMapRecordSchema = Schema.Struct({
+  mapId: Schema.String,
+  title: Schema.String,
+  url: Schema.String,
+  ticketIds: Schema.Array(Schema.String),
+});
+
+// The execution seam's contracts (ticket #59): the workflow read payload and
+// the triage move action, validated in both directions at the seam boundary.
+export const WorkflowStateMetaSchema = Schema.Struct({
+  snapshot: Schema.String,
+  repo: Schema.String,
+});
+
+export const WorkflowStatePayloadSchema = Schema.Struct({
+  workItems: Schema.Array(WorkItemRecordSchema),
+  maps: Schema.Array(TrackerMapRecordSchema),
+  blockerEdges: Schema.Array(BlockerEdgeRecordSchema),
+  decisions: Schema.Array(DecisionRecordSchema),
+  artifacts: Schema.Array(ArtifactRecordSchema),
+  meta: WorkflowStateMetaSchema,
+});
+
+export const TriageMoveRequestSchema = Schema.Struct({
+  issueId: Schema.String,
+  triageState: TriageStateSchema,
+  confirm: Schema.optional(Schema.Boolean),
+});
+
+export const TriageMoveResultSchema = Schema.Struct({
+  message: Schema.String,
+  issueId: Schema.String,
+  triageState: TriageStateSchema,
+  state: WorkflowStatePayloadSchema,
+});
+
+// The issue actions (ticket #60): comment and create are additive, edit
+// overwrites — its `confirm` flag is the deliberate beat, enforced at the
+// seam, before a write replaces the issue's title or body.
+export const IssueEditRequestSchema = Schema.Struct({
+  issueId: Schema.String,
+  title: Schema.optional(Schema.String),
+  body: Schema.optional(Schema.String),
+  confirm: Schema.optional(Schema.Boolean),
+});
+
+export const IssueEditResultSchema = Schema.Struct({
+  message: Schema.String,
+  issueId: Schema.String,
+  state: WorkflowStatePayloadSchema,
+});
+
+export const IssueCommentRequestSchema = Schema.Struct({
+  issueId: Schema.String,
+  body: Schema.String,
+});
+
+export const IssueCommentResultSchema = Schema.Struct({
+  message: Schema.String,
+  issueId: Schema.String,
+  commentUrl: Schema.String,
+});
+
+export const IssueCreateRequestSchema = Schema.Struct({
+  title: Schema.String,
+  body: Schema.optional(Schema.String),
+});
+
+export const IssueCreateResultSchema = Schema.Struct({
+  message: Schema.String,
+  issueId: Schema.String,
+  state: WorkflowStatePayloadSchema,
+});
+
+// The sync trigger (ticket #64): no request fields; the result carries the
+// warnings channel and the re-read state.
+export const SyncTriggerRequestSchema = Schema.Struct({});
+
+export const SyncTriggerResultSchema = Schema.Struct({
+  message: Schema.String,
+  warnings: Schema.Array(Schema.String),
+  state: WorkflowStatePayloadSchema,
 });
 
 export const PlanRecordSchema = Schema.Struct({
@@ -211,6 +371,11 @@ export const OverviewDataSchema = Schema.Struct({
   tickets: Schema.Array(TicketRecordSchema),
   plans: Schema.Array(PlanRecordSchema),
   changes: Schema.Array(SpecChangeRecordSchema),
+  workItems: Schema.Array(WorkItemRecordSchema),
+  maps: Schema.Array(TrackerMapRecordSchema),
+  blockerEdges: Schema.Array(BlockerEdgeRecordSchema),
+  decisions: Schema.Array(DecisionRecordSchema),
+  artifacts: Schema.Array(ArtifactRecordSchema),
   skills: Schema.Array(SkillRecordSchema),
   skillInstalls: Schema.Array(Schema.String),
   sessions: SessionUsageSchema,
@@ -244,3 +409,66 @@ export const parseSkillsStatus: (input: unknown) => SkillsStatus = Schema.decode
   SkillsStatusSchema,
   { onExcessProperty: "error" },
 );
+
+export const parseWorkItemRecord = Schema.decodeUnknownSync(WorkItemRecordSchema, {
+  onExcessProperty: "error",
+});
+
+export const parseTrackerMapRecord = Schema.decodeUnknownSync(TrackerMapRecordSchema, {
+  onExcessProperty: "error",
+});
+
+export const parseBlockerEdgeRecord = Schema.decodeUnknownSync(BlockerEdgeRecordSchema, {
+  onExcessProperty: "error",
+});
+
+export const parseDecisionRecord = Schema.decodeUnknownSync(DecisionRecordSchema, {
+  onExcessProperty: "error",
+});
+
+export const parseArtifactRecord = Schema.decodeUnknownSync(ArtifactRecordSchema, {
+  onExcessProperty: "error",
+});
+
+export const parseWorkflowStatePayload = Schema.decodeUnknownSync(WorkflowStatePayloadSchema, {
+  onExcessProperty: "error",
+});
+
+export const parseTriageMoveRequest = Schema.decodeUnknownSync(TriageMoveRequestSchema, {
+  onExcessProperty: "error",
+});
+
+export const parseTriageMoveResult = Schema.decodeUnknownSync(TriageMoveResultSchema, {
+  onExcessProperty: "error",
+});
+
+export const parseIssueEditRequest = Schema.decodeUnknownSync(IssueEditRequestSchema, {
+  onExcessProperty: "error",
+});
+
+export const parseIssueEditResult = Schema.decodeUnknownSync(IssueEditResultSchema, {
+  onExcessProperty: "error",
+});
+
+export const parseIssueCommentRequest = Schema.decodeUnknownSync(IssueCommentRequestSchema, {
+  onExcessProperty: "error",
+});
+
+export const parseIssueCommentResult = Schema.decodeUnknownSync(IssueCommentResultSchema, {
+  onExcessProperty: "error",
+});
+
+export const parseIssueCreateRequest = Schema.decodeUnknownSync(IssueCreateRequestSchema, {
+  onExcessProperty: "error",
+});
+
+export const parseIssueCreateResult = Schema.decodeUnknownSync(IssueCreateResultSchema, {
+  onExcessProperty: "error",
+});
+
+export const parseSyncTriggerRequest: (input: unknown) => SyncTriggerRequest =
+  Schema.decodeUnknownSync(SyncTriggerRequestSchema, { onExcessProperty: "error" });
+
+export const parseSyncTriggerResult = Schema.decodeUnknownSync(SyncTriggerResultSchema, {
+  onExcessProperty: "error",
+});

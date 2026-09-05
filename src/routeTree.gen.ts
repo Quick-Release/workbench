@@ -10,18 +10,31 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as DecisionsRouteImport } from './routes/decisions'
 import { Route as FlowRouteImport } from './routes/flow'
+import { Route as InFlightRouteImport } from './routes/in-flight'
 import { Route as SessionsRouteImport } from './routes/sessions'
 import { Route as ToolsRouteImport } from './routes/tools'
+import { Route as TriageRouteImport } from './routes/triage'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const DecisionsRoute = DecisionsRouteImport.update({
+  id: '/decisions',
+  path: '/decisions',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const FlowRoute = FlowRouteImport.update({
   id: '/flow',
   path: '/flow',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const InFlightRoute = InFlightRouteImport.update({
+  id: '/in-flight',
+  path: '/in-flight',
   getParentRoute: () => rootRouteImport,
 } as any)
 const SessionsRoute = SessionsRouteImport.update({
@@ -34,39 +47,78 @@ const ToolsRoute = ToolsRouteImport.update({
   path: '/tools',
   getParentRoute: () => rootRouteImport,
 } as any)
+const TriageRoute = TriageRouteImport.update({
+  id: '/triage',
+  path: '/triage',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/decisions': typeof DecisionsRoute
   '/flow': typeof FlowRoute
+  '/in-flight': typeof InFlightRoute
   '/sessions': typeof SessionsRoute
   '/tools': typeof ToolsRoute
+  '/triage': typeof TriageRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/decisions': typeof DecisionsRoute
   '/flow': typeof FlowRoute
+  '/in-flight': typeof InFlightRoute
   '/sessions': typeof SessionsRoute
   '/tools': typeof ToolsRoute
+  '/triage': typeof TriageRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/decisions': typeof DecisionsRoute
   '/flow': typeof FlowRoute
+  '/in-flight': typeof InFlightRoute
   '/sessions': typeof SessionsRoute
   '/tools': typeof ToolsRoute
+  '/triage': typeof TriageRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/flow' | '/sessions' | '/tools'
+  fullPaths:
+    | '/'
+    | '/decisions'
+    | '/flow'
+    | '/in-flight'
+    | '/sessions'
+    | '/tools'
+    | '/triage'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/flow' | '/sessions' | '/tools'
-  id: '__root__' | '/' | '/flow' | '/sessions' | '/tools'
+  to:
+    | '/'
+    | '/decisions'
+    | '/flow'
+    | '/in-flight'
+    | '/sessions'
+    | '/tools'
+    | '/triage'
+  id:
+    | '__root__'
+    | '/'
+    | '/decisions'
+    | '/flow'
+    | '/in-flight'
+    | '/sessions'
+    | '/tools'
+    | '/triage'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  DecisionsRoute: typeof DecisionsRoute
   FlowRoute: typeof FlowRoute
+  InFlightRoute: typeof InFlightRoute
   SessionsRoute: typeof SessionsRoute
   ToolsRoute: typeof ToolsRoute
+  TriageRoute: typeof TriageRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -78,11 +130,25 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/decisions': {
+      id: '/decisions'
+      path: '/decisions'
+      fullPath: '/decisions'
+      preLoaderRoute: typeof DecisionsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/flow': {
       id: '/flow'
       path: '/flow'
       fullPath: '/flow'
       preLoaderRoute: typeof FlowRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/in-flight': {
+      id: '/in-flight'
+      path: '/in-flight'
+      fullPath: '/in-flight'
+      preLoaderRoute: typeof InFlightRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/sessions': {
@@ -99,14 +165,24 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ToolsRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/triage': {
+      id: '/triage'
+      path: '/triage'
+      fullPath: '/triage'
+      preLoaderRoute: typeof TriageRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  DecisionsRoute: DecisionsRoute,
   FlowRoute: FlowRoute,
+  InFlightRoute: InFlightRoute,
   SessionsRoute: SessionsRoute,
   ToolsRoute: ToolsRoute,
+  TriageRoute: TriageRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
