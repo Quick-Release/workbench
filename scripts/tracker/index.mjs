@@ -3,11 +3,13 @@ import { promisify } from "node:util";
 
 import {
   apiBaseFrom,
+  fetchBlockedBy,
   fetchIssue,
   fetchMapIssues,
   fetchOpenIssues,
   fetchSubIssues,
 } from "./issues.mjs";
+import { lineEdgesForBody, mergeBlockerEdges } from "./edges.mjs";
 import { deriveWorkItem, loadWorkflowVocabulary } from "./labels.mjs";
 
 const execFileAsync = promisify(execFile);
@@ -43,7 +45,7 @@ export const collectTrackerState = async ({
   vocabulary,
   vocabularyPath = "",
 }) => {
-  const empty = { workItems: [], maps: [], warnings: [] };
+  const empty = { workItems: [], maps: [], blockerEdges: [], warnings: [] };
   if (!REPO_PATTERN.test(repo ?? ""))
     return {
       ...empty,
@@ -144,7 +146,80 @@ export const collectTrackerState = async ({
       "tracker: some map members were not read; their work-item records may be missing",
     );
 
+  // ADR 0008: native blocked-by edges for issues whose dependency summary
+  // declares blockers, targeted reads for blocker endpoints the sweep never
+  // reached, and `Blocked by:` lines from open issue bodies as the second
+  // syntax — merged with repo-level native precedence and markdown hygiene.
+  const openIssues = [];
+  const seenOpen = new Set();
+  for (const entry of [...sweep.issues, ...mapIssues.issues]) {
+    if (entry.state === "closed" || seenOpen.has(entry.number)) continue;
+    seenOpen.add(entry.number);
+    openIssues.push(entry);
+  }
+
+  const nativeEdges = [];
+  const nativeAvailable = openIssues.some(
+    (entry) => entry.issue_dependencies_summary !== undefined,
+  );
+  let cappedBlockers = 0;
+  for (const entry of openIssues) {
+    const summary = entry.issue_dependencies_summary;
+    // `blocked_by` counts open blockers only; `total_blocked_by` includes
+    // closed ones — the satisfied edges the blocker graph still renders.
+    const declared = summary?.total_blocked_by ?? 0;
+    if (declared <= 0) continue;
+    const id = `GH-${entry.number}`;
+    const { issues: blockers, warnings: listWarnings } = await fetchBlockedBy({
+      repo,
+      token,
+      apiBase,
+      issueNumber: entry.number,
+      fetchImpl,
+      maxPages,
+    });
+    warnings.push(...listWarnings.map((warning) => `${id}: ${warning}`));
+    for (const blocker of blockers) {
+      nativeEdges.push({
+        blockedId: id,
+        blockerId: `GH-${blocker.number}`,
+        source: "github-native",
+        sourceRef: entry.html_url ?? "",
+      });
+      if (recordsById.has(`GH-${blocker.number}`)) continue;
+      if (targetedReads >= MAX_ISSUE_READS) {
+        cappedBlockers += 1;
+        continue;
+      }
+      targetedReads += 1;
+      const { issue: blockerIssue, warnings: readWarnings } = await fetchIssue({
+        repo,
+        token,
+        apiBase,
+        issueNumber: blocker.number,
+        fetchImpl,
+      });
+      warnings.push(...readWarnings.map((warning) => `${id}: ${warning}`));
+      if (blockerIssue) collectRecords([blockerIssue]);
+    }
+  }
+  if (cappedBlockers > 0)
+    warnings.push(
+      `tracker: targeted reads stopped at the ${MAX_ISSUE_READS} cap; ${cappedBlockers} blocker records not collected`,
+    );
+
+  const lineEdges = openIssues.flatMap((entry) =>
+    lineEdgesForBody(entry.body ?? "", `GH-${entry.number}`, entry.html_url ?? ""),
+  );
+  const merged = mergeBlockerEdges({
+    nativeEdges,
+    nativeAvailable,
+    lineEdges,
+    knownIds: new Set(recordsById.keys()),
+  });
+  warnings.push(...merged.warnings);
+
   const byNumberAsc = (left, right) => Number(left.id.slice(3)) - Number(right.id.slice(3));
   workItems.sort(byNumberAsc);
-  return { workItems, maps, warnings };
+  return { workItems, maps, blockerEdges: merged.edges, warnings };
 };

@@ -122,7 +122,6 @@ export const filterTickets = (
         ticket.statusLabel,
         ticket.group,
         ticket.lane,
-        ticket.dependencies,
         ticket.summary,
         ticket.sourcePath,
         ticket.externalSource || "",

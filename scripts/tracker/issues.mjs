@@ -90,6 +90,21 @@ export const fetchSubIssues = async ({ repo, token, apiBase, issueNumber, fetchI
       issuesUrl(apiBase, repo, `/${issueNumber}/sub_issues`, { per_page: PER_PAGE, page }),
   });
 
+// Native blocked-by lists are read only for issues whose dependency summary
+// declares at least one blocker, never as a sweep.
+export const fetchBlockedBy = async ({ repo, token, apiBase, issueNumber, fetchImpl, maxPages }) =>
+  pagedIssues({
+    fetchImpl,
+    token,
+    maxPages,
+    what: `blocked-by list of GH-${issueNumber}`,
+    urlFor: (page) =>
+      issuesUrl(apiBase, repo, `/${issueNumber}/dependencies/blocked_by`, {
+        per_page: PER_PAGE,
+        page,
+      }),
+  });
+
 export const fetchIssue = async ({ repo, token, apiBase, issueNumber, fetchImpl }) => {
   try {
     const payload = await requestJson(

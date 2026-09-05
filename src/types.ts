@@ -80,13 +80,26 @@ export type TicketRecord = {
   statusDetail: string;
   group: string;
   lane: string;
-  dependencies: string;
   summary: string;
   sourcePath: string;
   sourceUrl: string;
   kind: (typeof ticketKinds)[number];
   externalSource?: string;
   progress: { done: number; total: number };
+};
+
+// ADR 0008: blocker edges are first-class records over namespaced work-item
+// ids, gathered from GitHub native blocked-by and `Blocked by:` lines, one
+// flat top-level list — cross-source edges have no single home ticket.
+export const blockerEdgeSources = ["github-native", "blocked-by-line"] as const;
+
+export type BlockerEdgeSource = (typeof blockerEdgeSources)[number];
+
+export type BlockerEdgeRecord = {
+  blockedId: string;
+  blockerId: string;
+  source: BlockerEdgeSource;
+  sourceRef: string;
 };
 
 export type PlanRecord = {
@@ -239,5 +252,6 @@ export type OverviewData = {
   changes: readonly SpecChangeRecord[];
   workItems: readonly WorkItemRecord[];
   maps: readonly TrackerMapRecord[];
+  blockerEdges: readonly BlockerEdgeRecord[];
   sessions: SessionUsage;
 };
