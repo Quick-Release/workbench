@@ -509,13 +509,14 @@ const main = async () => {
     .sort();
   const changes = await parseSpecChanges(changeDirectories, repositoryUrl, branch);
 
-  // ADR 0008: one flat top-level blockerEdges list. The tracker collector
-  // already applied repo-level native precedence to its own syntaxes; a local
-  // ticket file's lines always carry a non-tracker endpoint, so they merge in
-  // as the second syntax without disturbing that precedence.
+  // ADR 0008: one flat top-level blockerEdges list. Repo-level native
+  // precedence was already applied tracker-side to the two tracker syntaxes;
+  // local ticket-file lines are a separate declaring surface it never gates
+  // (a file's own id is never a tracker id), so the final merge runs with
+  // native precedence off and unions the two.
   const blockerEdges = mergeBlockerEdges({
-    nativeEdges: tracker.blockerEdges ?? [],
-    nativeAvailable: true,
+    nativeEdges: tracker.blockerEdges,
+    nativeAvailable: false,
     lineEdges: ticketFileTexts.flatMap(({ id, text, sourcePath }) =>
       lineEdgesForTicketFile({ id, text, sourcePath }),
     ),
@@ -524,7 +525,10 @@ const main = async () => {
       ...tickets.map((ticket) => ticket.id),
     ]),
   });
-  const trackerWarnings = [...tracker.warnings, ...blockerEdges.warnings];
+  // Tracker-side hygiene re-reports over the combined list (cross-source
+  // cycles and dangling refs now resolved against ledger ids too); the
+  // channel prints each distinct message once.
+  const trackerWarnings = [...new Set([...tracker.warnings, ...blockerEdges.warnings])];
 
   const sources = [];
   sources.push({ label: "Tracker", path: `github / repo ${repo}` });
