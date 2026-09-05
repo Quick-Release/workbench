@@ -1,5 +1,5 @@
 import { Link, linkOptions, useRouterState } from "@tanstack/react-router";
-import { Activity, Inbox, ReceiptText, Sparkles, Wrench } from "lucide-react";
+import { Activity, Inbox, ReceiptText, Rocket, Sparkles, Wrench } from "lucide-react";
 import {
   SidebarGroup,
   SidebarGroupContent,
@@ -22,6 +22,7 @@ const sessionsLink = linkOptions({
 const toolsLink = linkOptions({ to: "/tools" });
 const skillsLink = linkOptions({ to: "/skills" });
 const triageLink = linkOptions({ to: "/triage", search: {} });
+const inFlightLink = linkOptions({ to: "/in-flight" });
 
 type NavItem = { title: string; icon: typeof ReceiptText } & (
   | typeof overviewLink
@@ -29,13 +30,17 @@ type NavItem = { title: string; icon: typeof ReceiptText } & (
   | typeof toolsLink
   | typeof skillsLink
   | typeof triageLink
+  | typeof inFlightLink
 );
 
 // Spec #54's sidebar order: Overview, then the Workflow destination group,
 // then Agent sessions and Tools.
 const overviewItems: NavItem[] = [{ title: "Overview", icon: ReceiptText, ...overviewLink }];
 
-const workflowItems: NavItem[] = [{ title: "Triage", icon: Inbox, ...triageLink }];
+const workflowItems: NavItem[] = [
+  { title: "Triage", icon: Inbox, ...triageLink },
+  { title: "In flight", icon: Rocket, ...inFlightLink },
+];
 
 const closingItems: NavItem[] = [
   { title: "Agent sessions", icon: Activity, ...sessionsLink },
