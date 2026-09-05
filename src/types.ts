@@ -174,6 +174,18 @@ export type IssueCreateResult = {
   state: WorkflowStatePayload;
 };
 
+// The sync trigger action's contract (ticket #64): a sync takes no fields,
+// and the result surfaces the sync's warnings channel — cycles, dangling
+// edges, unparsable statuses, missing linkage — plus the re-read state, so
+// the UI summarizes data quality where sync is triggered.
+export type SyncTriggerRequest = Record<string, never>;
+
+export type SyncTriggerResult = {
+  message: string;
+  warnings: readonly string[];
+  state: WorkflowStatePayload;
+};
+
 // ADR 0009: decisions collect at sync from exactly three sources — `adr`
 // (docs/adr files), `resolution` (the closing comment on a closed decision
 // ticket), and `spec` (one bundle per spec issue's Implementation-Decisions

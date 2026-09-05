@@ -19,6 +19,8 @@ import {
   parseIssueEditRequest,
   parseIssueEditResult,
   parseOverviewData,
+  parseSyncTriggerRequest,
+  parseSyncTriggerResult,
   parseTicketRecord,
   parseTriageMoveRequest,
   parseTriageMoveResult,
@@ -758,5 +760,58 @@ describe("issue action result boundaries", () => {
     expect(parseIssueCreateResult(result)).toEqual(result);
     const drifted: unknown = { ...result, state: { ...state, meta: {} } };
     expect(() => parseIssueCreateResult(drifted)).toThrow(/snapshot/);
+  });
+});
+
+describe("sync trigger boundaries", () => {
+  const state = {
+    workItems: [],
+    maps: [],
+    blockerEdges: [],
+    decisions: [],
+    artifacts: [],
+    meta: { snapshot: "2026-09-05T12:00:00+01:00", repo: "Quick-Release/workbench" },
+  };
+
+  it("accepts an empty request; fieldless excess rejection lives in the seam handler", () => {
+    // Effect's excess-property check has no keys to compare against on an
+    // empty struct, so the handler rejects non-empty bodies itself (the
+    // node-side seam suite asserts the 400).
+    expect(parseSyncTriggerRequest({})).toEqual({});
+    expect(parseSyncTriggerRequest({ force: true })).toEqual({ force: true });
+  });
+
+  it("accepts a result carrying the warnings channel and the re-read state", () => {
+    const result = {
+      message: "Synced 5 tickets, 2 plans.",
+      warnings: ["GH-41: edge cycle detected", "GH-64: no Work item: GH-NN line"],
+      state,
+    };
+    expect(parseSyncTriggerResult(result)).toEqual(result);
+  });
+
+  it("accepts a result with no warnings after a clean sync", () => {
+    expect(parseSyncTriggerResult({ message: "Synced.", warnings: [], state })).toEqual({
+      message: "Synced.",
+      warnings: [],
+      state,
+    });
+  });
+
+  it("rejects a result with an excess property", () => {
+    expect(() =>
+      parseSyncTriggerResult({ message: "Synced.", warnings: [], state, durationMs: 12 }),
+    ).toThrow(/durationMs/);
+  });
+
+  it("rejects a result whose warnings are not strings", () => {
+    expect(() => parseSyncTriggerResult({ message: "Synced.", warnings: [7], state })).toThrow(
+      /warnings/,
+    );
+  });
+
+  it("rejects a result whose state fails the payload schema", () => {
+    const drifted: unknown = { message: "Synced.", warnings: [], state: { ...state, meta: {} } };
+    expect(() => parseSyncTriggerResult(drifted)).toThrow(/snapshot/);
   });
 });

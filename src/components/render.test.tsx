@@ -163,6 +163,23 @@ const data = {
   sessions,
 } satisfies OverviewData;
 
+const overviewPageProps = {
+  state: {
+    workItems: [],
+    maps: [],
+    blockerEdges: [],
+    decisions: [],
+    artifacts: [],
+    meta: { snapshot: "2026-08-29T15:11:41+01:00", repo: "Quick-Release/banquinha" },
+  },
+  mode: "live" as const,
+  onOpenIssue: () => {},
+  onSync: () => {},
+  syncPending: false,
+  syncMessage: null,
+  syncWarnings: [],
+};
+
 const withoutComments = (html: string) => html.replace(/<!-- -->/g, "");
 
 describe("rendered dashboard shell (shadcn rebuild)", () => {
@@ -243,6 +260,7 @@ describe("rendered dashboard shell (shadcn rebuild)", () => {
         search={{ q: "", status: "all", source: "all", stream: "all", view: "all" }}
         onSearchChange={() => {}}
         resetSearch={() => {}}
+        {...overviewPageProps}
       />,
     );
     expect(html).toContain('data-slot="card"');
@@ -268,6 +286,7 @@ describe("rendered dashboard shell (shadcn rebuild)", () => {
         search={{ q: "", status: "all", source: "all", stream: "all", view: "tickets" }}
         onSearchChange={() => {}}
         resetSearch={() => {}}
+        {...overviewPageProps}
       />,
     );
     expect(html).toContain("Specs waiting for a");

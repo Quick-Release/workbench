@@ -4,6 +4,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { IssueDetailPanel, type IssuePanelAction } from "../components/IssueDetailPanel";
 import { TriagePage, type TriageLens } from "../components/TriagePage";
 import { overviewData } from "../data";
+import { setWorkflowState } from "../hooks/use-workflow-state";
 import { issueParamFromSearch, panelIdFor } from "../lib/issue-param";
 import { workflowStateFrom } from "../lib/workflow-state";
 import {
@@ -110,6 +111,7 @@ function TriageRoute() {
       // next render without a manual reload.
       const result = parseTriageMoveResult(raw);
       setState(result.state);
+      setWorkflowState(result.state);
       setMessage(result.message);
     } catch {
       setMessage("The move did not go through — the dev server API is not reachable.");
@@ -134,7 +136,10 @@ function TriageRoute() {
         return;
       }
       const result = RESULT_PARSERS[action.kind](raw);
-      if ("state" in result) setState(result.state);
+      if ("state" in result) {
+        setState(result.state);
+        setWorkflowState(result.state);
+      }
       setPanelMessage(result.message);
       if (action.kind === "create") setIssueParam(result.issueId.slice(3));
     } catch {

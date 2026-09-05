@@ -11,6 +11,8 @@ import {
   parseIssueCreateResult,
   parseIssueEditRequest,
   parseIssueEditResult,
+  parseSyncTriggerRequest,
+  parseSyncTriggerResult,
   parseTriageMoveRequest,
   parseTriageMoveResult,
   parseWorkflowStatePayload,
@@ -30,6 +32,7 @@ const TRIAGE_ROUTE = /^\/api\/workflow\/triage\/?$/;
 const ISSUE_EDIT_ROUTE = /^\/api\/workflow\/issue\/edit\/?$/;
 const ISSUE_COMMENT_ROUTE = /^\/api\/workflow\/issue\/comment\/?$/;
 const ISSUE_CREATE_ROUTE = /^\/api\/workflow\/issue\/create\/?$/;
+const SYNC_ROUTE = /^\/api\/workflow\/sync\/?$/;
 
 // The seam imports the generated snapshot module — its only syntax is the
 // erasable kind (a type-only import and `satisfies`), so plain Node loads it.
@@ -278,6 +281,54 @@ export const applyIssueCreate = async ({ title, body, state, run, cwd }) => {
   }
 };
 
+// The sync trigger (ticket #64) runs what a Developer would run by hand —
+// `pnpm sync` in the app directory, whose script resolves the host repo —
+// then serves the refreshed state with the sync output's warnings channel
+// (cycles, dangling edges, unparsable statuses, missing linkage).
+const warningsFromSyncOutput = (stdout) => {
+  const lines = stdout.split("\n");
+  const start = lines.findIndex((line) => /^Tracker warnings \(\d+\):/.test(line.trim()));
+  if (start === -1) return [];
+  const warnings = [];
+  for (const line of lines.slice(start + 1)) {
+    const match = /^\s+-\s+(.*)$/.exec(line);
+    if (!match) break;
+    warnings.push(match[1]);
+  }
+  return warnings;
+};
+
+export const applySyncTrigger = async ({ appDirectory, run }) => {
+  let outcome;
+  try {
+    outcome = await run("pnpm", ["sync"], appDirectory);
+  } catch (error) {
+    return { ok: false, status: 502, message: `pnpm sync failed: ${messageFrom(error)}` };
+  }
+  const warnings = warningsFromSyncOutput(String(outcome?.stdout ?? ""));
+  let state;
+  try {
+    state = parseWorkflowStatePayload(await loadWorkflowState(appDirectory));
+  } catch (error) {
+    return {
+      ok: false,
+      status: 502,
+      message: `sync ran but reading the refreshed state failed: ${messageFrom(error)}`,
+    };
+  }
+  return {
+    ok: true,
+    result: {
+      message:
+        warnings.length > 0
+          ? `Synced with ${warnings.length} warning${warnings.length === 1 ? "" : "s"}.`
+          : "Synced, no warnings.",
+      warnings,
+      state,
+    },
+  };
+};
+
 // Shared POST plumbing for the seam's actions: decode the request through
 // its schema, load the joined state, apply, and encode the result back
 // through its schema — everything crossing the seam passes both directions.
@@ -371,6 +422,33 @@ export const handleWorkflowApi = async ({
     }
   }
 
+  if (method === "POST" && SYNC_ROUTE.test(pathname)) {
+    // A sync request takes no fields; Effect's excess-property check has no
+    // keys to compare against on an empty struct, so the schema decode is
+    // backed by a no-fields check the schema alone cannot express.
+    let raw;
+    try {
+      raw = JSON.parse(body ?? "");
+    } catch {
+      return { status: 400, json: { message: "request body is not valid JSON" } };
+    }
+    try {
+      parseSyncTriggerRequest(raw);
+    } catch (error) {
+      return { status: 400, json: { message: messageFrom(error) } };
+    }
+    if (
+      raw === null ||
+      typeof raw !== "object" ||
+      Array.isArray(raw) ||
+      Object.keys(raw).length > 0
+    )
+      return { status: 400, json: { message: "a sync request takes no fields" } };
+    const outcome = await applySyncTrigger({ appDirectory, run });
+    if (!outcome.ok) return { status: outcome.status, json: { message: outcome.message } };
+    return { status: 200, json: parseSyncTriggerResult(outcome.result) };
+  }
+
   if (method === "POST") {
     for (const action of POST_ROUTES) {
       if (!action.route.test(pathname)) continue;
@@ -390,7 +468,9 @@ const readBody = (request) =>
   });
 
 const isWorkflowRoute = (pathname) =>
-  WORKFLOW_ROUTE.test(pathname) || POST_ROUTES.some((action) => action.route.test(pathname));
+  WORKFLOW_ROUTE.test(pathname) ||
+  SYNC_ROUTE.test(pathname) ||
+  POST_ROUTES.some((action) => action.route.test(pathname));
 
 export const workflowApiPlugin = () => ({
   name: "workbench-workflow-api",

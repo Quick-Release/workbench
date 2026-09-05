@@ -619,3 +619,91 @@ test("request bodies that fail the issue-action schemas are rejected naming the 
     ok(pattern.test(handled.json.message), `expected ${handled.json.message} to match ${pattern}`);
   }
 });
+
+test("the sync trigger runs pnpm sync and surfaces the warnings channel", async () => {
+  const directory = await withSnapshot(snapshot([workItem(7)]));
+  const calls = [];
+  const run = async (command, args, cwd) => {
+    calls.push({ command, args, cwd });
+    // A sync rewrites the snapshot; the endpoint must serve the refreshed
+    // state, not the module Node cached on the previous import.
+    await writeFile(
+      join(directory, "src", "data.generated.ts"),
+      generatedModule(snapshot([workItem(9, "needs-triage")])),
+    );
+    return {
+      stdout: [
+        "Synced 3 tickets, 1 plans.",
+        "Tracker warnings (2):",
+        "  - GH-41: cycle detected: GH-41 -> GH-42 -> GH-41",
+        "  - GH-64: no Work item: GH-NN line; linkage left unset",
+        "",
+      ].join("\n"),
+    };
+  };
+  const handled = await handleWorkflowApi({
+    method: "POST",
+    pathname: "/api/workflow/sync",
+    body: "{}",
+    appDirectory: directory,
+    hostRoot: HOST_ROOT,
+    run,
+  });
+  strictEqual(handled.status, 200);
+  deepStrictEqual(calls, [{ command: "pnpm", args: ["sync"], cwd: directory }]);
+  deepStrictEqual(handled.json.warnings, [
+    "GH-41: cycle detected: GH-41 -> GH-42 -> GH-41",
+    "GH-64: no Work item: GH-NN line; linkage left unset",
+  ]);
+  deepStrictEqual(
+    handled.json.state.workItems.map((item) => item.id),
+    ["GH-9"],
+  );
+  ok(/synced/i.test(handled.json.message), handled.json.message);
+});
+
+test("the sync trigger reports a clean sync with an empty warnings channel", async () => {
+  const directory = await withSnapshot(snapshot([workItem(7)]));
+  const { run } = runStub([{ stdout: "Tracker: 3 work items, 1 maps, no warnings.\n" }]);
+  const handled = await handleWorkflowApi({
+    method: "POST",
+    pathname: "/api/workflow/sync",
+    body: "{}",
+    appDirectory: directory,
+    hostRoot: HOST_ROOT,
+    run,
+  });
+  strictEqual(handled.status, 200);
+  deepStrictEqual(handled.json.warnings, []);
+});
+
+test("a sync request carrying fields is rejected — a sync takes no arguments", async () => {
+  const directory = await withSnapshot(snapshot([workItem(7)]));
+  const { calls, run } = runStub();
+  const handled = await handleWorkflowApi({
+    method: "POST",
+    pathname: "/api/workflow/sync",
+    body: JSON.stringify({ force: true }),
+    appDirectory: directory,
+    hostRoot: HOST_ROOT,
+    run,
+  });
+  strictEqual(handled.status, 400);
+  ok(/no fields/i.test(handled.json.message), handled.json.message);
+  strictEqual(calls.length, 0);
+});
+
+test("a failed sync run is a 502 carrying the tool's stderr", async () => {
+  const directory = await withSnapshot(snapshot([workItem(7)]));
+  const { run } = runStub(["pnpm exited 1: missing .env"]);
+  const handled = await handleWorkflowApi({
+    method: "POST",
+    pathname: "/api/workflow/sync",
+    body: "{}",
+    appDirectory: directory,
+    hostRoot: HOST_ROOT,
+    run,
+  });
+  strictEqual(handled.status, 502);
+  ok(/missing \.env/.test(handled.json.message), handled.json.message);
+});

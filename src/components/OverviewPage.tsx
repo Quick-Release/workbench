@@ -6,6 +6,14 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { NativeSelect } from "@/components/ui/native-select";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { deriveDisplayState } from "@/lib/display-state";
+import { inFlightBuckets } from "@/lib/in-flight";
+import {
+  frontierStrip,
+  recommendNextAction,
+  type FrontierStrip as FrontierStripData,
+  type Recommendation,
+} from "@/lib/recommendation";
 import { cn } from "@/lib/utils";
 
 import { MetricCard } from "./MetricCard";
@@ -24,7 +32,7 @@ import {
   viewCounts,
 } from "../lib/overview";
 import { overviewViews, sourceFilters } from "../types";
-import type { OverviewData, OverviewSearch, TicketRecord } from "../types";
+import type { OverviewData, OverviewSearch, TicketRecord, WorkflowStatePayload } from "../types";
 
 const sourceOptions = [
   ["all", "All records"],
@@ -70,11 +78,25 @@ export function OverviewPage({
   search,
   onSearchChange,
   resetSearch,
+  state,
+  mode,
+  onOpenIssue,
+  onSync,
+  syncPending,
+  syncMessage,
+  syncWarnings,
 }: Readonly<{
   data: OverviewData;
   search: OverviewSearch;
   onSearchChange: (next: Partial<OverviewSearch>) => void;
   resetSearch: () => void;
+  state: WorkflowStatePayload;
+  mode: "live" | "static";
+  onOpenIssue: (issueId: string) => void;
+  onSync: () => void;
+  syncPending: boolean;
+  syncMessage: string | null;
+  syncWarnings: readonly string[];
 }>) {
   const groups = uniqueGroups(data.tickets);
   const counts = viewCounts(data);
@@ -110,8 +132,34 @@ export function OverviewPage({
     search.stream !== "all" ||
     search.view !== "all";
 
+  const recommendation = useMemo(() => recommendNextAction(state), [state]);
+  const strip = useMemo(() => frontierStrip(state), [state]);
+  const inFlight = useMemo(() => inFlightBuckets(state.workItems), [state.workItems]);
+
   return (
     <>
+      <section aria-label="Next action">
+        <RecommendationHero recommendation={recommendation} onOpenIssue={onOpenIssue} />
+      </section>
+
+      <section aria-label="Repo-wide frontier">
+        <FrontierStripSection strip={strip} onOpenIssue={onOpenIssue} />
+      </section>
+
+      <section aria-label="In-flight work">
+        <OverviewInFlight buckets={inFlight} onOpenIssue={onOpenIssue} />
+      </section>
+
+      <section aria-label="Sync">
+        <SyncSection
+          mode={mode}
+          pending={syncPending}
+          message={syncMessage}
+          warnings={syncWarnings}
+          onSync={onSync}
+        />
+      </section>
+
       <section className="metrics" aria-label="Workflow summary">
         <MetricCard value={counts.grilling} label={overviewViewLabels.grilling} tone="hot" />
         <MetricCard value={counts.spec} label={overviewViewLabels.spec} tone="info" />
@@ -140,7 +188,7 @@ export function OverviewPage({
         <Callout tone="good" label="02 / clean frontier">
           <h2 className="mb-2.5 text-[1.08rem] font-bold leading-[1.18]">
             {readyTickets.length > 0
-              ? "The ready-for-agent queue is ready to move."
+              ? "The ready-for-agent lane is ready to move."
               : "The ready-for-agent lane is empty."}
           </h2>
           <p className="text-[0.82rem] leading-[1.48] text-muted-foreground">
@@ -316,6 +364,242 @@ export function OverviewPage({
         </div>
       </footer>
     </>
+  );
+}
+
+// The next-action hero (ticket #64, ADR 0010): the recommendation's
+// command-first primary line with its bucket reason line underneath. The
+// item opens the shared detail panel; the command itself is copy bait for
+// the terminal — no dashboard control starts a skill session.
+function RecommendationHero({
+  recommendation,
+  onOpenIssue,
+}: Readonly<{
+  recommendation: Recommendation | null;
+  onOpenIssue: (issueId: string) => void;
+}>) {
+  return (
+    <Card
+      data-slot="recommendation-hero"
+      className="gap-0 rounded-none border-line-strong bg-panel/92 p-[22px] shadow-panel"
+    >
+      <p className="section-kicker">Next action</p>
+      {recommendation ? (
+        <div className="flex flex-col gap-1.5">
+          <button
+            type="button"
+            data-open-issue={recommendation.issueId}
+            onClick={() => onOpenIssue(recommendation.issueId)}
+            className="flex w-fit flex-wrap items-baseline gap-x-2 text-left text-[1.35rem] font-bold leading-tight hover:text-acid"
+          >
+            {recommendation.command && <code>{recommendation.command}</code>}
+            <span>
+              {recommendation.command
+                ? `#${recommendation.issueId.slice(3)}`
+                : recommendation.primary}
+            </span>
+          </button>
+          <p data-slot="recommendation-reason" className="text-[0.82rem] text-muted-foreground">
+            {recommendation.reason}
+          </p>
+        </div>
+      ) : (
+        <p className="mt-1 text-sm text-muted-foreground">
+          Nothing to act on right now — the board is all clear or waiting on someone else.
+        </p>
+      )}
+    </Card>
+  );
+}
+
+// The repo-wide frontier strip (ADR 0011): each map's grabbable head in map
+// order plus the unmapped bucket, every item opening the shared panel.
+function FrontierStripSection({
+  strip,
+  onOpenIssue,
+}: Readonly<{
+  strip: FrontierStripData;
+  onOpenIssue: (issueId: string) => void;
+}>) {
+  const openIssueProps = (issueId: string) => ({
+    "data-open-issue": issueId,
+    onClick: () => onOpenIssue(issueId),
+  });
+  return (
+    <div
+      data-slot="frontier-strip"
+      className="grid gap-4 lg:grid-cols-[repeat(auto-fit,minmax(260px,1fr))]"
+    >
+      {strip.maps.map(({ map, head }) => (
+        <Card
+          key={map.mapId}
+          data-slot="strip-map"
+          data-map={map.mapId}
+          className="gap-2 rounded-none border-line bg-panel/90 p-4 shadow-none"
+        >
+          <p className="truncate text-xs font-semibold tracking-wide uppercase">{map.title}</p>
+          {head ? (
+            <button
+              type="button"
+              {...openIssueProps(head.id)}
+              className="flex w-fit flex-col items-start gap-0.5 text-left text-sm hover:text-acid"
+            >
+              <span className="font-medium">{head.title}</span>
+              <span className="font-mono text-xs text-muted-foreground">{head.id}</span>
+            </button>
+          ) : (
+            <p className="text-xs text-muted-foreground">nothing grabbable</p>
+          )}
+        </Card>
+      ))}
+      <Card
+        data-slot="strip-unmapped"
+        className="gap-2 rounded-none border-line bg-panel/90 p-4 shadow-none"
+      >
+        <p className="text-xs font-semibold tracking-wide uppercase">Unmapped open issues</p>
+        {strip.unmapped.length > 0 ? (
+          <ul className="flex flex-col gap-1.5">
+            {strip.unmapped.map((record) => (
+              <li key={record.id}>
+                <button
+                  type="button"
+                  {...openIssueProps(record.id)}
+                  className="flex w-fit items-baseline gap-2 text-left text-sm hover:text-acid"
+                >
+                  <span className="font-mono text-xs text-muted-foreground">{record.id}</span>
+                  <span className="font-medium">{record.title}</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="text-xs text-muted-foreground">nothing grabbable</p>
+        )}
+      </Card>
+    </div>
+  );
+}
+
+const IN_FLIGHT_SECTIONS = [
+  { key: "reviewing", label: "Reviewing" },
+  { key: "implementing", label: "Implementing" },
+  { key: "notStarted", label: "Claimed — not started" },
+] as const;
+
+// The Overview's in-flight rows (stories 5 and 7): resume before grabbing,
+// claimed-but-not-started marked informational until session spawning lands.
+function OverviewInFlight({
+  buckets,
+  onOpenIssue,
+}: Readonly<{
+  buckets: ReturnType<typeof inFlightBuckets>;
+  onOpenIssue: (issueId: string) => void;
+}>) {
+  const total = buckets.reviewing.length + buckets.implementing.length + buckets.notStarted.length;
+  return (
+    <Card className="gap-0 rounded-none border-line bg-panel/90 p-4 shadow-none">
+      <p className="section-kicker">In flight — resume before grabbing</p>
+      {total === 0 ? (
+        <p className="mt-1 text-sm text-muted-foreground">Nothing is in flight right now.</p>
+      ) : (
+        <ul className="mt-2 flex flex-col">
+          {IN_FLIGHT_SECTIONS.map(({ key, label }) =>
+            buckets[key].map((record) => {
+              const display = deriveDisplayState(record, false);
+              return (
+                <li
+                  key={record.id}
+                  data-slot="overview-in-flight-row"
+                  data-bucket={key}
+                  data-informational={key === "notStarted" || undefined}
+                  className="border-b py-2.5 last:border-b-0"
+                >
+                  <p className="flex flex-wrap items-center gap-2 text-sm">
+                    <span className="section-kicker">{label}</span>
+                    <button
+                      type="button"
+                      data-open-issue={record.id}
+                      onClick={() => onOpenIssue(record.id)}
+                      className="font-medium hover:text-acid"
+                    >
+                      {record.title}
+                    </button>
+                    <span className="font-mono text-xs text-muted-foreground">{record.id}</span>
+                    {record.assignees.length > 0 && (
+                      <span className="font-mono text-xs text-muted-foreground">
+                        {record.assignees.map((assignee) => `@${assignee}`).join(" ")}
+                      </span>
+                    )}
+                  </p>
+                  {key === "notStarted" && (
+                    <p className="mt-0.5 text-xs text-muted-foreground">
+                      informational until session spawning lands
+                    </p>
+                  )}
+                  {display.caveats.map((caveat) => (
+                    <p key={caveat.kind} className="mt-0.5 text-xs text-muted-foreground italic">
+                      {caveat.message}
+                    </p>
+                  ))}
+                </li>
+              );
+            }),
+          )}
+        </ul>
+      )}
+    </Card>
+  );
+}
+
+// The sync trigger with its warnings surface (ticket #64): cycles, dangling
+// edges, unparsable statuses, and missing linkage summarized where sync is
+// triggered; static builds degrade the trigger to copy-the-command.
+function SyncSection({
+  mode,
+  pending,
+  message,
+  warnings,
+  onSync,
+}: Readonly<{
+  mode: "live" | "static";
+  pending: boolean;
+  message: string | null;
+  warnings: readonly string[];
+  onSync: () => void;
+}>) {
+  return (
+    <Card className="flex flex-col gap-2 rounded-none border-line bg-panel/90 p-4 shadow-none">
+      <p className="section-kicker">Sync</p>
+      {mode === "static" ? (
+        <div className="flex flex-col gap-1.5">
+          <p className="text-xs text-muted-foreground">No dev server — run the sync by hand:</p>
+          <code className="block w-fit rounded bg-muted px-2 py-1 text-xs">pnpm sync</code>
+        </div>
+      ) : (
+        <div className="flex flex-wrap items-center gap-3">
+          <Button
+            type="button"
+            data-slot="sync-trigger"
+            size="sm"
+            variant="outline"
+            disabled={pending}
+            onClick={onSync}
+          >
+            {pending ? "Syncing…" : "Run sync"}
+          </Button>
+          {message && <span className="text-xs text-muted-foreground">{message}</span>}
+        </div>
+      )}
+      {warnings.length > 0 && (
+        <ul data-slot="sync-warnings" className="flex flex-col gap-1">
+          {warnings.map((warning) => (
+            <li key={warning} data-slot="sync-warning" className="text-xs text-amber">
+              {warning}
+            </li>
+          ))}
+        </ul>
+      )}
+    </Card>
   );
 }
 

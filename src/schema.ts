@@ -1,6 +1,6 @@
 import { Schema } from "effect";
 
-import type { OverviewData } from "./types.ts";
+import type { OverviewData, SyncTriggerRequest } from "./types.ts";
 import {
   artifactKinds,
   blockerEdgeSources,
@@ -170,6 +170,16 @@ export const IssueCreateRequestSchema = Schema.Struct({
 export const IssueCreateResultSchema = Schema.Struct({
   message: Schema.String,
   issueId: Schema.String,
+  state: WorkflowStatePayloadSchema,
+});
+
+// The sync trigger (ticket #64): no request fields; the result carries the
+// warnings channel and the re-read state.
+export const SyncTriggerRequestSchema = Schema.Struct({});
+
+export const SyncTriggerResultSchema = Schema.Struct({
+  message: Schema.String,
+  warnings: Schema.Array(Schema.String),
   state: WorkflowStatePayloadSchema,
 });
 
@@ -380,5 +390,12 @@ export const parseIssueCreateRequest = Schema.decodeUnknownSync(IssueCreateReque
 });
 
 export const parseIssueCreateResult = Schema.decodeUnknownSync(IssueCreateResultSchema, {
+  onExcessProperty: "error",
+});
+
+export const parseSyncTriggerRequest: (input: unknown) => SyncTriggerRequest =
+  Schema.decodeUnknownSync(SyncTriggerRequestSchema, { onExcessProperty: "error" });
+
+export const parseSyncTriggerResult = Schema.decodeUnknownSync(SyncTriggerResultSchema, {
   onExcessProperty: "error",
 });

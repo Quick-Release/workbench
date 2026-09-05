@@ -13,7 +13,7 @@ import {
 // including the required search defaults.
 const overviewLink = linkOptions({
   to: "/",
-  search: { q: "", status: "all", source: "all", stream: "all", view: "all" },
+  search: { q: "", status: "all", source: "all", stream: "all", view: "all", issue: undefined },
 });
 const sessionsLink = linkOptions({
   to: "/sessions",
