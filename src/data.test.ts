@@ -3,6 +3,12 @@ import { describe, expect, it } from "vite-plus/test";
 import { overviewData } from "./data";
 import { overviewData as generatedData } from "./data.generated";
 import {
+  frontier,
+  frontierItemFromTicket,
+  frontierItemFromWorkItem,
+  openBlockers,
+} from "./lib/frontier";
+import {
   parseBlockerEdgeRecord,
   parseOverviewData,
   parseTicketRecord,
@@ -237,6 +243,29 @@ describe("overview data boundary", () => {
     expect(Array.isArray(generatedData.blockerEdges)).toBe(true);
     for (const record of generatedData.blockerEdges)
       expect(parseBlockerEdgeRecord(record)).toBeTruthy();
+  });
+
+  it("names a sound grabbable set over the real snapshot", () => {
+    const items = [
+      ...generatedData.workItems.map(frontierItemFromWorkItem),
+      ...generatedData.tickets.map(frontierItemFromTicket),
+    ];
+    const byId = new Map(items.map((item) => [item.id, item]));
+    const grabbable = frontier(items, generatedData.blockerEdges, generatedData.maps).map(
+      (item) => item.id,
+    );
+
+    for (const id of grabbable) {
+      const item = byId.get(id);
+      expect(item?.open).toBe(true);
+      expect(item?.assignees).toEqual([]);
+      const { open, dangling } = openBlockers(
+        id,
+        generatedData.blockerEdges,
+        new Map(items.map((entry) => [entry.id, entry])),
+      );
+      expect([...open, ...dangling]).toEqual([]);
+    }
   });
 });
 

@@ -1,7 +1,12 @@
 import type { TriageState, WorkflowPhase, WorkItemRecord } from "../types";
 
-// The show-with-caveat vocabulary of ADR 0010's derivation contract: wrong
-// attribution renders both facts — never hidden, never written back.
+// The show-with-caveat vocabulary of the derivation contract (spec #54,
+// "Wrong attribution renders show-with-caveat"): wrong attribution renders
+// both facts — never hidden, never written back. The one wrong-attribution
+// case that does not render a caveat line is two `workflow:` labels: per
+// ADR 0007 those resolve to the furthest-along phase at record derivation
+// (scripts/tracker/labels.mjs), whose warning is the caveat channel, so the
+// record intentionally carries only the resolved phase.
 export type DisplayCaveatKind =
   | "decision-ticket-phase"
   | "implementing-needs-info"
@@ -58,6 +63,9 @@ export const deriveDisplayState = (workItem: WorkItemRecord, blocked: boolean): 
       message: `Phase "grilling" on a refused (wontfix) item — both facts shown.`,
     });
 
+  // Pre-flow closures are legitimate (triage refusal never wears a phase);
+  // an item that entered the flow and closed without reaching shipped is
+  // the accident this caveat exposes.
   if (state === "closed" && phase !== null && phase !== "shipped")
     caveats.push({
       kind: "closed-without-shipped",
