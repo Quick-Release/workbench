@@ -267,7 +267,7 @@ test("a host repo with no issues syncs to empty arrays without warnings", async 
 test("missing credentials degrade to empty arrays with a warning", async () => {
   const { fetchImpl } = routeFetch({});
 
-  const { workItems, maps, warnings } = await collect({
+  const { workItems, maps, decisions, warnings } = await collect({
     fetchImpl,
     env: {},
     ghToken: async () => "",
@@ -275,6 +275,9 @@ test("missing credentials degrade to empty arrays with a warning", async () => {
 
   deepStrictEqual(workItems, []);
   deepStrictEqual(maps, []);
+  // The degraded shape must carry every record family the sync merge
+  // iterates — the decisions collector rides the same early return (#70).
+  deepStrictEqual(decisions, []);
   strictEqual(warnings.length, 1);
   match(warnings[0], /GITHUB_TOKEN/);
 });

@@ -47,7 +47,9 @@ export const collectTrackerState = async ({
   vocabulary,
   vocabularyPath = "",
 }) => {
-  const empty = { workItems: [], maps: [], blockerEdges: [], warnings: [] };
+  // Every record family the sync merge iterates rides even the degraded
+  // returns — a missing decisions array crashes the sort, not a warning.
+  const empty = { workItems: [], maps: [], blockerEdges: [], decisions: [], warnings: [] };
   if (!REPO_PATTERN.test(repo ?? ""))
     return {
       ...empty,
