@@ -9,7 +9,9 @@ import {
   openBlockers,
 } from "./lib/frontier";
 import {
+  parseArtifactRecord,
   parseBlockerEdgeRecord,
+  parseDecisionRecord,
   parseOverviewData,
   parseTicketRecord,
   parseTrackerMapRecord,
@@ -232,6 +234,23 @@ describe("overview data boundary", () => {
     expectRejected(withoutBlockerEdges, /blockerEdges/);
   });
 
+  it("rejects data missing the decisions key entirely", () => {
+    const { decisions: _omitted, ...withoutDecisions } = generatedData;
+    expectRejected(withoutDecisions, /decisions/);
+  });
+
+  it("rejects data missing the artifacts key entirely", () => {
+    const { artifacts: _omitted, ...withoutArtifacts } = generatedData;
+    expectRejected(withoutArtifacts, /artifacts/);
+  });
+
+  it("carries decisions and artifacts from the generated snapshot", () => {
+    expect(Array.isArray(generatedData.decisions)).toBe(true);
+    expect(Array.isArray(generatedData.artifacts)).toBe(true);
+    for (const record of generatedData.decisions) expect(parseDecisionRecord(record)).toBeTruthy();
+    for (const record of generatedData.artifacts) expect(parseArtifactRecord(record)).toBeTruthy();
+  });
+
   it("carries tracker work items and maps from the generated snapshot", () => {
     expect(Array.isArray(generatedData.workItems)).toBe(true);
     expect(Array.isArray(generatedData.maps)).toBe(true);
@@ -386,5 +405,103 @@ describe("blocker edge boundary", () => {
 
   it("rejects an edge with an excess property", () => {
     expect(() => parseBlockerEdgeRecord({ ...edge, weight: 1 })).toThrow(/weight/);
+  });
+});
+
+describe("decision record boundary", () => {
+  const adr = {
+    id: "ADR-0009",
+    source: "adr",
+    workItemId: "GH-49",
+    title: "Decisions and artifacts collect at sync",
+    statement: null,
+    status: "accepted",
+    supersedes: null,
+    decidedAt: null,
+    sourceRef: "docs/adr/0009-decisions-and-artifacts-collect-at-sync.md",
+  };
+
+  const resolution = {
+    id: "GH-49",
+    source: "resolution",
+    workItemId: "GH-49",
+    title: "Resolve decision and artifact modeling",
+    statement: "Resolved by ADR 0009 — docs/adr/0009-….md.",
+    status: null,
+    supersedes: null,
+    decidedAt: "2026-09-02T12:00:00Z",
+    sourceRef: "https://github.com/Quick-Release/workbench/issues/49#issuecomment-2",
+  };
+
+  it("accepts an ADR record with status and declared linkage", () => {
+    expect(parseDecisionRecord(adr)).toEqual(adr);
+  });
+
+  it("accepts a resolution record carrying its full uncapped statement", () => {
+    expect(parseDecisionRecord(resolution)).toEqual(resolution);
+  });
+
+  it("accepts a spec bundle record", () => {
+    expect(
+      parseDecisionRecord({
+        ...resolution,
+        id: "GH-54",
+        source: "spec",
+        title: "Skills-ecosystem dashboard: build spec",
+        statement: null,
+        decidedAt: null,
+        sourceRef: "https://github.com/Quick-Release/workbench/issues/54",
+      }),
+    ).toEqual(expect.objectContaining({ source: "spec", statement: null }));
+  });
+
+  it("rejects an unknown decision source", () => {
+    expect(() => parseDecisionRecord({ ...adr, source: "gist" })).toThrow(/source/);
+  });
+
+  it("rejects an unknown ADR status", () => {
+    expect(() => parseDecisionRecord({ ...adr, status: "ratified" })).toThrow(/status/);
+  });
+
+  it("rejects a decision record with an excess property", () => {
+    expect(() => parseDecisionRecord({ ...adr, bullets: [] })).toThrow(/bullets/);
+  });
+
+  it("rejects a decision record missing its provenance", () => {
+    const { sourceRef: _omitted, ...incomplete } = adr;
+    expect(() => parseDecisionRecord(incomplete)).toThrow(/sourceRef/);
+  });
+});
+
+describe("artifact record boundary", () => {
+  const artifact = {
+    id: "RN-session-db-attribution",
+    kind: "research-note",
+    path: "docs/research/session-db-attribution.md",
+    title: "What the Session Database Can Attribute",
+    workItemId: "GH-42",
+  };
+
+  it("accepts a research-note artifact with its linkage", () => {
+    expect(parseArtifactRecord(artifact)).toEqual(artifact);
+  });
+
+  it("accepts an artifact without linkage", () => {
+    expect(parseArtifactRecord({ ...artifact, workItemId: null })).toEqual(
+      expect.objectContaining({ workItemId: null }),
+    );
+  });
+
+  it("rejects an unknown artifact kind", () => {
+    expect(() => parseArtifactRecord({ ...artifact, kind: "handoff-doc" })).toThrow(/kind/);
+  });
+
+  it("rejects an artifact with an excess property", () => {
+    expect(() => parseArtifactRecord({ ...artifact, sha: "abc" })).toThrow(/sha/);
+  });
+
+  it("rejects an artifact missing its path", () => {
+    const { path: _omitted, ...incomplete } = artifact;
+    expect(() => parseArtifactRecord(incomplete)).toThrow(/path/);
   });
 });

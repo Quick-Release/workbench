@@ -5,11 +5,13 @@ import {
   apiBaseFrom,
   fetchBlockedBy,
   fetchIssue,
+  fetchIssueComments,
   fetchMapIssues,
   fetchOpenIssues,
   fetchSubIssues,
 } from "./issues.mjs";
 import { lineEdgesForBody, mergeBlockerEdges } from "./edges.mjs";
+import { resolutionDecisionFromIssue, sortDecisions, specDecisionFromIssue } from "./decisions.mjs";
 import { deriveWorkItem, loadWorkflowVocabulary } from "./labels.mjs";
 
 const execFileAsync = promisify(execFile);
@@ -79,10 +81,14 @@ export const collectTrackerState = async ({
 
   const workItems = [];
   const recordsById = new Map();
+  // ADR 0009: every issue body the adapter already holds is a spec-bundle
+  // candidate; the section's presence declares the record, nothing re-read.
+  const issuesByNumber = new Map();
   const collectRecords = (issues) => {
     for (const result of issues) {
       const id = `GH-${result.number}`;
       if (recordsById.has(id)) continue;
+      issuesByNumber.set(result.number, result);
       const { record, warnings: itemWarnings } = deriveWorkItem(result, phaseVocabulary);
       workItems.push(record);
       recordsById.set(id, record);
@@ -95,8 +101,13 @@ export const collectTrackerState = async ({
   collectRecords(mapIssues.issues);
 
   const maps = [];
+  // ADR 0009: resolution records ride the same membership enumeration —
+  // closed children get one targeted comments read (never a sweep), sharing
+  // the targeted-read budget with work-item reads.
+  const resolutions = [];
   let targetedReads = 0;
   let cappedReads = false;
+  let cappedResolutions = 0;
   for (const mapIssue of mapIssues.issues) {
     const record = recordsById.get(`GH-${mapIssue.number}`);
     const { issues: members, warnings: memberWarnings } = await fetchSubIssues({
@@ -112,6 +123,25 @@ export const collectTrackerState = async ({
     let cappedHere = 0;
     for (const member of members) {
       ticketIds.push(`GH-${member.number}`);
+      if (!issuesByNumber.has(member.number)) issuesByNumber.set(member.number, member);
+      if (member.state === "closed") {
+        if (targetedReads >= MAX_ISSUE_READS) {
+          cappedResolutions += 1;
+        } else {
+          targetedReads += 1;
+          const { comments, warnings: commentWarnings } = await fetchIssueComments({
+            repo,
+            token,
+            apiBase,
+            issueNumber: member.number,
+            fetchImpl,
+            maxPages,
+          });
+          warnings.push(...commentWarnings.map((warning) => `${record.id}: ${warning}`));
+          const resolution = resolutionDecisionFromIssue({ issue: member, comments });
+          if (resolution) resolutions.push(resolution);
+        }
+      }
       if (knownNumbers.has(member.number)) continue;
       if (targetedReads >= MAX_ISSUE_READS) {
         cappedHere += 1;
@@ -133,6 +163,13 @@ export const collectTrackerState = async ({
       warnings.push(
         `${record.id}: targeted reads stopped at the ${MAX_ISSUE_READS} cap; ${cappedHere} member records not collected`,
       );
+    }
+    if (cappedResolutions > 0) {
+      cappedReads = true;
+      warnings.push(
+        `${record.id}: targeted reads stopped at the ${MAX_ISSUE_READS} cap; ${cappedResolutions} resolution comments not collected`,
+      );
+      cappedResolutions = 0;
     }
     maps.push({
       mapId: record.id,
@@ -219,7 +256,21 @@ export const collectTrackerState = async ({
   });
   warnings.push(...merged.warnings);
 
+  // ADR 0009: tracker-sourced decisions — one spec bundle per issue whose
+  // body declares an Implementation-Decisions section, plus the resolution
+  // records gathered off the maps above — sorted for the snapshot.
+  const specBundles = [...issuesByNumber.values()].flatMap((issue) => {
+    const bundle = specDecisionFromIssue(issue);
+    return bundle ? [bundle] : [];
+  });
+
   const byNumberAsc = (left, right) => Number(left.id.slice(3)) - Number(right.id.slice(3));
   workItems.sort(byNumberAsc);
-  return { workItems, maps, blockerEdges: merged.edges, warnings };
+  return {
+    workItems,
+    maps,
+    blockerEdges: merged.edges,
+    decisions: sortDecisions([...resolutions, ...specBundles]),
+    warnings,
+  };
 };

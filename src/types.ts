@@ -102,6 +102,43 @@ export type BlockerEdgeRecord = {
   sourceRef: string;
 };
 
+// ADR 0009: decisions collect at sync from exactly three sources — `adr`
+// (docs/adr files), `resolution` (the closing comment on a closed decision
+// ticket), and `spec` (one bundle per spec issue's Implementation-Decisions
+// section) — never merged; the view groups them by work item. Artifacts are
+// research notes only.
+export const decisionSources = ["adr", "resolution", "spec"] as const;
+
+export type DecisionSource = (typeof decisionSources)[number];
+
+export const decisionStatuses = ["proposed", "accepted", "deprecated", "superseded"] as const;
+
+export type DecisionStatus = (typeof decisionStatuses)[number];
+
+export type DecisionRecord = {
+  id: string;
+  source: DecisionSource;
+  workItemId: string | null;
+  title: string;
+  statement: string | null;
+  status: DecisionStatus | null;
+  supersedes: string | null;
+  decidedAt: string | null;
+  sourceRef: string;
+};
+
+export const artifactKinds = ["research-note"] as const;
+
+export type ArtifactKind = (typeof artifactKinds)[number];
+
+export type ArtifactRecord = {
+  id: string;
+  kind: ArtifactKind;
+  path: string;
+  title: string;
+  workItemId: string | null;
+};
+
 export type PlanRecord = {
   id: string;
   title: string;
@@ -253,5 +290,7 @@ export type OverviewData = {
   workItems: readonly WorkItemRecord[];
   maps: readonly TrackerMapRecord[];
   blockerEdges: readonly BlockerEdgeRecord[];
+  decisions: readonly DecisionRecord[];
+  artifacts: readonly ArtifactRecord[];
   sessions: SessionUsage;
 };

@@ -158,6 +158,8 @@ const data = {
   workItems: [],
   maps: [],
   blockerEdges: [],
+  decisions: [],
+  artifacts: [],
   sessions,
 } satisfies OverviewData;
 
