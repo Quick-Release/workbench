@@ -25,10 +25,11 @@ const namespace = (id: string) => id.slice(0, id.lastIndexOf("-"));
 
 const numberSuffix = (id: string) => Number(id.slice(id.lastIndexOf("-") + 1)) || 0;
 
+const compareIds = (left: string, right: string) =>
+  namespace(left).localeCompare(namespace(right)) || numberSuffix(left) - numberSuffix(right);
+
 const byRecordId = (left: { id: string; source: string }, right: { id: string; source: string }) =>
-  namespace(left.id).localeCompare(namespace(right.id)) ||
-  numberSuffix(left.id) - numberSuffix(right.id) ||
-  left.source.localeCompare(right.source);
+  compareIds(left.id, right.id) || left.source.localeCompare(right.source);
 
 type MutableGroup = {
   workItemId: string | null;
@@ -62,10 +63,7 @@ export const decisionGroups = (
 
   const sorted: readonly DecisionGroup[] = [
     ...[...linked.values()].sort((left, right) =>
-      byRecordId(
-        { id: left.workItemId ?? "", source: "" },
-        { id: right.workItemId ?? "", source: "" },
-      ),
+      compareIds(left.workItemId ?? "", right.workItemId ?? ""),
     ),
   ];
   const hasUnlinked = unlinked.decisions.length + unlinked.artifacts.length > 0;

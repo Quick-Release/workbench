@@ -90,9 +90,13 @@ describe("decision grouping", () => {
     expect(groups[0].workItemId).toBe("GH-42");
   });
 
-  it("surfaces a warning naming the unlinked group's size", () => {
-    expect(unlinkedWarning(2)).toContain("2");
-    expect(unlinkedWarning(2).length).toBeGreaterThan(10);
+  it("surfaces the unlinked group's warning naming its size", () => {
+    expect(unlinkedWarning(1)).toBe(
+      "1 record carries no Work item linkage; grouped here so the gap stays visible",
+    );
+    expect(unlinkedWarning(2)).toBe(
+      "2 records carry no Work item linkage; grouped here so the gap stays visible",
+    );
   });
 
   it("groups deterministically for identical input in any order", () => {

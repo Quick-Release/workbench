@@ -11,10 +11,17 @@ const SOURCE_LABEL: Record<DecisionSource, string> = {
   spec: "Spec bundle",
 };
 
+// ADRs and research notes live as files in the host repo; a browser can only
+// open them at a web url, so repo-relative refs resolve to their path on the
+// host repository (the dashboard already treats GitHub as the tracker home).
+// Full urls (issue and comment refs) pass through untouched.
+const noteHref = (repositoryUrl: string, ref: string) =>
+  /^[a-z]+:\/\//i.test(ref) || !repositoryUrl ? ref : `${repositoryUrl}/blob/HEAD/${ref}`;
+
 // The one shared record row: the source form stays visible — a conclusion
 // that exists as both a resolution and an ADR renders twice, side by side,
 // never merged. Statements carry the full closing comment, uncapped.
-function DecisionRow({ record }: { record: DecisionRecord }) {
+function DecisionRow({ record, repositoryUrl }: { record: DecisionRecord; repositoryUrl: string }) {
   return (
     <li
       data-slot="decision-row"
@@ -23,7 +30,7 @@ function DecisionRow({ record }: { record: DecisionRecord }) {
     >
       <p className="flex flex-wrap items-center gap-2 text-sm font-medium">
         <a
-          href={record.sourceRef}
+          href={noteHref(repositoryUrl, record.sourceRef)}
           target="_blank"
           rel="noreferrer"
           className="font-mono text-xs underline-offset-4 hover:underline"
@@ -55,12 +62,12 @@ function DecisionRow({ record }: { record: DecisionRecord }) {
   );
 }
 
-function ArtifactRow({ record }: { record: ArtifactRecord }) {
+function ArtifactRow({ record, repositoryUrl }: { record: ArtifactRecord; repositoryUrl: string }) {
   return (
     <li data-slot="artifact-row" className="border-b py-3 last:border-b-0">
       <p className="flex flex-wrap items-center gap-2 text-sm font-medium">
         <a
-          href={record.path}
+          href={noteHref(repositoryUrl, record.path)}
           target="_blank"
           rel="noreferrer"
           className="font-mono text-xs underline-offset-4 hover:underline"
@@ -78,13 +85,16 @@ function ArtifactRow({ record }: { record: ArtifactRecord }) {
 // The decisions view (ticket #63): Decision and Artifact records regrouped by
 // work item — the index is rebuilt purely from the synced records, map gists
 // are never consulted. Records without work-item linkage land in one explicit
-// group whose warning surfaces.
+// group whose warning surfaces. `repositoryUrl` is the host repository's web
+// home, from the bundled snapshot's meta.
 export function DecisionsPage({
   decisions,
   artifacts,
+  repositoryUrl,
 }: {
   decisions: readonly DecisionRecord[];
   artifacts: readonly ArtifactRecord[];
+  repositoryUrl: string;
 }) {
   const groups = decisionGroups(decisions, artifacts);
 
@@ -132,10 +142,14 @@ export function DecisionsPage({
                 <CardContent>
                   <ul>
                     {group.decisions.map((record) => (
-                      <DecisionRow key={`${record.id}:${record.source}`} record={record} />
+                      <DecisionRow
+                        key={`${record.id}:${record.source}`}
+                        record={record}
+                        repositoryUrl={repositoryUrl}
+                      />
                     ))}
                     {group.artifacts.map((record) => (
-                      <ArtifactRow key={record.id} record={record} />
+                      <ArtifactRow key={record.id} record={record} repositoryUrl={repositoryUrl} />
                     ))}
                   </ul>
                 </CardContent>

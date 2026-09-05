@@ -1,6 +1,7 @@
 import { renderToString } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
 
+import { overviewData } from "../data";
 import type { ArtifactRecord, DecisionRecord } from "../types";
 import { DecisionsPage } from "./DecisionsPage";
 
@@ -42,7 +43,11 @@ const artifact = (id: string, overrides: Partial<ArtifactRecord> = {}): Artifact
 const renderPage = (
   decisions: readonly DecisionRecord[],
   artifacts: readonly ArtifactRecord[] = [],
-) => renderToString(<DecisionsPage decisions={decisions} artifacts={artifacts} />);
+  repositoryUrl = "https://github.com/Quick-Release/workbench",
+) =>
+  renderToString(
+    <DecisionsPage decisions={decisions} artifacts={artifacts} repositoryUrl={repositoryUrl} />,
+  );
 
 const groupHtml = (html: string, workItemId: string) => {
   const marker = `data-work-item="${workItemId}"`;
@@ -62,15 +67,16 @@ describe("the decisions view", () => {
     expect(group).toContain('data-source="resolution"');
   });
 
-  it("renders the supersession chain with deprecated statuses visible", () => {
+  it("renders the supersession chain inside its group with deprecated statuses visible", () => {
     const html = renderPage([
       adr("ADR-0001", { status: "superseded" }),
       adr("ADR-0002", { supersedes: "ADR-0001" }),
       adr("ADR-0003", { status: "deprecated" }),
     ]);
-    expect(html).toContain("supersedes ADR-0001");
-    expect(html).toContain("superseded");
-    expect(html).toContain("deprecated");
+    const unlinked = html.slice(html.indexOf('data-unlinked="true"'));
+    expect(unlinked.indexOf("ADR-0002")).toBeLessThan(unlinked.indexOf("supersedes ADR-0001"));
+    expect(unlinked).toContain('data-status="superseded"');
+    expect(unlinked).toContain('data-status="deprecated"');
   });
 
   it("lands unlinked records in the explicit warned group", () => {
@@ -86,17 +92,32 @@ describe("the decisions view", () => {
     expect(linked).not.toContain("ADR-0001");
   });
 
-  it("links artifacts to their note path", () => {
+  it("opens artifact and ADR links at the note's path on the host repository", () => {
     const html = renderPage(
-      [resolution("GH-42")],
+      [adr("ADR-0009")],
       [
         artifact("RN-session-db-attribution", {
           path: "docs/research/session-db-attribution.md",
           workItemId: "GH-42",
         }),
       ],
+      "https://github.com/Quick-Release/workbench",
     );
-    expect(html).toContain('href="docs/research/session-db-attribution.md"');
+    expect(html).toContain(
+      'href="https://github.com/Quick-Release/workbench/blob/HEAD/docs/research/session-db-attribution.md"',
+    );
+    expect(html).toContain(
+      'href="https://github.com/Quick-Release/workbench/blob/HEAD/docs/adr/adr-0009.md"',
+    );
+  });
+
+  it("renders the real synced snapshot for this repo", () => {
+    const html = renderPage(overviewData.decisions, overviewData.artifacts);
+    expect(overviewData.decisions.length).toBeGreaterThanOrEqual(12);
+    expect(html).toContain("ADR-0009");
+    expect(html).toContain("GH-49");
+    expect(html).toContain("RN-session-db-attribution");
+    expect(html).toContain("no Work item linkage");
   });
 
   it("carries statements uncapped", () => {
