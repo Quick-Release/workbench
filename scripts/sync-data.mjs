@@ -8,6 +8,7 @@ import {
   sessionUsageDisabled,
 } from "./sessions.mjs";
 import { demoSourceRoot, resolveSourceRoot } from "./source-root.mjs";
+import { lineEdgesForTicketFile, mergeBlockerEdges } from "./tracker/edges.mjs";
 import { collectTrackerState } from "./tracker/index.mjs";
 import { readdir, readFile, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, join, relative, resolve } from "node:path";
@@ -246,11 +247,6 @@ const progressFrom = (text) => {
   };
 };
 
-const dependenciesFrom = (text) => {
-  const match = text.match(/^\s*(?:[-*]\s*)?(?:Dependencies|Blocked by|Depends on)\s*:\s*(.+)$/im);
-  return match ? shorten(match[1], 180) : "—";
-};
-
 const humanize = (value) =>
   value
     .split("/")
@@ -302,8 +298,7 @@ const planGroupFrom = (path) => {
   return humanize(parts.slice(plansIndex + 1, ticketsIndex).join("/"));
 };
 
-const recordFromFile = async (path, repositoryUrl, branch, kind = "plan-ticket") => {
-  const text = await readText(path);
+const recordFromFile = (path, text, repositoryUrl, branch, kind = "plan-ticket") => {
   const filename = path.split(/[\\/]/).pop() || "";
   const id = ticketIdFrom(text, filename);
   if (!id) return null;
@@ -319,7 +314,6 @@ const recordFromFile = async (path, repositoryUrl, branch, kind = "plan-ticket")
     statusDetail: rawStatus === "Not explicitly stated" ? "" : rawStatus,
     group,
     lane: sectionParagraph(text, ["Phase", "Milestone", "Lane"]) || "Planning",
-    dependencies: dependenciesFrom(text),
     summary: summaryFrom(text),
     sourcePath: relativePath(path),
     sourceUrl: sourceUrlFor(repositoryUrl, branch, relativePath(path)),
@@ -328,7 +322,7 @@ const recordFromFile = async (path, repositoryUrl, branch, kind = "plan-ticket")
   };
 };
 
-const parseDashboardLedger = async (repositoryUrl, branch) => {
+const parseDashboardLedger = async (repositoryUrl, branch, sourceTexts) => {
   const ledgerPath = join(docsDirectory, "dashboard-plan/status.md");
   const text = await readText(ledgerPath);
   const records = [];
@@ -337,6 +331,8 @@ const parseDashboardLedger = async (repositoryUrl, branch) => {
     const [, id, rawStatus, title, link] = match;
     const sourcePath = resolve(dirname(ledgerPath), (link || "").split("#")[0]);
     const sourceText = await readText(sourcePath);
+    if (sourceText)
+      sourceTexts.push({ id, text: sourceText, sourcePath: relativePath(sourcePath) });
     const status = canonicalStatus[rawStatus] || normalizeStatus(rawStatus);
     records.push({
       id,
@@ -346,7 +342,6 @@ const parseDashboardLedger = async (repositoryUrl, branch) => {
       statusDetail: `Canonical ledger: ${rawStatus}`,
       group: "Dashboard",
       lane: sectionParagraph(sourceText, ["Milestone", "Phase", "Lane"]) || "Dashboard backlog",
-      dependencies: dependenciesFrom(sourceText),
       summary: sourceText ? summaryFrom(sourceText) : "No ticket file found.",
       sourcePath: relativePath(sourcePath),
       sourceUrl: sourceUrlFor(repositoryUrl, branch, relativePath(sourcePath)),
@@ -471,11 +466,16 @@ const main = async () => {
   const planFiles = (await walk(plansDirectory)).filter((path) => path.endsWith(".md"));
   const planTicketFiles = planFiles.filter((path) => relativePath(path).includes("/tickets/"));
   const genericTickets = [];
+  const ticketFileTexts = [];
   for (const path of planTicketFiles) {
-    const record = await recordFromFile(path, repositoryUrl, branch);
-    if (record) genericTickets.push(record);
+    const text = await readText(path);
+    if (!text) continue;
+    const record = recordFromFile(path, text, repositoryUrl, branch);
+    if (!record) continue;
+    genericTickets.push(record);
+    ticketFileTexts.push({ id: record.id, text, sourcePath: relativePath(path) });
   }
-  const dashboardTickets = await parseDashboardLedger(repositoryUrl, branch);
+  const dashboardTickets = await parseDashboardLedger(repositoryUrl, branch, ticketFileTexts);
   const ticketMap = new Map(genericTickets.map((ticket) => [ticket.id, ticket]));
   for (const ticket of dashboardTickets) ticketMap.set(ticket.id, ticket);
   for (const ticket of serviceTickets) ticketMap.set(ticket.id, ticket);
@@ -508,6 +508,23 @@ const main = async () => {
     .map((entry) => entry.name)
     .sort();
   const changes = await parseSpecChanges(changeDirectories, repositoryUrl, branch);
+
+  // ADR 0008: one flat top-level blockerEdges list. The tracker collector
+  // already applied repo-level native precedence to its own syntaxes; a local
+  // ticket file's lines always carry a non-tracker endpoint, so they merge in
+  // as the second syntax without disturbing that precedence.
+  const blockerEdges = mergeBlockerEdges({
+    nativeEdges: tracker.blockerEdges ?? [],
+    nativeAvailable: true,
+    lineEdges: ticketFileTexts.flatMap(({ id, text, sourcePath }) =>
+      lineEdgesForTicketFile({ id, text, sourcePath }),
+    ),
+    knownIds: new Set([
+      ...tracker.workItems.map((item) => item.id),
+      ...tickets.map((ticket) => ticket.id),
+    ]),
+  });
+  const trackerWarnings = [...tracker.warnings, ...blockerEdges.warnings];
 
   const sources = [];
   sources.push({ label: "Tracker", path: `github / repo ${repo}` });
@@ -557,6 +574,7 @@ const main = async () => {
     changes,
     workItems: tracker.workItems,
     maps: tracker.maps,
+    blockerEdges: blockerEdges.edges,
     sessions,
   };
   await writeFile(
@@ -569,9 +587,9 @@ const main = async () => {
         ? ` Sessions: ${sessions.sessions.length} tracked (${sessions.perModel.length} models).`
         : " Sessions sync disabled."),
   );
-  if (tracker.warnings.length > 0) {
-    console.log(`Tracker warnings (${tracker.warnings.length}):`);
-    for (const warning of tracker.warnings) console.log(`  - ${warning}`);
+  if (trackerWarnings.length > 0) {
+    console.log(`Tracker warnings (${trackerWarnings.length}):`);
+    for (const warning of trackerWarnings) console.log(`  - ${warning}`);
   } else {
     console.log(
       `Tracker: ${tracker.workItems.length} work items, ${tracker.maps.length} maps, no warnings.`,

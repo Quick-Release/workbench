@@ -20,7 +20,6 @@ const tickets = [
     statusDetail: "",
     group: "Dashboard",
     lane: "Foundation",
-    dependencies: "—",
     summary: "Contract",
     sourcePath: "docs/dashboard-plan/status.md",
     sourceUrl: "https://github.com/Quick-Release/banquinha",
@@ -35,7 +34,6 @@ const tickets = [
     statusDetail: "needs sign-off",
     group: "Security hardening",
     lane: "Review",
-    dependencies: "BQ-001",
     summary: "Gate",
     sourcePath: "docs/plans/security-hardening/tickets/SEC-001.md",
     sourceUrl: "https://github.com/Quick-Release/banquinha",
@@ -159,6 +157,7 @@ const data = {
   changes,
   workItems: [],
   maps: [],
+  blockerEdges: [],
   sessions,
 } satisfies OverviewData;
 
@@ -203,7 +202,7 @@ describe("rendered dashboard shell (shadcn rebuild)", () => {
     expect(html).toContain('data-slot="table"');
     expect(html).toContain("BQ-001");
     expect(html).toContain("ready-for-human");
-    expect((html.match(/↕/g) ?? []).length).toBe(5);
+    expect((html.match(/↕/g) ?? []).length).toBe(4);
     expect(html).not.toContain("aria-sort");
     expect(html).toContain('aria-live="polite"');
     expect(withoutComments(html)).toContain("<strong>2</strong> of 5 ticket records");

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 import { overviewData } from "./data";
 import { overviewData as generatedData } from "./data.generated";
 import {
+  parseBlockerEdgeRecord,
   parseOverviewData,
   parseTicketRecord,
   parseTrackerMapRecord,
@@ -21,7 +22,6 @@ const ticket = {
   statusDetail: "",
   group: "Ticket system",
   lane: "Core",
-  dependencies: "—",
   summary: "Ticket",
   sourcePath: "docs/plans/ticket-system/tickets/TKT-001.md",
   sourceUrl: "https://github.com/Quick-Release/banquinha",
@@ -95,6 +95,10 @@ describe("overview data boundary", () => {
     expect(() => parseTicketRecord({ ...ticket, progress: { done: "most", total: 1 } })).toThrow(
       /done/,
     );
+  });
+
+  it("rejects a ticket carrying the retired dependencies display string", () => {
+    expect(() => parseTicketRecord({ ...ticket, dependencies: "BQ-001" })).toThrow(/dependencies/);
   });
 
   it("rejects an unknown theme key and names the path", () => {
@@ -217,11 +221,22 @@ describe("overview data boundary", () => {
     expectRejected(withoutWorkItems, /workItems/);
   });
 
+  it("rejects data missing the blocker edges key entirely", () => {
+    const { blockerEdges: _omitted, ...withoutBlockerEdges } = generatedData;
+    expectRejected(withoutBlockerEdges, /blockerEdges/);
+  });
+
   it("carries tracker work items and maps from the generated snapshot", () => {
     expect(Array.isArray(generatedData.workItems)).toBe(true);
     expect(Array.isArray(generatedData.maps)).toBe(true);
     for (const record of generatedData.workItems) expect(parseWorkItemRecord(record)).toBeTruthy();
     for (const record of generatedData.maps) expect(parseTrackerMapRecord(record)).toBeTruthy();
+  });
+
+  it("carries blocker edges from the generated snapshot", () => {
+    expect(Array.isArray(generatedData.blockerEdges)).toBe(true);
+    for (const record of generatedData.blockerEdges)
+      expect(parseBlockerEdgeRecord(record)).toBeTruthy();
   });
 });
 
@@ -306,5 +321,41 @@ describe("tracker map boundary", () => {
 
   it("rejects a map record with non-string member ids", () => {
     expect(() => parseTrackerMapRecord({ ...trackerMap, ticketIds: [42] })).toThrow(/ticketIds/);
+  });
+});
+
+describe("blocker edge boundary", () => {
+  const edge = {
+    blockedId: "GH-56",
+    blockerId: "GH-55",
+    source: "github-native",
+    sourceRef: "https://github.com/Quick-Release/workbench/issues/56",
+  };
+
+  it("accepts a native edge with its provenance", () => {
+    expect(parseBlockerEdgeRecord(edge)).toEqual(edge);
+  });
+
+  it("accepts a line edge over a cross-source reference", () => {
+    const lineEdge = {
+      blockedId: "BQ-12",
+      blockerId: "GH-47",
+      source: "blocked-by-line",
+      sourceRef: "docs/plans/dashboard/tickets/BQ-12.md",
+    };
+    expect(parseBlockerEdgeRecord(lineEdge)).toEqual(lineEdge);
+  });
+
+  it("rejects an unknown edge source", () => {
+    expect(() => parseBlockerEdgeRecord({ ...edge, source: "notion" })).toThrow(/source/);
+  });
+
+  it("rejects an edge missing its blocker id", () => {
+    const { blockerId: _omitted, ...incomplete } = edge;
+    expect(() => parseBlockerEdgeRecord(incomplete)).toThrow(/blockerId/);
+  });
+
+  it("rejects an edge with an excess property", () => {
+    expect(() => parseBlockerEdgeRecord({ ...edge, weight: 1 })).toThrow(/weight/);
   });
 });

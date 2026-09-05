@@ -2,6 +2,7 @@ import { Schema } from "effect";
 
 import type { OverviewData } from "./types";
 import {
+  blockerEdgeSources,
   serviceStatuses,
   ticketKinds,
   ticketStatuses,
@@ -32,13 +33,23 @@ export const TicketRecordSchema = Schema.Struct({
   statusDetail: Schema.String,
   group: Schema.String,
   lane: Schema.String,
-  dependencies: Schema.String,
   summary: Schema.String,
   sourcePath: Schema.String,
   sourceUrl: Schema.String,
   kind: TicketKindSchema,
   externalSource: Schema.optional(Schema.String),
   progress: Schema.Struct({ done: Schema.Number, total: Schema.Number }),
+});
+
+export const BlockerEdgeSourceSchema = Schema.Literals(blockerEdgeSources);
+
+// ADR 0008: `{blockedId, blockerId, source, sourceRef}` — the issue URL or
+// ticket-file path the edge was declared at, as provenance.
+export const BlockerEdgeRecordSchema = Schema.Struct({
+  blockedId: Schema.String,
+  blockerId: Schema.String,
+  source: BlockerEdgeSourceSchema,
+  sourceRef: Schema.String,
 });
 
 export const WorkItemRecordSchema = Schema.Struct({
@@ -198,6 +209,7 @@ export const OverviewDataSchema = Schema.Struct({
   changes: Schema.Array(SpecChangeRecordSchema),
   workItems: Schema.Array(WorkItemRecordSchema),
   maps: Schema.Array(TrackerMapRecordSchema),
+  blockerEdges: Schema.Array(BlockerEdgeRecordSchema),
   sessions: SessionUsageSchema,
 });
 
@@ -218,5 +230,9 @@ export const parseWorkItemRecord = Schema.decodeUnknownSync(WorkItemRecordSchema
 });
 
 export const parseTrackerMapRecord = Schema.decodeUnknownSync(TrackerMapRecordSchema, {
+  onExcessProperty: "error",
+});
+
+export const parseBlockerEdgeRecord = Schema.decodeUnknownSync(BlockerEdgeRecordSchema, {
   onExcessProperty: "error",
 });
