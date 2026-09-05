@@ -104,7 +104,8 @@ export type BlockerEdgeRecord = {
 
 // The execution seam's workflow read payload (ticket #59): the synced records
 // joined for live reads, with the snapshot stamp and repo as provenance.
-// Later tickets extend it with decisions and artifacts.
+// Ticket #63 extends it with the decisions and artifacts the decisions view
+// groups.
 export type WorkflowStateMeta = {
   snapshot: string;
   repo: string;
@@ -114,6 +115,8 @@ export type WorkflowStatePayload = {
   workItems: readonly WorkItemRecord[];
   maps: readonly TrackerMapRecord[];
   blockerEdges: readonly BlockerEdgeRecord[];
+  decisions: readonly DecisionRecord[];
+  artifacts: readonly ArtifactRecord[];
   meta: WorkflowStateMeta;
 };
 

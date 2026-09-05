@@ -530,6 +530,26 @@ describe("workflow seam payload boundary", () => {
     summary: "The execution seam serves workflow state.",
   };
 
+  const decision = {
+    id: "ADR-0009",
+    source: "adr",
+    workItemId: "GH-49",
+    title: "Decisions and artifacts collect at sync",
+    statement: null,
+    status: "accepted",
+    supersedes: null,
+    decidedAt: null,
+    sourceRef: "docs/adr/0009-decisions-and-artifacts-collect-at-sync.md",
+  };
+
+  const artifact = {
+    id: "RN-session-db-attribution",
+    kind: "research-note",
+    path: "docs/research/session-db-attribution.md",
+    title: "What the Session Database Can Attribute",
+    workItemId: "GH-42",
+  };
+
   const payload = {
     workItems: [workItem],
     maps: [
@@ -548,11 +568,33 @@ describe("workflow seam payload boundary", () => {
         sourceRef: "https://github.com/Quick-Release/workbench/issues/60",
       },
     ],
+    decisions: [decision],
+    artifacts: [artifact],
     meta: { snapshot: "2026-09-05T12:00:00+01:00", repo: "Quick-Release/workbench" },
   };
 
   it("accepts the joined read payload over synced records", () => {
     expect(parseWorkflowStatePayload(payload)).toEqual(payload);
+  });
+
+  it("rejects a payload missing the decisions key entirely", () => {
+    const { decisions: _omitted, ...withoutDecisions } = payload;
+    expect(() => parseWorkflowStatePayload(withoutDecisions)).toThrow(/decisions/);
+  });
+
+  it("rejects a payload missing the artifacts key entirely", () => {
+    const { artifacts: _omitted, ...withoutArtifacts } = payload;
+    expect(() => parseWorkflowStatePayload(withoutArtifacts)).toThrow(/artifacts/);
+  });
+
+  it("rejects a payload carrying a decision with an unknown source", () => {
+    const drifted: unknown = { ...payload, decisions: [{ ...decision, source: "gist" }] };
+    expect(() => parseWorkflowStatePayload(drifted)).toThrow(/source/);
+  });
+
+  it("rejects a payload carrying an artifact with an excess property", () => {
+    const drifted: unknown = { ...payload, artifacts: [{ ...artifact, sha: "abc" }] };
+    expect(() => parseWorkflowStatePayload(drifted)).toThrow(/sha/);
   });
 
   it("rejects a payload with an excess top-level key", () => {
@@ -622,6 +664,8 @@ describe("triage move result boundary", () => {
       workItems: [],
       maps: [],
       blockerEdges: [],
+      decisions: [],
+      artifacts: [],
       meta: { snapshot: "2026-09-05T12:00:00+01:00", repo: "Quick-Release/workbench" },
     },
   };
@@ -688,6 +732,8 @@ describe("issue action result boundaries", () => {
     workItems: [],
     maps: [],
     blockerEdges: [],
+    decisions: [],
+    artifacts: [],
     meta: { snapshot: "2026-09-05T12:00:00+01:00", repo: "Quick-Release/workbench" },
   };
 

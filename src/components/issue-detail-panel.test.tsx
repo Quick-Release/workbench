@@ -50,6 +50,8 @@ const baseState: WorkflowStatePayload = {
   ],
   maps,
   blockerEdges: edges,
+  decisions: [],
+  artifacts: [],
   meta: { snapshot: "2026-09-05T12:00:00+01:00", repo: "Quick-Release/workbench" },
 };
 

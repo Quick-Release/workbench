@@ -117,6 +117,8 @@ export const WorkflowStatePayloadSchema = Schema.Struct({
   workItems: Schema.Array(WorkItemRecordSchema),
   maps: Schema.Array(TrackerMapRecordSchema),
   blockerEdges: Schema.Array(BlockerEdgeRecordSchema),
+  decisions: Schema.Array(DecisionRecordSchema),
+  artifacts: Schema.Array(ArtifactRecordSchema),
   meta: WorkflowStateMetaSchema,
 });
 

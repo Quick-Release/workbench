@@ -10,6 +10,7 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as DecisionsRouteImport } from './routes/decisions'
 import { Route as InFlightRouteImport } from './routes/in-flight'
 import { Route as SessionsRouteImport } from './routes/sessions'
 import { Route as SkillsRouteImport } from './routes/skills'
@@ -19,6 +20,11 @@ import { Route as TriageRouteImport } from './routes/triage'
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const DecisionsRoute = DecisionsRouteImport.update({
+  id: '/decisions',
+  path: '/decisions',
   getParentRoute: () => rootRouteImport,
 } as any)
 const InFlightRoute = InFlightRouteImport.update({
@@ -49,6 +55,7 @@ const TriageRoute = TriageRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/decisions': typeof DecisionsRoute
   '/in-flight': typeof InFlightRoute
   '/sessions': typeof SessionsRoute
   '/skills': typeof SkillsRoute
@@ -57,6 +64,7 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/decisions': typeof DecisionsRoute
   '/in-flight': typeof InFlightRoute
   '/sessions': typeof SessionsRoute
   '/skills': typeof SkillsRoute
@@ -66,6 +74,7 @@ export interface FileRoutesByTo {
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/decisions': typeof DecisionsRoute
   '/in-flight': typeof InFlightRoute
   '/sessions': typeof SessionsRoute
   '/skills': typeof SkillsRoute
@@ -74,12 +83,27 @@ export interface FileRoutesById {
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/in-flight' | '/sessions' | '/skills' | '/tools' | '/triage'
+  fullPaths:
+    | '/'
+    | '/decisions'
+    | '/in-flight'
+    | '/sessions'
+    | '/skills'
+    | '/tools'
+    | '/triage'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/in-flight' | '/sessions' | '/skills' | '/tools' | '/triage'
+  to:
+    | '/'
+    | '/decisions'
+    | '/in-flight'
+    | '/sessions'
+    | '/skills'
+    | '/tools'
+    | '/triage'
   id:
     | '__root__'
     | '/'
+    | '/decisions'
     | '/in-flight'
     | '/sessions'
     | '/skills'
@@ -89,6 +113,7 @@ export interface FileRouteTypes {
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  DecisionsRoute: typeof DecisionsRoute
   InFlightRoute: typeof InFlightRoute
   SessionsRoute: typeof SessionsRoute
   SkillsRoute: typeof SkillsRoute
@@ -103,6 +128,13 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/decisions': {
+      id: '/decisions'
+      path: '/decisions'
+      fullPath: '/decisions'
+      preLoaderRoute: typeof DecisionsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/in-flight': {
@@ -145,6 +177,7 @@ declare module '@tanstack/react-router' {
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  DecisionsRoute: DecisionsRoute,
   InFlightRoute: InFlightRoute,
   SessionsRoute: SessionsRoute,
   SkillsRoute: SkillsRoute,

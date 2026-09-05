@@ -24,7 +24,7 @@ const workItem = (number, triageState = "unlabeled", extra = {}) => ({
   ...extra,
 });
 
-const snapshot = (workItems = []) => ({
+const snapshot = (workItems = [], decisions = [], artifacts = []) => ({
   meta: {
     projectName: "workbench",
     theme: {},
@@ -42,8 +42,8 @@ const snapshot = (workItems = []) => ({
   workItems,
   maps: [],
   blockerEdges: [],
-  decisions: [],
-  artifacts: [],
+  decisions,
+  artifacts,
   sessions: { enabled: false },
 });
 
@@ -107,18 +107,68 @@ test("loadWorkflowState refuses a module without the overview literal", async ()
 });
 
 test("loadWorkflowState projects the joined payload with provenance", async () => {
-  const directory = await withSnapshot(snapshot([workItem(7, "needs-triage")]));
+  const decisions = [
+    {
+      id: "ADR-0009",
+      source: "adr",
+      workItemId: "GH-49",
+      title: "Decisions and artifacts collect at sync",
+      statement: null,
+      status: "accepted",
+      supersedes: null,
+      decidedAt: null,
+      sourceRef: "docs/adr/0009-decisions-and-artifacts-collect-at-sync.md",
+    },
+  ];
+  const artifacts = [
+    {
+      id: "RN-session-db-attribution",
+      kind: "research-note",
+      path: "docs/research/session-db-attribution.md",
+      title: "What the Session Database Can Attribute",
+      workItemId: "GH-42",
+    },
+  ];
+  const directory = await withSnapshot(
+    snapshot([workItem(7, "needs-triage")], decisions, artifacts),
+  );
   const state = await loadWorkflowState(directory);
   deepStrictEqual(state, {
     workItems: [workItem(7, "needs-triage")],
     maps: [],
     blockerEdges: [],
+    decisions,
+    artifacts,
     meta: { snapshot: "2026-09-05T12:00:00+01:00", repo: REPO },
   });
 });
 
 test("the read endpoint serves the joined records schema-validated", async () => {
-  const directory = await withSnapshot(snapshot([workItem(7, "needs-triage")]));
+  const decisions = [
+    {
+      id: "GH-49",
+      source: "resolution",
+      workItemId: "GH-49",
+      title: "Resolve decision and artifact modeling",
+      statement: "Resolved by ADR 0009.",
+      status: null,
+      supersedes: null,
+      decidedAt: "2026-09-02T12:00:00Z",
+      sourceRef: "https://github.com/Quick-Release/workbench/issues/49#issuecomment-2",
+    },
+  ];
+  const artifacts = [
+    {
+      id: "RN-graph-rendering-for-workbench",
+      kind: "research-note",
+      path: "docs/research/graph-rendering-for-workbench.md",
+      title: "Graph rendering approach",
+      workItemId: null,
+    },
+  ];
+  const directory = await withSnapshot(
+    snapshot([workItem(7, "needs-triage")], decisions, artifacts),
+  );
   const handled = await handleWorkflowApi({
     method: "GET",
     pathname: "/api/workflow",
@@ -127,6 +177,8 @@ test("the read endpoint serves the joined records schema-validated", async () =>
   strictEqual(handled.status, 200);
   deepStrictEqual(handled.json.meta, { snapshot: "2026-09-05T12:00:00+01:00", repo: REPO });
   strictEqual(handled.json.workItems.length, 1);
+  deepStrictEqual(handled.json.decisions, decisions);
+  deepStrictEqual(handled.json.artifacts, artifacts);
 });
 
 test("the read endpoint fails closed when the snapshot does not decode", async () => {

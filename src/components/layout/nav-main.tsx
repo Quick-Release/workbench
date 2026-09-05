@@ -1,5 +1,5 @@
 import { Link, linkOptions, useRouterState } from "@tanstack/react-router";
-import { Activity, Inbox, ReceiptText, Rocket, Sparkles, Wrench } from "lucide-react";
+import { Activity, Inbox, ReceiptText, Rocket, ScrollText, Sparkles, Wrench } from "lucide-react";
 import {
   SidebarGroup,
   SidebarGroupContent,
@@ -23,6 +23,7 @@ const toolsLink = linkOptions({ to: "/tools" });
 const skillsLink = linkOptions({ to: "/skills" });
 const triageLink = linkOptions({ to: "/triage", search: {} });
 const inFlightLink = linkOptions({ to: "/in-flight" });
+const decisionsLink = linkOptions({ to: "/decisions" });
 
 type NavItem = { title: string; icon: typeof ReceiptText } & (
   | typeof overviewLink
@@ -31,6 +32,7 @@ type NavItem = { title: string; icon: typeof ReceiptText } & (
   | typeof skillsLink
   | typeof triageLink
   | typeof inFlightLink
+  | typeof decisionsLink
 );
 
 // Spec #54's sidebar order: Overview, then the Workflow destination group,
@@ -40,6 +42,7 @@ const overviewItems: NavItem[] = [{ title: "Overview", icon: ReceiptText, ...ove
 const workflowItems: NavItem[] = [
   { title: "Triage", icon: Inbox, ...triageLink },
   { title: "In flight", icon: Rocket, ...inFlightLink },
+  { title: "Decisions", icon: ScrollText, ...decisionsLink },
 ];
 
 const closingItems: NavItem[] = [
