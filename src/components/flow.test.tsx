@@ -71,6 +71,7 @@ const renderFlow = (overrides: Partial<Parameters<typeof FlowPage>[0]> = {}) =>
       data={data}
       status={liveStatus}
       pending={false}
+      message={null}
       favorites={false}
       selected={null}
       onFavoritesChange={() => {}}

@@ -1,12 +1,8 @@
 import { strictEqual, deepStrictEqual } from "node:assert";
 import test from "node:test";
 
-import {
-  catalogFromTreePayload,
-  mergeCatalog,
-  MATT_POCOCK_SOURCE_ID,
-  skillSourceRecord,
-} from "./skills-catalog.mjs";
+import { catalogFromTreePayload, mergeCatalog, skillSourceRecord } from "./skills-catalog.mjs";
+import { mattPocockSkillSource } from "../src/lib/skills.ts";
 
 // Recorded from GET https://api.github.com/repos/mattpocock/skills/git/trees/main?recursive=1
 // (trimmed to the shapes the walk depends on).
@@ -30,17 +26,18 @@ test("walks one recursive trees payload into catalog entries with upstream categ
   deepStrictEqual(catalogFromTreePayload(treePayload), [
     { id: "brand-new-skill", category: "engineering" },
     { id: "git-guardrails-claude-code", category: "misc" },
+    { id: "old-thing", category: "deprecated" },
     { id: "retro", category: "in-progress" },
     { id: "tdd", category: "engineering" },
     { id: "teach", category: "productivity" },
   ]);
 });
 
-test("drops deprecated entries and keeps misc literally", () => {
+test("the walk keeps deprecated entries so the merge can rule on them, misc literally", () => {
   const catalog = catalogFromTreePayload(treePayload);
   strictEqual(
     catalog.some((skill) => skill.id === "old-thing"),
-    false,
+    true,
   );
   strictEqual(
     catalog.some((skill) => skill.id === "git-guardrails-claude-code"),
@@ -70,7 +67,7 @@ test("upstream fetch feeds the catalog with the matt-pocock source", () => {
   deepStrictEqual(skillSourceRecord(skills[0]), {
     id: "brand-new-skill",
     category: "engineering",
-    source: MATT_POCOCK_SOURCE_ID,
+    source: mattPocockSkillSource.id,
   });
 });
 
@@ -107,7 +104,21 @@ test("a curated id that vanishes upstream is dropped unless installed", () => {
   deepStrictEqual(vanished(["wizard"]), ["tdd", "wizard"]);
 });
 
-test("deprecated is filtered unless installed", () => {
+test("deprecated is filtered unless installed, including from a real upstream walk", () => {
+  const merge = (installedIds) =>
+    mergeCatalog({
+      upstream: catalogFromTreePayload(treePayload),
+      lastGood: [],
+      fallback,
+      installedIds,
+    }).skills.map((skill) => skill.id);
+
+  deepStrictEqual(
+    merge([]).filter((id) => id === "old-thing"),
+    [],
+  );
+  strictEqual(merge(["old-thing"]).includes("old-thing"), true);
+
   const { skills } = mergeCatalog({
     upstream: [
       { id: "tdd", category: "engineering" },

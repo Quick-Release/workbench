@@ -32,8 +32,9 @@ type NavItem = { title: string; icon: typeof ReceiptText } & (
   | typeof toolsLink
 );
 
-// Sidebar order per ADR 0011: Overview · Workflow · Agent sessions · Tools.
-// The Workflow group grows one destination per landing ticket.
+// Sidebar order per the IA decision (spec #54, ticket #53): Overview ·
+// Workflow (flow, triage, blockers, in-flight, decisions) · Agent sessions ·
+// Tools. The Workflow group grows one destination per landing ticket.
 export const navGroups: Array<{ label: string; items: NavItem[] }> = [
   { label: "Overview", items: [{ title: "Overview", icon: ReceiptText, ...overviewLink }] },
   {

@@ -39,13 +39,15 @@ const ROLE_ACCENT: Record<string, string> = {
   "on-ramp": "var(--blue)",
   vocabulary: "var(--amber)",
   primitive: "var(--coral)",
-  none: "var(--line-strong)",
+  standalone: "var(--line-strong)",
+  none: "var(--line)",
 };
 
 type FlowPageProps = {
   data: OverviewData;
   status: SkillsStatus | null;
   pending: boolean;
+  message: string | null;
   favorites: boolean;
   selected: string | null;
   onFavoritesChange: (value: boolean) => void;
@@ -66,6 +68,7 @@ export function FlowPage({
   data,
   status,
   pending,
+  message,
   favorites,
   selected,
   onFavoritesChange,
@@ -157,6 +160,11 @@ export function FlowPage({
       {staticMode && (
         <p className="text-sm text-muted-foreground" role="status">
           Static snapshot — no dev server is answering, so actions degrade to copy the command.
+        </p>
+      )}
+      {message && (
+        <p className="text-sm text-muted-foreground" role="status" aria-live="polite">
+          {message}
         </p>
       )}
 

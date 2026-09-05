@@ -75,65 +75,68 @@ export const flowRegionFor = ({ id, category }: FlowSkill): FlowRegion => {
 // (upstream-new) appends after the whole curated lane, sorted by id.
 const laneOrder = (present: string[], curated: string[]): string[] => {
   const curatedSet = new Set(curated);
-  const boxes: string[] = [];
-  for (const id of curated) if (present.includes(id)) boxes.push(id);
+  const ordered = curated.filter((id) => present.includes(id));
   const extras = present.filter((id) => !curatedSet.has(id)).sort();
-  return [...boxes.slice(0, curated.length), ...extras];
+  return [...ordered, ...extras];
 };
 
-const slotAt = (curated: string[], id: string, extras: string[]): number => {
-  const curatedIndex = curated.indexOf(id);
-  return curatedIndex === -1 ? curated.length + extras.indexOf(id) : curatedIndex;
+// One stacked lane: curated slots then extras, pitched vertically at x.
+const stackLane = (
+  boxes: Record<string, FlowBox>,
+  ids: string[],
+  curated: string[],
+  x: number,
+  w: number,
+  h: number,
+) => {
+  const extras = ids.filter((id) => !curated.includes(id));
+  for (const id of ids) {
+    const curatedIndex = curated.indexOf(id);
+    const index = curatedIndex === -1 ? curated.length + extras.indexOf(id) : curatedIndex;
+    boxes[id] = { x, y: SHELF_Y + index * SHELF_PITCH, w, h };
+  }
 };
 
 export const layoutFlowGraph = (skills: FlowSkill[]): Record<string, FlowBox> => {
   const boxes: Record<string, FlowBox> = {};
-  const byRegion = (region: FlowRegion) => skills.filter((s) => flowRegionFor(s) === region);
+  const present = (id: string) => skills.some((s) => s.id === id);
 
-  SPINE_ORDER.filter((id) => skills.some((s) => s.id === id)).forEach((id, index) => {
+  SPINE_ORDER.filter(present).forEach((id, index) => {
     boxes[id] = { x: SPINE_X[index], y: SPINE_Y, w: NODE_W.spine, h: NODE_H.spine };
   });
 
   for (const id of DETOUR_IDS) {
-    if (!skills.some((s) => s.id === id)) continue;
+    if (!present(id)) continue;
     const [x, y] = DETOUR_POS[id];
     boxes[id] = { x, y, w: NODE_W.detour, h: NODE_H.detour };
   }
 
   for (const [id, [x, y]] of Object.entries(ONRAMP_POS)) {
-    if (skills.some((s) => s.id === id)) boxes[id] = { x, y, w: NODE_W.onramp, h: NODE_H.onramp };
+    if (present(id)) boxes[id] = { x, y, w: NODE_W.onramp, h: NODE_H.onramp };
   }
 
-  const underlayPresent = UNDERLAY_ORDER.filter((id) => skills.some((s) => s.id === id));
-  underlayPresent.forEach((id, index) => {
+  UNDERLAY_ORDER.filter(present).forEach((id, index) => {
     boxes[id] = { x: UNDERLAY_X[index], y: UNDERLAY_Y, w: NODE_W.underlay, h: NODE_H.underlay };
   });
 
-  const shelfIds = laneOrder(
-    byRegion("shelf").map((s) => s.id),
+  const regionIds = (region: FlowRegion) =>
+    skills.filter((s) => flowRegionFor(s) === region).map((s) => s.id);
+  stackLane(
+    boxes,
+    laneOrder(regionIds("shelf"), curatedShelfOrder),
     curatedShelfOrder,
+    SHELF_X,
+    NODE_W.shelf,
+    NODE_H.shelf,
   );
-  for (const id of shelfIds) {
-    const index = slotAt(
-      curatedShelfOrder,
-      id,
-      shelfIds.filter((extra) => !curatedShelfOrder.includes(extra)),
-    );
-    boxes[id] = { x: SHELF_X, y: SHELF_Y + index * SHELF_PITCH, w: NODE_W.shelf, h: NODE_H.shelf };
-  }
-
-  const penIds = laneOrder(
-    byRegion("pen").map((s) => s.id),
+  stackLane(
+    boxes,
+    laneOrder(regionIds("pen"), curatedPenOrder),
     curatedPenOrder,
+    PEN_X,
+    NODE_W.pen,
+    NODE_H.pen,
   );
-  for (const id of penIds) {
-    const index = slotAt(
-      curatedPenOrder,
-      id,
-      penIds.filter((extra) => !curatedPenOrder.includes(extra)),
-    );
-    boxes[id] = { x: PEN_X, y: SHELF_Y + index * SHELF_PITCH, w: NODE_W.pen, h: NODE_H.pen };
-  }
 
   return boxes;
 };

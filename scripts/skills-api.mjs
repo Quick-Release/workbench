@@ -3,12 +3,11 @@ import { readdir, readFile, stat } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
 
+import { mattPocockSkillSource } from "../src/lib/skills.ts";
+
 const execFileAsync = promisify(execFile);
 
-const MATT_POCOCK_SOURCE_ID = "matt-pocock";
-const MATT_POCOCK_SOURCE = "mattpocock/skills";
-const MATT_POCOCK_REPOSITORY_URL = "https://github.com/mattpocock/skills";
-export const MATT_POCOCK_INSTALL_ALL_COMMAND = "npx skills@latest add mattpocock/skills --all";
+const MATT_POCOCK_SOURCE = mattPocockSkillSource.repository;
 
 // ADR 0006: the hardcoded 37-id list is gone — the Catalog comes from sync
 // (upstream fetch, last-good, curated fallback) and the seam joins it with
@@ -37,7 +36,7 @@ const fileExists = async (path) => {
 
 const readJson = async (path) => JSON.parse(await readFile(path, "utf8"));
 
-const idsFromLockfile = async (rootDirectory) => {
+const mattPocockIdsFromLockfile = async (rootDirectory) => {
   const lockfile = await readJson(join(rootDirectory, "skills-lock.json")).catch(() => null);
   if (!lockfile || typeof lockfile.skills !== "object" || lockfile.skills === null) return [];
   return Object.entries(lockfile.skills)
@@ -65,7 +64,7 @@ const idsFromDirectories = async (rootDirectory) => {
 // unfiltered — disk is the only truth for installed.
 export const installedSkillIds = async (rootDirectory) => {
   const ids = new Set([
-    ...(await idsFromLockfile(rootDirectory)),
+    ...(await mattPocockIdsFromLockfile(rootDirectory)),
     ...(await idsFromDirectories(rootDirectory)),
   ]);
   return [...ids].sort((left, right) => left.localeCompare(right));
@@ -102,7 +101,12 @@ export const skillsStatus = async (rootDirectory, catalog = []) => {
   );
   for (const id of installed) {
     if (!entries.has(id)) {
-      entries.set(id, { id, category: "", source: MATT_POCOCK_SOURCE_ID, installed: true });
+      entries.set(id, {
+        id,
+        category: "",
+        source: mattPocockSkillSource.id,
+        installed: true,
+      });
     }
   }
   const skills = [...entries.values()].sort((left, right) => left.id.localeCompare(right.id));
@@ -116,10 +120,10 @@ export const skillsStatus = async (rootDirectory, catalog = []) => {
   return {
     sources: [
       {
-        id: MATT_POCOCK_SOURCE_ID,
+        id: mattPocockSkillSource.id,
         source: MATT_POCOCK_SOURCE,
-        repositoryUrl: MATT_POCOCK_REPOSITORY_URL,
-        installCommand: MATT_POCOCK_INSTALL_ALL_COMMAND,
+        repositoryUrl: mattPocockSkillSource.repositoryUrl,
+        installCommand: mattPocockSkillSource.installCommand,
         installed: installedSkills.length > 0,
         installedSkillCount: installedSkills.length,
         totalSkillCount: skills.length,
@@ -128,9 +132,6 @@ export const skillsStatus = async (rootDirectory, catalog = []) => {
     skills,
   };
 };
-
-export const perSkillInstallCommand = (id) =>
-  `npx skills@latest add ${MATT_POCOCK_SOURCE} --skill ${id}`;
 
 const runSkillsCli = (rootDirectory, args) => {
   const npx = process.platform === "win32" ? "npx.cmd" : "npx";
@@ -179,7 +180,7 @@ export const skillsApiPlugin = () => ({
       const url = new URL(request.url ?? "/", "http://localhost");
       const statusMatch = url.pathname.match(/^\/api\/skills\/?$/);
       const installMatch = url.pathname.match(/^\/api\/skills\/([\w-]+)\/install$/);
-      const setupMatch = url.pathname.match(/^\/api\/skills\/([\w-]+)\/(?:setup|install-all)$/);
+      const setupMatch = url.pathname.match(/^\/api\/skills\/([\w-]+)\/setup$/);
 
       if (request.method === "GET" && statusMatch) {
         try {
@@ -218,7 +219,7 @@ export const skillsApiPlugin = () => ({
       }
 
       if (request.method === "POST" && setupMatch) {
-        if (setupMatch[1] !== MATT_POCOCK_SOURCE_ID) {
+        if (setupMatch[1] !== mattPocockSkillSource.id) {
           sendJson(response, 404, { message: `Unknown skill source: ${setupMatch[1]}` });
           return;
         }

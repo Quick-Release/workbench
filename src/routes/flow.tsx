@@ -23,6 +23,7 @@ export const Route = createFileRoute("/flow")({
 function FlowRoute() {
   const [status, setStatus] = useState<SkillsStatus | null>(null);
   const [pending, setPending] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
   const search = Route.useSearch();
   const navigate = useNavigate({ from: Route.fullPath });
   const updateSearch = (next: Partial<typeof search>) =>
@@ -47,25 +48,26 @@ function FlowRoute() {
     void refresh();
   }, [refresh]);
 
-  const install = async (id: string) => {
+  const install = async (verb: string, id: string) => {
     setPending(true);
+    setMessage(null);
     try {
-      await fetch(`/api/skills/${id}/install`, { method: "POST" });
-      await refresh();
+      const response = await fetch(`/api/skills/${id}/${verb}`, { method: "POST" });
+      // Error bodies may carry only a message; decode what arrives.
+      let body: SkillsStatus | null = null;
+      try {
+        body = parseSkillsStatus(await response.json());
+      } catch {
+        body = null;
+      }
+      if (body) setStatus(body);
+      setMessage(
+        !response.ok
+          ? (body?.message ?? `Install failed (${response.status}).`)
+          : (body?.message ?? `Installed ${id}.`),
+      );
     } catch {
-      await refresh();
-    } finally {
-      setPending(false);
-    }
-  };
-
-  const installAll = async () => {
-    setPending(true);
-    try {
-      await fetch("/api/skills/matt-pocock/install-all", { method: "POST" });
-      await refresh();
-    } catch {
-      await refresh();
+      setMessage("Install failed — the dev server did not answer.");
     } finally {
       setPending(false);
     }
@@ -76,12 +78,13 @@ function FlowRoute() {
       data={overviewData}
       status={status}
       pending={pending}
+      message={message}
       favorites={search.favorites}
       selected={search.skill || null}
       onFavoritesChange={(favorites) => updateSearch({ favorites })}
       onSelect={(skill) => updateSearch({ skill: skill ?? "" })}
-      onInstall={(id) => void install(id)}
-      onInstallAll={() => void installAll()}
+      onInstall={(id) => void install("install", id)}
+      onInstallAll={() => void install("setup", "matt-pocock")}
     />
   );
 }

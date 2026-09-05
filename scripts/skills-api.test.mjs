@@ -4,12 +4,8 @@ import { tmpdir } from "node:os";
 import { deepStrictEqual, strictEqual } from "node:assert";
 import test from "node:test";
 
-import {
-  installSkill,
-  installedSkillIds,
-  perSkillInstallCommand,
-  skillsStatus,
-} from "./skills-api.mjs";
+import { installSkill, installedSkillIds, skillsStatus } from "./skills-api.mjs";
+import { perSkillInstallCommand } from "../src/lib/skills.ts";
 
 const withRoot = async (fn) => {
   const directory = await mkdtemp(join(tmpdir(), "workbench-skills-"));

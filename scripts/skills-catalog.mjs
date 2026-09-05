@@ -1,4 +1,5 @@
 import { offlineFallbackCatalog } from "../src/data/skill-flow.ts";
+import { mattPocockSkillSource } from "../src/lib/skills.ts";
 import { installedSkillIds } from "./skills-api.mjs";
 
 // ADR 0006: the Catalog (which skills exist, id + category) is fetched from
@@ -7,14 +8,12 @@ import { installedSkillIds } from "./skills-api.mjs";
 // generated data → the curated offline fallback. Sync never fails on catalog
 // trouble; a firewalled host repo just degrades with a note.
 
-export const MATT_POCOCK_SOURCE_ID = "matt-pocock";
-export const MATT_POCOCK_SOURCE = "mattpocock/skills";
-const MATT_POCOCK_TREES_URL =
-  "https://api.github.com/repos/mattpocock/skills/git/trees/main?recursive=1";
+const MATT_POCOCK_TREES_URL = `https://api.github.com/repos/${mattPocockSkillSource.repository}/git/trees/main?recursive=1`;
 
 // Pure: the recorded trees payload → catalog entries. Every path under
-// skills/<category>/<id>/SKILL.md is one skill; `deprecated` is not a category
-// the catalog keeps (it is filtered during the merge unless installed).
+// skills/<category>/<id>/SKILL.md is one skill, `deprecated` included — the
+// merge rules on it (kept only when installed), so the walk must not
+// preempt that ruling.
 export const catalogFromTreePayload = (payload) => {
   const entries = (Array.isArray(payload?.tree) ? payload.tree : [])
     .map((entry) => {
@@ -24,7 +23,7 @@ export const catalogFromTreePayload = (payload) => {
           : null;
       return match ? { id: match[2], category: match[1] } : null;
     })
-    .filter((entry) => entry !== null && entry.category !== "deprecated");
+    .filter((entry) => entry !== null);
   const byId = new Map(entries.map((entry) => [entry.id, entry]));
   return [...byId.values()].sort((left, right) => left.id.localeCompare(right.id));
 };
@@ -70,7 +69,7 @@ export const mergeCatalog = ({ upstream, lastGood, fallback, installedIds }) => 
 export const skillSourceRecord = (entry) => ({
   id: entry.id,
   category: entry.category,
-  source: MATT_POCOCK_SOURCE_ID,
+  source: mattPocockSkillSource.id,
 });
 
 // Sync entry point: returns the catalog records for the snapshot plus the
