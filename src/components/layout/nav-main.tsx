@@ -1,5 +1,14 @@
 import { Link, linkOptions, useRouterState } from "@tanstack/react-router";
-import { Activity, GitBranch, Inbox, ReceiptText, Rocket, ScrollText, Wrench } from "lucide-react";
+import {
+  Activity,
+  GitBranch,
+  Inbox,
+  ReceiptText,
+  Rocket,
+  ScrollText,
+  Waypoints,
+  Wrench,
+} from "lucide-react";
 import {
   SidebarGroup,
   SidebarGroupContent,
@@ -25,6 +34,7 @@ const flowLink = linkOptions({
   search: { favorites: false, skill: "" },
 });
 const triageLink = linkOptions({ to: "/triage", search: {} });
+const blockersLink = linkOptions({ to: "/blockers", search: {} });
 const inFlightLink = linkOptions({ to: "/in-flight" });
 const decisionsLink = linkOptions({ to: "/decisions" });
 
@@ -34,6 +44,7 @@ type NavItem = { title: string; icon: typeof ReceiptText } & (
   | typeof sessionsLink
   | typeof toolsLink
   | typeof triageLink
+  | typeof blockersLink
   | typeof inFlightLink
   | typeof decisionsLink
 );
@@ -46,6 +57,7 @@ const overviewItems: NavItem[] = [{ title: "Overview", icon: ReceiptText, ...ove
 const workflowItems: NavItem[] = [
   { title: "Skill flow", icon: GitBranch, ...flowLink },
   { title: "Triage", icon: Inbox, ...triageLink },
+  { title: "Blockers", icon: Waypoints, ...blockersLink },
   { title: "In flight", icon: Rocket, ...inFlightLink },
   { title: "Decisions", icon: ScrollText, ...decisionsLink },
 ];

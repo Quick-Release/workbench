@@ -249,6 +249,28 @@ export type SyncTriggerResult = {
   state: WorkflowStatePayload;
 };
 
+// The blocker-edge actions' contracts (ticket #61, ADR 0005 phase-1): adding
+// a gate declares it with qualified ids; removal tears a gate off the
+// tracker, so it moves only with `confirm: true` — the dashboard's
+// destructive-action beat. Native blocked-by only speaks tracker issues.
+export type EdgeAddRequest = {
+  blockedId: string;
+  blockerId: string;
+};
+
+export type EdgeRemoveRequest = {
+  blockedId: string;
+  blockerId: string;
+  confirm?: boolean;
+};
+
+export type EdgeWriteResult = {
+  message: string;
+  blockedId: string;
+  blockerId: string;
+  state: WorkflowStatePayload;
+};
+
 // ADR 0009: decisions collect at sync from exactly three sources — `adr`
 // (docs/adr files), `resolution` (the closing comment on a closed decision
 // ticket), and `spec` (one bundle per spec issue's Implementation-Decisions

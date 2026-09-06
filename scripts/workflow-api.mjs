@@ -5,6 +5,9 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 
 import {
+  parseEdgeAddRequest,
+  parseEdgeRemoveRequest,
+  parseEdgeWriteResult,
   parseIssueCommentRequest,
   parseIssueCommentResult,
   parseIssueCreateRequest,
@@ -33,6 +36,8 @@ const ISSUE_EDIT_ROUTE = /^\/api\/workflow\/issue\/edit\/?$/;
 const ISSUE_COMMENT_ROUTE = /^\/api\/workflow\/issue\/comment\/?$/;
 const ISSUE_CREATE_ROUTE = /^\/api\/workflow\/issue\/create\/?$/;
 const SYNC_ROUTE = /^\/api\/workflow\/sync\/?$/;
+const EDGE_ADD_ROUTE = /^\/api\/workflow\/edge\/add\/?$/;
+const EDGE_REMOVE_ROUTE = /^\/api\/workflow\/edge\/remove\/?$/;
 
 // The seam imports the generated snapshot module — its only syntax is the
 // erasable kind (a type-only import and `satisfies`), so plain Node loads it.
@@ -281,6 +286,167 @@ export const applyIssueCreate = async ({ title, body, state, run, cwd }) => {
   }
 };
 
+// The blocker-edge actions (ticket #61, ADR 0005 phase-1): behind the seam
+// they run exactly what a Developer would run by hand — the native
+// blocked-by API through `gh api`, which speaks database ids, so every write
+// first resolves the blocker's id, then posts or deletes the gate, then
+// reads the issue's blocked-by list back so the served edges stay
+// tracker-derived. Native blocked-by only speaks tracker issues; adding is
+// additive, removal is destructive and demands the confirmed beat.
+const trackerIssueNumber = (issueId) => {
+  const number = issueNumberFrom(issueId);
+  return number && number > 0 ? number : null;
+};
+
+const resolveBlockerDatabaseId = async (blockerId, number, state, run, cwd) => {
+  const resolved = await run(
+    "gh",
+    ["api", `repos/${state.meta.repo}/issues/${number}`, "--jq", ".id"],
+    cwd,
+  );
+  const databaseId = Number(String(resolved.stdout).trim());
+  if (!Number.isInteger(databaseId) || databaseId <= 0)
+    throw new Error(`gh did not answer ${blockerId}'s database id with a number`);
+  return databaseId;
+};
+
+const readBackBlockedBy = async (issueId, number, state, run, cwd) => {
+  const readBack = await run(
+    "gh",
+    ["api", `repos/${state.meta.repo}/issues/${number}/dependencies/blocked_by?per_page=100`],
+    cwd,
+  );
+  const blockers = JSON.parse(readBack.stdout);
+  if (!Array.isArray(blockers))
+    throw new Error(`the blocked-by read-back for ${issueId} was not a list`);
+  const record = state.workItems.find((item) => item.id === issueId);
+  const sourceRef = record?.url ?? `https://github.com/${state.meta.repo}/issues/${number}`;
+  return blockers
+    .filter((blocker) => blocker && typeof blocker.number === "number")
+    .map((blocker) => ({
+      blockedId: issueId,
+      blockerId: `GH-${blocker.number}`,
+      source: "github-native",
+      sourceRef,
+    }));
+};
+
+const withRefreshedEdges = (state, blockedId, freshNativeEdges) => {
+  const surviving = state.blockerEdges.filter(
+    (edge) => !(edge.blockedId === blockedId && edge.source === "github-native"),
+  );
+  const edges = [...surviving, ...freshNativeEdges];
+  edges.sort((left, right) => {
+    const order = (edge) => Number(edge.blockedId.slice(3));
+    const blockerOrder = (edge) => Number(edge.blockerId.slice(3));
+    return (
+      order(left) - order(right) ||
+      blockerOrder(left) - blockerOrder(right) ||
+      left.source.localeCompare(right.source)
+    );
+  });
+  return { ...state, blockerEdges: edges };
+};
+
+// One skeleton behind both edge actions: resolve the blocker's database id,
+// issue the native call (POST to add the gate, DELETE to remove it), read
+// the blocked issue's blocked-by list back, and serve the refreshed edges.
+// `verb` only shapes the failure wording.
+const applyEdgeWrite = async ({ blockedId, blockerId, method, verb, state, run, cwd }) => {
+  const blockedNumber = trackerIssueNumber(blockedId);
+  const blockerNumber = trackerIssueNumber(blockerId);
+  if (!blockedNumber || !blockerNumber)
+    return {
+      ok: false,
+      status: 400,
+      message:
+        "native blocked-by only speaks tracker issues — declare the gate with GH-numbered ids",
+    };
+  let databaseId;
+  try {
+    databaseId = await resolveBlockerDatabaseId(blockerId, blockerNumber, state, run, cwd);
+    await run(
+      "gh",
+      [
+        "api",
+        "--method",
+        method,
+        method === "DELETE"
+          ? `repos/${state.meta.repo}/issues/${blockedNumber}/dependencies/blocked_by/${databaseId}`
+          : `repos/${state.meta.repo}/issues/${blockedNumber}/dependencies/blocked_by?per_page=100`,
+        ...(method === "POST" ? ["-F", `issue_id=${databaseId}`] : []),
+      ],
+      cwd,
+    );
+  } catch (error) {
+    return {
+      ok: false,
+      status: 502,
+      message: `gh edge ${verb} failed for ${blockedId} ← ${blockerId}: ${messageFrom(error)}`,
+    };
+  }
+  let freshEdges;
+  try {
+    freshEdges = await readBackBlockedBy(blockedId, blockedNumber, state, run, cwd);
+  } catch (error) {
+    return {
+      ok: false,
+      status: 502,
+      message: `the edge ${verb} succeeded but reading ${blockedId}'s blockers back failed: ${messageFrom(error)}`,
+    };
+  }
+  return {
+    ok: true,
+    result: { blockedId, blockerId, state: withRefreshedEdges(state, blockedId, freshEdges) },
+  };
+};
+
+export const applyEdgeAdd = async ({ blockedId, blockerId, state, run, cwd }) => {
+  if (blockedId === blockerId)
+    return {
+      ok: false,
+      status: 400,
+      message: `${blockedId} cannot block itself — a self-edge gates nothing`,
+    };
+  const outcome = await applyEdgeWrite({
+    blockedId,
+    blockerId,
+    method: "POST",
+    verb: "write",
+    state,
+    run,
+    cwd,
+  });
+  if (!outcome.ok) return outcome;
+  return {
+    ok: true,
+    result: { ...outcome.result, message: `${blockedId} is now blocked by ${blockerId}.` },
+  };
+};
+
+export const applyEdgeRemove = async ({ blockedId, blockerId, confirm, state, run, cwd }) => {
+  if (confirm !== true)
+    return {
+      ok: false,
+      status: 422,
+      message: `${blockedId} ← ${blockerId}: removing a gate is destructive — repeat the removal with confirm to tear it off`,
+    };
+  const outcome = await applyEdgeWrite({
+    blockedId,
+    blockerId,
+    method: "DELETE",
+    verb: "removal",
+    state,
+    run,
+    cwd,
+  });
+  if (!outcome.ok) return outcome;
+  return {
+    ok: true,
+    result: { ...outcome.result, message: `${blockerId} no longer blocks ${blockedId}.` },
+  };
+};
+
 // The sync trigger (ticket #64) runs what a Developer would run by hand —
 // `pnpm sync` in the app directory, whose script resolves the host repo —
 // then serves the refreshed state with the sync output's warnings channel
@@ -393,6 +559,18 @@ const POST_ROUTES = [
     parseRequest: parseIssueCreateRequest,
     encode: parseIssueCreateResult,
     apply: applyIssueCreate,
+  },
+  {
+    route: EDGE_ADD_ROUTE,
+    parseRequest: parseEdgeAddRequest,
+    encode: parseEdgeWriteResult,
+    apply: applyEdgeAdd,
+  },
+  {
+    route: EDGE_REMOVE_ROUTE,
+    parseRequest: parseEdgeRemoveRequest,
+    encode: parseEdgeWriteResult,
+    apply: applyEdgeRemove,
   },
 ];
 

@@ -24,7 +24,13 @@ const workItem = (number, triageState = "unlabeled", extra = {}) => ({
   ...extra,
 });
 
-const snapshot = (workItems = [], decisions = [], artifacts = []) => ({
+const snapshot = (
+  workItems = [],
+  decisions = [],
+  artifacts = [],
+  maps = [],
+  blockerEdges = [],
+) => ({
   meta: {
     projectName: "workbench",
     theme: {},
@@ -40,8 +46,8 @@ const snapshot = (workItems = [], decisions = [], artifacts = []) => ({
   plans: [],
   changes: [],
   workItems,
-  maps: [],
-  blockerEdges: [],
+  maps,
+  blockerEdges,
   decisions,
   artifacts,
   sessions: { enabled: false },
@@ -611,6 +617,246 @@ test("request bodies that fail the issue-action schemas are rejected naming the 
       method: "POST",
       pathname,
       body: typeof body === "string" ? body : JSON.stringify(body),
+      appDirectory: directory,
+      hostRoot: HOST_ROOT,
+      run,
+    });
+    strictEqual(handled.status, 400, `${pathname}: ${JSON.stringify(body)}`);
+    ok(pattern.test(handled.json.message), `expected ${handled.json.message} to match ${pattern}`);
+  }
+});
+
+test("an edge add resolves the blocker's database id, posts the native gate, and reads the list back", async () => {
+  const directory = await withSnapshot(
+    snapshot(
+      [workItem(66), workItem(64)],
+      [],
+      [],
+      [
+        {
+          mapId: "GH-54",
+          title: "Dashboard build",
+          url: `https://github.com/${REPO}/issues/54`,
+          ticketIds: ["GH-64", "GH-66"],
+        },
+      ],
+    ),
+  );
+  const { calls, run } = runStub([
+    { stdout: "89161\n" },
+    {},
+    {
+      stdout: JSON.stringify([{ number: 64, title: "Overview rebuild", state: "OPEN" }]),
+    },
+  ]);
+  const handled = await handleWorkflowApi({
+    method: "POST",
+    pathname: "/api/workflow/edge/add",
+    body: JSON.stringify({ blockedId: "GH-66", blockerId: "GH-64" }),
+    appDirectory: directory,
+    hostRoot: HOST_ROOT,
+    run,
+  });
+  strictEqual(handled.status, 200);
+  deepStrictEqual(calls[0], {
+    command: "gh",
+    args: ["api", `repos/${REPO}/issues/64`, "--jq", ".id"],
+    cwd: HOST_ROOT,
+  });
+  deepStrictEqual(calls[1], {
+    command: "gh",
+    args: [
+      "api",
+      "--method",
+      "POST",
+      `repos/${REPO}/issues/66/dependencies/blocked_by?per_page=100`,
+      "-F",
+      "issue_id=89161",
+    ],
+    cwd: HOST_ROOT,
+  });
+  strictEqual(calls[2].args[0], "api", "expected the blocked-by read-back after the write");
+  strictEqual(handled.json.blockedId, "GH-66");
+  strictEqual(handled.json.blockerId, "GH-64");
+  deepStrictEqual(handled.json.state.blockerEdges, [
+    {
+      blockedId: "GH-66",
+      blockerId: "GH-64",
+      source: "github-native",
+      sourceRef: `https://github.com/${REPO}/issues/66`,
+    },
+  ]);
+  ok(/GH-66.*GH-64/.test(handled.json.message), handled.json.message);
+});
+
+test("an edge removal without confirmation is rejected without shelling out", async () => {
+  const directory = await withSnapshot(
+    snapshot(
+      [workItem(66), workItem(64)],
+      [],
+      [],
+      [],
+      [
+        {
+          blockedId: "GH-66",
+          blockerId: "GH-64",
+          source: "github-native",
+          sourceRef: `https://github.com/${REPO}/issues/66`,
+        },
+      ],
+    ),
+  );
+  const { calls, run } = runStub();
+  const handled = await handleWorkflowApi({
+    method: "POST",
+    pathname: "/api/workflow/edge/remove",
+    body: JSON.stringify({ blockedId: "GH-66", blockerId: "GH-64" }),
+    appDirectory: directory,
+    hostRoot: HOST_ROOT,
+    run,
+  });
+  strictEqual(handled.status, 422);
+  ok(/confirm/i.test(handled.json.message), handled.json.message);
+  strictEqual(calls.length, 0);
+});
+
+test("a confirmed edge removal deletes the native gate and serves the surviving edges", async () => {
+  const directory = await withSnapshot(
+    snapshot(
+      [workItem(66)],
+      [],
+      [],
+      [],
+      [
+        {
+          blockedId: "GH-66",
+          blockerId: "GH-64",
+          source: "github-native",
+          sourceRef: `https://github.com/${REPO}/issues/66`,
+        },
+        {
+          blockedId: "GH-66",
+          blockerId: "BQ-12",
+          source: "blocked-by-line",
+          sourceRef: "docs/plans/x/tickets/BQ-12.md",
+        },
+      ],
+    ),
+  );
+  const { calls, run } = runStub([{ stdout: "89161\n" }, {}, { stdout: "[]" }]);
+  const handled = await handleWorkflowApi({
+    method: "POST",
+    pathname: "/api/workflow/edge/remove",
+    body: JSON.stringify({ blockedId: "GH-66", blockerId: "GH-64", confirm: true }),
+    appDirectory: directory,
+    hostRoot: HOST_ROOT,
+    run,
+  });
+  strictEqual(handled.status, 200);
+  deepStrictEqual(calls[1], {
+    command: "gh",
+    args: ["api", "--method", "DELETE", `repos/${REPO}/issues/66/dependencies/blocked_by/89161`],
+    cwd: HOST_ROOT,
+  });
+  deepStrictEqual(handled.json.state.blockerEdges, [
+    {
+      blockedId: "GH-66",
+      blockerId: "BQ-12",
+      source: "blocked-by-line",
+      sourceRef: "docs/plans/x/tickets/BQ-12.md",
+    },
+  ]);
+  ok(/GH-64/.test(handled.json.message), handled.json.message);
+});
+
+test("edges on non-issue namespaced ids and self-edges are rejected without shelling out", async () => {
+  const directory = await withSnapshot(snapshot([]));
+  for (const body of [
+    { blockedId: "GH-66", blockerId: "BQ-12" },
+    { blockedId: "BQ-12", blockerId: "GH-66" },
+    { blockedId: "GH-66", blockerId: "GH-66" },
+  ]) {
+    const { calls, run } = runStub();
+    const handled = await handleWorkflowApi({
+      method: "POST",
+      pathname: "/api/workflow/edge/add",
+      body: JSON.stringify(body),
+      appDirectory: directory,
+      hostRoot: HOST_ROOT,
+      run,
+    });
+    strictEqual(handled.status, 400, JSON.stringify(body));
+    ok(/tracker issue|itself/.test(handled.json.message), handled.json.message);
+    strictEqual(calls.length, 0);
+  }
+});
+
+test("a failed native write surfaces the tool's message with a 502", async () => {
+  const directory = await withSnapshot(snapshot([workItem(66), workItem(64)]));
+  const { calls, run } = runStub([{ stdout: "89161\n" }, "dependencies not enabled"]);
+  const handled = await handleWorkflowApi({
+    method: "POST",
+    pathname: "/api/workflow/edge/add",
+    body: JSON.stringify({ blockedId: "GH-66", blockerId: "GH-64" }),
+    appDirectory: directory,
+    hostRoot: HOST_ROOT,
+    run,
+  });
+  strictEqual(handled.status, 502);
+  ok(/dependencies not enabled/.test(handled.json.message), handled.json.message);
+  strictEqual(calls.length, 2);
+});
+
+test("a blocker whose database id does not resolve is a 502", async () => {
+  const directory = await withSnapshot(snapshot([workItem(66), workItem(999)]));
+  const { calls, run } = runStub(["HTTP 404: Not Found"]);
+  const handled = await handleWorkflowApi({
+    method: "POST",
+    pathname: "/api/workflow/edge/add",
+    body: JSON.stringify({ blockedId: "GH-66", blockerId: "GH-999" }),
+    appDirectory: directory,
+    hostRoot: HOST_ROOT,
+    run,
+  });
+  strictEqual(handled.status, 502);
+  ok(/GH-999/.test(handled.json.message), handled.json.message);
+  strictEqual(calls.length, 1);
+});
+
+test("a write that succeeds but cannot be read back is a 502, not silence", async () => {
+  const directory = await withSnapshot(snapshot([workItem(66), workItem(64)]));
+  const { calls, run } = runStub([{ stdout: "89161\n" }, {}, "read-back blew up"]);
+  const handled = await handleWorkflowApi({
+    method: "POST",
+    pathname: "/api/workflow/edge/add",
+    body: JSON.stringify({ blockedId: "GH-66", blockerId: "GH-64" }),
+    appDirectory: directory,
+    hostRoot: HOST_ROOT,
+    run,
+  });
+  strictEqual(handled.status, 502);
+  ok(/GH-66/.test(handled.json.message), handled.json.message);
+  strictEqual(calls.length, 3);
+});
+
+test("request bodies that fail the edge schemas are rejected naming the path", async () => {
+  const directory = await withSnapshot(snapshot([workItem(66), workItem(64)]));
+  const cases = [
+    ["/api/workflow/edge/add", { blockedId: "GH-66" }, /blockerId/],
+    [
+      "/api/workflow/edge/add",
+      { blockedId: "GH-66", blockerId: "GH-64", confirm: true },
+      /confirm/,
+    ],
+    ["/api/workflow/edge/remove", { blockedId: "GH-66", blockerId: 64 }, /blockerId/],
+    ["/api/workflow/edge/remove", { blockedId: "GH-66", blockerId: "GH-64", force: true }, /force/],
+  ];
+  for (const [pathname, body, pattern] of cases) {
+    const { run } = runStub();
+    const handled = await handleWorkflowApi({
+      method: "POST",
+      pathname,
+      body: JSON.stringify(body),
       appDirectory: directory,
       hostRoot: HOST_ROOT,
       run,

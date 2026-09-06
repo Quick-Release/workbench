@@ -10,20 +10,32 @@ export type GraphNodeDatum = {
   id: string;
   box: GraphBox;
   label: string;
-  sublabel: string;
+  sublabel?: string;
   accent: string;
   region?: string;
   marked?: boolean;
   dimmed?: boolean;
   selected?: boolean;
+  frontier?: boolean;
+  broken?: boolean;
   title?: string;
   onSelect?: () => void;
 };
 
+// Two edge families share the seam: the flow graph's progression/internal
+// pair and the blocker graph's gate grammar — open (solid amber), satisfied
+// (dashed gray), broken (dashed red, a fail-closed reference).
+export type GraphEdgeVariant =
+  | "progression"
+  | "internal"
+  | "gate-open"
+  | "gate-satisfied"
+  | "gate-broken";
+
 export type GraphEdgeDatum = {
   id: string;
   d: string;
-  variant: "progression" | "internal";
+  variant: GraphEdgeVariant;
   title?: string;
 };
 
@@ -38,6 +50,25 @@ type GraphViewProps = {
   nodes: GraphNodeDatum[];
 };
 
+const ARROW_COLORS: ReadonlyArray<readonly [GraphEdgeVariant, string]> = [
+  ["progression", "var(--white-dim)"],
+  ["internal", "var(--faint)"],
+  ["gate-open", "var(--amber)"],
+  ["gate-satisfied", "var(--line-strong)"],
+  ["gate-broken", "var(--coral)"],
+];
+
+const nodeClassName = (node: GraphNodeDatum) =>
+  [
+    "graph-node",
+    node.dimmed ? "graph-node-dimmed" : "",
+    node.selected ? "graph-node-selected" : "",
+    node.frontier ? "graph-node-frontier" : "",
+    node.broken ? "graph-node-broken" : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+
 export function GraphView({ width, height, ariaLabel, labels, edges, nodes }: GraphViewProps) {
   return (
     <svg
@@ -47,15 +78,10 @@ export function GraphView({ width, height, ariaLabel, labels, edges, nodes }: Gr
       aria-label={ariaLabel}
     >
       <defs>
-        {(
-          [
-            ["graph-arrow-progression", "var(--white-dim)"],
-            ["graph-arrow-internal", "var(--faint)"],
-          ] as const
-        ).map(([id, color]) => (
+        {ARROW_COLORS.map(([variant, color]) => (
           <marker
-            key={id}
-            id={id}
+            key={variant}
+            id={`graph-arrow-${variant}`}
             viewBox="0 0 10 10"
             refX={9}
             refY={5}
@@ -94,9 +120,8 @@ export function GraphView({ width, height, ariaLabel, labels, edges, nodes }: Gr
             data-slot="graph-node"
             data-id={node.id}
             data-region={node.region}
-            className={`graph-node${node.dimmed ? " graph-node-dimmed" : ""}${
-              node.selected ? " graph-node-selected" : ""
-            }`}
+            data-frontier={node.frontier || undefined}
+            className={nodeClassName(node)}
             onClick={node.onSelect}
             onKeyDown={(event) => {
               if (event.key === "Enter" || event.key === " ") node.onSelect?.();
@@ -117,18 +142,22 @@ export function GraphView({ width, height, ariaLabel, labels, edges, nodes }: Gr
                 <text className="graph-node-label" x={node.box.x + 14} y={node.box.y + 25}>
                   {node.label}
                 </text>
-                <text className="graph-node-sub" x={node.box.x + 14} y={node.box.y + 41}>
-                  {node.sublabel}
-                </text>
+                {node.sublabel !== undefined ? (
+                  <text className="graph-node-sub" x={node.box.x + 14} y={node.box.y + 41}>
+                    {node.sublabel}
+                  </text>
+                ) : null}
               </>
             ) : (
               <>
                 <text className="graph-node-label" x={node.box.x + 12} y={node.box.y + 16}>
                   {node.label}
                 </text>
-                <text className="graph-node-sub" x={node.box.x + 12} y={node.box.y + 29}>
-                  {node.sublabel}
-                </text>
+                {node.sublabel !== undefined ? (
+                  <text className="graph-node-sub" x={node.box.x + 12} y={node.box.y + 29}>
+                    {node.sublabel}
+                  </text>
+                ) : null}
               </>
             )}
             {node.marked ? (

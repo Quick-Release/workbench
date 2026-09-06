@@ -13,6 +13,9 @@ import {
   parseArtifactRecord,
   parseBlockerEdgeRecord,
   parseDecisionRecord,
+  parseEdgeAddRequest,
+  parseEdgeRemoveRequest,
+  parseEdgeWriteResult,
   parseIssueCommentRequest,
   parseIssueCommentResult,
   parseIssueCreateRequest,
@@ -765,6 +768,86 @@ describe("issue action result boundaries", () => {
     expect(parseIssueCreateResult(result)).toEqual(result);
     const drifted: unknown = { ...result, state: { ...state, meta: {} } };
     expect(() => parseIssueCreateResult(drifted)).toThrow(/snapshot/);
+  });
+});
+
+describe("blocker edge action request boundaries", () => {
+  it("accepts an add declared with qualified ids", () => {
+    expect(parseEdgeAddRequest({ blockedId: "GH-66", blockerId: "GH-64" })).toEqual({
+      blockedId: "GH-66",
+      blockerId: "GH-64",
+    });
+  });
+
+  it("accepts any id strings — namespacing is the seam handler's rejection, not the schema's", () => {
+    expect(parseEdgeAddRequest({ blockedId: "#64", blockerId: "GH-66" })).toEqual({
+      blockedId: "#64",
+      blockerId: "GH-66",
+    });
+  });
+
+  it("rejects an add carrying an excess property — adds are additive, no confirm field", () => {
+    expect(() =>
+      parseEdgeAddRequest({ blockedId: "GH-66", blockerId: "GH-64", confirm: true }),
+    ).toThrow(/confirm/);
+  });
+
+  it("accepts a removal with and without its confirmation beat", () => {
+    expect(
+      parseEdgeRemoveRequest({ blockedId: "GH-66", blockerId: "GH-64", confirm: true }),
+    ).toEqual({ blockedId: "GH-66", blockerId: "GH-64", confirm: true });
+    expect(parseEdgeRemoveRequest({ blockedId: "GH-66", blockerId: "GH-64" })).toEqual({
+      blockedId: "GH-66",
+      blockerId: "GH-64",
+    });
+  });
+
+  it("rejects a removal with an excess property", () => {
+    expect(() =>
+      parseEdgeRemoveRequest({ blockedId: "GH-66", blockerId: "GH-64", undo: true }),
+    ).toThrow(/undo/);
+  });
+});
+
+describe("blocker edge action result boundary", () => {
+  const state = {
+    workItems: [],
+    maps: [],
+    blockerEdges: [],
+    decisions: [],
+    artifacts: [],
+    meta: { snapshot: "2026-09-05T12:00:00+01:00", repo: "Quick-Release/workbench" },
+  };
+
+  it("accepts a result carrying the message pair and the refreshed state", () => {
+    const result = {
+      message: "GH-66 is blocked by GH-64.",
+      blockedId: "GH-66",
+      blockerId: "GH-64",
+      state,
+    };
+    expect(parseEdgeWriteResult(result)).toEqual(result);
+  });
+
+  it("rejects a result with an excess property", () => {
+    const result = {
+      message: "GH-66 is blocked by GH-64.",
+      blockedId: "GH-66",
+      blockerId: "GH-64",
+      state,
+      undo: true,
+    };
+    expect(() => parseEdgeWriteResult(result)).toThrow(/undo/);
+  });
+
+  it("rejects a result whose state fails the payload schema", () => {
+    const drifted: unknown = {
+      message: "GH-66 is blocked by GH-64.",
+      blockedId: "GH-66",
+      blockerId: "GH-64",
+      state: { ...state, meta: {} },
+    };
+    expect(() => parseEdgeWriteResult(drifted)).toThrow(/snapshot/);
   });
 });
 

@@ -151,6 +151,37 @@ describe("the panel's actions in live mode", () => {
   });
 });
 
+describe("the panel's blocker-edge actions (ticket #61)", () => {
+  it("lists the issue's declared gates with a removal affordance", () => {
+    const html = renderPanel({ issueId: "GH-42" });
+    expect(html).toContain("Blocker edges");
+    expect(html).toContain('aria-label="Remove the gate from GH-7"');
+    expect(html).toContain("Remove gate");
+  });
+
+  it("offers the add form with a qualified-id input", () => {
+    const html = renderPanel({ issueId: "GH-42" });
+    expect(html).toContain('aria-label="Add a blocker gate to GH-42"');
+    expect(html).toContain("Add gate");
+  });
+
+  it("degrades edge actions to the gh api commands in static mode", () => {
+    const html = renderPanel({ issueId: "GH-42", mode: "static" });
+    expect(html).toContain(
+      "gh api --method POST repos/Quick-Release/workbench/issues/42/dependencies/blocked_by",
+    );
+    expect(html).toContain("--jq .id");
+    expect(html).toContain(
+      "gh api --method DELETE repos/Quick-Release/workbench/issues/42/dependencies/blocked_by",
+    );
+  });
+
+  it("lists no gates for an issue without any", () => {
+    const html = renderPanel({ issueId: "GH-8" });
+    expect(html).toContain("no gates declared from this issue");
+  });
+});
+
 describe("static builds degrade the actions to copy-the-command", () => {
   it("renders the gh commands instead of forms", () => {
     const html = renderPanel({ issueId: "GH-7", mode: "static" });

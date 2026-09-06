@@ -2,17 +2,13 @@ import { useState } from "react";
 import { createFileRoute, stripSearchParams, useNavigate } from "@tanstack/react-router";
 import { z } from "zod";
 
-import { IssueDetailPanel, type IssuePanelAction } from "../components/IssueDetailPanel";
+import { IssueDetailPanel } from "../components/IssueDetailPanel";
 import { OverviewPage } from "../components/OverviewPage";
 import { overviewData } from "../data";
+import { useIssueActionRunner } from "../hooks/use-issue-actions";
 import { useWorkflowMode, useWorkflowState, setWorkflowState } from "../hooks/use-workflow-state";
 import { issueParamFromSearch, panelIdFor } from "../lib/issue-param";
-import {
-  parseIssueCommentResult,
-  parseIssueCreateResult,
-  parseIssueEditResult,
-  parseSyncTriggerResult,
-} from "../schema";
+import { parseSyncTriggerResult } from "../schema";
 
 const statusSchema = z.enum([
   "all",
@@ -53,30 +49,6 @@ export const Route = createFileRoute("/")({
   component: WorkbenchRoute,
 });
 
-// Each panel action posts exactly its seam schema's fields — the action's
-// `kind` picks the route and never crosses the wire, where it would be excess.
-const payloadFor = (action: IssuePanelAction) => {
-  switch (action.kind) {
-    case "comment":
-      return { issueId: action.issueId, body: action.body };
-    case "edit":
-      return {
-        issueId: action.issueId,
-        title: action.title,
-        body: action.body,
-        confirm: action.confirm,
-      };
-    case "create":
-      return { title: action.title, body: action.body };
-  }
-};
-
-const RESULT_PARSERS = {
-  comment: parseIssueCommentResult,
-  edit: parseIssueEditResult,
-  create: parseIssueCreateResult,
-} as const;
-
 function WorkbenchRoute() {
   const legacySearch = Route.useSearch();
   const search = {
@@ -100,8 +72,11 @@ function WorkbenchRoute() {
   const [syncPending, setSyncPending] = useState(false);
   const [syncMessage, setSyncMessage] = useState<string | null>(null);
   const [syncWarnings, setSyncWarnings] = useState<readonly string[]>([]);
-  const [panelPending, setPanelPending] = useState<IssuePanelAction["kind"] | null>(null);
-  const [panelMessage, setPanelMessage] = useState<string | null>(null);
+  const {
+    pending: panelPending,
+    message: panelMessage,
+    run: runIssueAction,
+  } = useIssueActionRunner();
   const issueParam = Route.useSearch({ select: (s) => s.issue });
   const panelIssueId = panelIdFor(issueParam);
 
@@ -132,32 +107,6 @@ function WorkbenchRoute() {
       setSyncMessage("The sync did not go through — the dev server API is not reachable.");
     } finally {
       setSyncPending(false);
-    }
-  };
-
-  const runIssueAction = async (action: IssuePanelAction) => {
-    setPanelPending(action.kind);
-    setPanelMessage(null);
-    try {
-      const response = await fetch(`/api/workflow/issue/${action.kind}`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(payloadFor(action)),
-      });
-      const raw: unknown = await response.json();
-      if (!response.ok) {
-        const { message: failure } = (raw ?? {}) as { message?: string };
-        setPanelMessage(failure ?? `The action was rejected (${response.status}).`);
-        return;
-      }
-      const result = RESULT_PARSERS[action.kind](raw);
-      if ("state" in result) setWorkflowState(result.state);
-      setPanelMessage(result.message);
-      if (action.kind === "create") setIssueParam(result.issueId.slice(3));
-    } catch {
-      setPanelMessage("The action did not go through — the dev server API is not reachable.");
-    } finally {
-      setPanelPending(null);
     }
   };
 
@@ -197,7 +146,9 @@ function WorkbenchRoute() {
         onOpenChange={(open) => {
           if (!open) setIssueParam(undefined);
         }}
-        onAction={(action) => void runIssueAction(action)}
+        onAction={(action) =>
+          void runIssueAction(action, undefined, (issueId) => setIssueParam(issueId))
+        }
       />
     </>
   );

@@ -1,19 +1,14 @@
 import { useEffect, useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 
-import { IssueDetailPanel, type IssuePanelAction } from "../components/IssueDetailPanel";
+import { IssueDetailPanel } from "../components/IssueDetailPanel";
 import { TriagePage, type TriageLens } from "../components/TriagePage";
 import { overviewData } from "../data";
+import { useIssueActionRunner } from "../hooks/use-issue-actions";
 import { setWorkflowState } from "../hooks/use-workflow-state";
 import { issueParamFromSearch, panelIdFor } from "../lib/issue-param";
 import { workflowStateFrom } from "../lib/workflow-state";
-import {
-  parseIssueCommentResult,
-  parseIssueCreateResult,
-  parseIssueEditResult,
-  parseTriageMoveResult,
-  parseWorkflowStatePayload,
-} from "../schema";
+import { parseTriageMoveResult, parseWorkflowStatePayload } from "../schema";
 import type { TriageState, WorkflowStatePayload } from "../types";
 
 type TriageSearch = { lens?: TriageLens; issue?: string };
@@ -30,37 +25,19 @@ export const Route = createFileRoute("/triage")({
   component: TriageRoute,
 });
 
-// Each action posts exactly its seam schema's fields — the action's `kind`
-// picks the route and never crosses the wire, where it would be excess.
-const payloadFor = (action: IssuePanelAction) => {
-  switch (action.kind) {
-    case "comment":
-      return { issueId: action.issueId, body: action.body };
-    case "edit":
-      return {
-        issueId: action.issueId,
-        title: action.title,
-        body: action.body,
-        confirm: action.confirm,
-      };
-    case "create":
-      return { title: action.title, body: action.body };
-  }
-};
-
-const RESULT_PARSERS = {
-  comment: parseIssueCommentResult,
-  edit: parseIssueEditResult,
-  create: parseIssueCreateResult,
-} as const;
-
+// Each action posts exactly its seam schema's fields — the shared wire
+// grammar (`issue-actions`) picks the route and the fields, so the panel
+// behaves identically on every view.
 function TriageRoute() {
   const [state, setState] = useState(initialState);
   const [mode, setMode] = useState<"live" | "static">("live");
   const [pendingId, setPendingId] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
-  const [panelPending, setPanelPending] = useState<IssuePanelAction["kind"] | null>(null);
-  const [panelMessage, setPanelMessage] = useState<string | null>(null);
+  const {
+    pending: panelPending,
+    message: panelMessage,
+    run: runIssueAction,
+  } = useIssueActionRunner();
   const lens = Route.useSearch({ select: (search) => search.lens ?? "none" });
   const issueParam = Route.useSearch({ select: (search) => search.issue });
   const navigate = Route.useNavigate();
@@ -120,35 +97,6 @@ function TriageRoute() {
     }
   };
 
-  const runIssueAction = async (action: IssuePanelAction) => {
-    setPanelPending(action.kind);
-    setPanelMessage(null);
-    try {
-      const response = await fetch(`/api/workflow/issue/${action.kind}`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(payloadFor(action)),
-      });
-      const raw: unknown = await response.json();
-      if (!response.ok) {
-        const { message: failure } = (raw ?? {}) as { message?: string };
-        setPanelMessage(failure ?? `The action was rejected (${response.status}).`);
-        return;
-      }
-      const result = RESULT_PARSERS[action.kind](raw);
-      if ("state" in result) {
-        setState(result.state);
-        setWorkflowState(result.state);
-      }
-      setPanelMessage(result.message);
-      if (action.kind === "create") setIssueParam(result.issueId.slice(3));
-    } catch {
-      setPanelMessage("The action did not go through — the dev server API is not reachable.");
-    } finally {
-      setPanelPending(null);
-    }
-  };
-
   return (
     <>
       <TriagePage
@@ -177,7 +125,9 @@ function TriageRoute() {
         onOpenChange={(open) => {
           if (!open) setIssueParam(undefined);
         }}
-        onAction={(action) => void runIssueAction(action)}
+        onAction={(action) =>
+          void runIssueAction(action, setState, (issueId) => setIssueParam(issueId))
+        }
       />
     </>
   );

@@ -12,7 +12,9 @@ import type { WorkflowStatePayload } from "../types";
 export type IssuePanelAction =
   | { kind: "create"; title: string; body: string }
   | { kind: "edit"; issueId: string; title: string; body: string; confirm: boolean }
-  | { kind: "comment"; issueId: string; body: string };
+  | { kind: "comment"; issueId: string; body: string }
+  | { kind: "edge-add"; blockedId: string; blockerId: string }
+  | { kind: "edge-remove"; blockedId: string; blockerId: string; confirm: boolean };
 
 type IssueDetailPanelProps = {
   issueId: string | null;
@@ -194,6 +196,14 @@ function IssueRecordSections({
         </div>
       </section>
 
+      <BlockerEdgesSection
+        record={record}
+        state={state}
+        mode={mode}
+        pending={pending}
+        onAction={onAction}
+      />
+
       <section className="flex flex-col gap-2">
         <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase">Comment</p>
         {mode === "static" ? (
@@ -330,6 +340,130 @@ function CreateIssueSection({
         </Button>
         {pending === "create" && <span className="text-xs text-muted-foreground">Filing…</span>}
       </div>
+    </section>
+  );
+}
+
+// ADR 0005 phase-1 blocker-edge actions (ticket #61): adding declares a gate
+// with a qualified id; removal tears a gate off the tracker, so it takes the
+// same deliberate two-step confirm as the edit. Static builds carry the two
+// gh api commands a Developer would run by hand — the database id the
+// native endpoint speaks resolves through the same `--jq .id` lookup.
+function BlockerEdgesSection({
+  record,
+  state,
+  mode,
+  pending,
+  onAction,
+}: Omit<SectionProps, "issueId"> & {
+  record: (typeof state)["workItems"][number];
+  state: WorkflowStatePayload;
+}) {
+  const [blockerDraft, setBlockerDraft] = useState("");
+  const [confirmingRemoval, setConfirmingRemoval] = useState<string | null>(null);
+
+  const declared = state.blockerEdges.filter((edge) => edge.blockedId === record.id);
+  const number = record.id.slice(3);
+  const repo = state.meta.repo;
+  const databaseId = (blockerId: string) =>
+    `$(gh api repos/${repo}/issues/${blockerId.slice(3)} --jq .id)`;
+  const addCommand = `gh api --method POST repos/${repo}/issues/${number}/dependencies/blocked_by -F issue_id=${databaseId(blockerDraft || "GH-")}`;
+  const removeCommand = (blockerId: string) =>
+    `gh api --method DELETE repos/${repo}/issues/${number}/dependencies/blocked_by/${databaseId(blockerId)}`;
+
+  return (
+    <section className="flex flex-col gap-2">
+      <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
+        Blocker edges
+      </p>
+      {declared.length === 0 ? (
+        <p className="text-xs text-muted-foreground">no gates declared from this issue</p>
+      ) : (
+        mode === "static" && (
+          <div className="flex flex-col gap-1">
+            {declared.map((edge) => (
+              <code key={`${edge.blockerId}`} className={commandClass}>
+                {removeCommand(edge.blockerId)}
+              </code>
+            ))}
+          </div>
+        )
+      )}
+      {mode === "static" ? (
+        <code className={commandClass}>{addCommand}</code>
+      ) : (
+        <div className="flex flex-col gap-2">
+          {declared.map((edge) =>
+            confirmingRemoval === edge.blockerId ? (
+              <div key={edge.blockerId} className="flex flex-wrap items-center gap-2 text-xs">
+                <span>
+                  Tear {edge.blockerId}&apos;s gate off {record.id}?
+                </span>
+                <Button
+                  size="xs"
+                  variant="destructive"
+                  disabled={pending === "edge-remove"}
+                  onClick={() =>
+                    onAction({
+                      kind: "edge-remove",
+                      blockedId: record.id,
+                      blockerId: edge.blockerId,
+                      confirm: true,
+                    })
+                  }
+                >
+                  Confirm removal
+                </Button>
+                <Button size="xs" variant="ghost" onClick={() => setConfirmingRemoval(null)}>
+                  Keep the gate
+                </Button>
+              </div>
+            ) : (
+              <div
+                key={edge.blockerId}
+                className="flex items-center justify-between gap-2 text-xs text-muted-foreground"
+              >
+                <span className="font-mono">{edge.blockerId}</span>
+                <Button
+                  size="xs"
+                  variant="outline"
+                  aria-label={`Remove the gate from ${edge.blockerId}`}
+                  onClick={() => setConfirmingRemoval(edge.blockerId)}
+                >
+                  Remove gate
+                </Button>
+              </div>
+            ),
+          )}
+          <div className="flex items-center gap-2">
+            <Input
+              aria-label={`Add a blocker gate to ${record.id}`}
+              placeholder="GH-64 — the id that gates this issue"
+              value={blockerDraft}
+              onChange={(event) => setBlockerDraft(event.target.value)}
+            />
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={pending === "edge-add" || !/^GH-\d+$/.test(blockerDraft.trim())}
+              onClick={() => {
+                onAction({
+                  kind: "edge-add",
+                  blockedId: record.id,
+                  blockerId: blockerDraft.trim(),
+                });
+                setBlockerDraft("");
+              }}
+            >
+              Add gate
+            </Button>
+          </div>
+          {pending === "edge-add" && <span className="text-xs text-muted-foreground">Adding…</span>}
+          {pending === "edge-remove" && (
+            <span className="text-xs text-muted-foreground">Removing…</span>
+          )}
+        </div>
+      )}
     </section>
   );
 }

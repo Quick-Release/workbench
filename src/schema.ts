@@ -237,6 +237,28 @@ export const SyncTriggerResultSchema = Schema.Struct({
   state: WorkflowStatePayloadSchema,
 });
 
+// The blocker-edge actions (ticket #61): an add declares a gate with
+// qualified ids; a removal is destructive — its `confirm` flag is the
+// deliberate beat, enforced at the seam, before a gate is torn off the
+// tracker.
+export const EdgeAddRequestSchema = Schema.Struct({
+  blockedId: Schema.String,
+  blockerId: Schema.String,
+});
+
+export const EdgeRemoveRequestSchema = Schema.Struct({
+  blockedId: Schema.String,
+  blockerId: Schema.String,
+  confirm: Schema.optional(Schema.Boolean),
+});
+
+export const EdgeWriteResultSchema = Schema.Struct({
+  message: Schema.String,
+  blockedId: Schema.String,
+  blockerId: Schema.String,
+  state: WorkflowStatePayloadSchema,
+});
+
 export const PlanRecordSchema = Schema.Struct({
   id: Schema.String,
   title: Schema.String,
@@ -470,5 +492,17 @@ export const parseSyncTriggerRequest: (input: unknown) => SyncTriggerRequest =
   Schema.decodeUnknownSync(SyncTriggerRequestSchema, { onExcessProperty: "error" });
 
 export const parseSyncTriggerResult = Schema.decodeUnknownSync(SyncTriggerResultSchema, {
+  onExcessProperty: "error",
+});
+
+export const parseEdgeAddRequest = Schema.decodeUnknownSync(EdgeAddRequestSchema, {
+  onExcessProperty: "error",
+});
+
+export const parseEdgeRemoveRequest = Schema.decodeUnknownSync(EdgeRemoveRequestSchema, {
+  onExcessProperty: "error",
+});
+
+export const parseEdgeWriteResult = Schema.decodeUnknownSync(EdgeWriteResultSchema, {
   onExcessProperty: "error",
 });
