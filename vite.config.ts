@@ -43,8 +43,10 @@ export default defineConfig({
         },
       },
       // The worker suite (ticket #29): behavioral tests driven inside the
-      // real workerd runtime against the deployed-config entry — same
-      // wrangler.jsonc alchemy deploys, requests in, responses out.
+      // real workerd runtime. cloudflareTest resolves the worker entry and
+      // bindings from worker/wrangler.jsonc — the escape-hatch config a
+      // bare `wrangler deploy` uses (ADR 0003 keeps alchemy as the deploy
+      // surface, so the two must be kept equivalent by hand).
       {
         plugins: [
           cloudflareTest({
