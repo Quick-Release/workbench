@@ -215,6 +215,23 @@ export const SyncTriggerResultSchema = Schema.Struct({
   state: WorkflowStatePayloadSchema,
 });
 
+// The AI draft seam (ticket #37): the client sends only a PR number; the
+// endpoint answers with the structured draft. The model's own output schema
+// is Zod (TanStack AI's structured-output contract, per spec #34) — this is
+// the seam boundary both its HTTP sides pass through.
+export const AiDraftRequestSchema = Schema.Struct({
+  pr: Schema.Number,
+});
+
+export const AiDraftResultSchema = Schema.Struct({
+  title: Schema.String,
+  body: Schema.String,
+});
+
+export const AiHealthSchema = Schema.Struct({
+  configured: Schema.Boolean,
+});
+
 // The blocker-edge actions (ticket #61): an add declares a gate with
 // qualified ids; a removal is destructive — its `confirm` flag is the
 // deliberate beat, enforced at the seam, before a gate is torn off the
@@ -448,3 +465,16 @@ export const parseEdgeRemoveRequest = Schema.decodeUnknownSync(EdgeRemoveRequest
 export const parseEdgeWriteResult = Schema.decodeUnknownSync(EdgeWriteResultSchema, {
   onExcessProperty: "error",
 });
+
+export const parseAiDraftRequest: (input: unknown) => { pr: number } = Schema.decodeUnknownSync(
+  AiDraftRequestSchema,
+  { onExcessProperty: "error" },
+);
+
+export const parseAiDraftResult: (input: unknown) => { title: string; body: string } =
+  Schema.decodeUnknownSync(AiDraftResultSchema, { onExcessProperty: "error" });
+
+export const parseAiHealth: (input: unknown) => { configured: boolean } = Schema.decodeUnknownSync(
+  AiHealthSchema,
+  { onExcessProperty: "error" },
+);

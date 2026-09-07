@@ -1,18 +1,26 @@
 import { resolve } from "node:path";
 
+import { parseAiDraftRequest, parseAiDraftResult, parseAiHealth } from "../src/schema.ts";
 import { createDraftModelCall, providerConfigured } from "./ai-model.mjs";
 import { ghPullRequestLoader, gitCommitSubjectLister } from "./ai-sources.mjs";
 import { gateRejection } from "./request-gate.mjs";
 
 // The AI middleware (ticket #37): a one-shot draft endpoint and a health
 // probe, both behind the shared request gate. The handler is pure — request
-// parts in, a response part out — with everything that touches the outside
-// world injected: the model call, the pull-request loader, the local commit
-// subjects, and whether a provider key is configured. No live provider is
-// ever touched by tests.
+// parts in, a response part out, both through the seam's Effect Schema —
+// with everything that touches the outside world injected: the model call,
+// the pull-request loader, the local commit subjects, and whether a provider
+// key is configured. No live provider is ever touched by tests.
 
 const DRAFT_ROUTE = /^\/api\/ai\/draft\/?$/;
 const HEALTH_ROUTE = /^\/api\/ai\/health\/?$/;
+
+export const isAiRoute = (pathname) => DRAFT_ROUTE.test(pathname) || HEALTH_ROUTE.test(pathname);
+
+const methodMismatch = (expected) => ({
+  status: 405,
+  json: { error: "method_not_allowed", message: `this endpoint answers ${expected} only` },
+});
 
 export const handleAiApi = async ({
   method,
@@ -25,13 +33,17 @@ export const handleAiApi = async ({
   listCommitSubjects,
   providerKeyConfigured,
 }) => {
-  if (!DRAFT_ROUTE.test(pathname) && !HEALTH_ROUTE.test(pathname)) return null;
+  if (!isAiRoute(pathname)) return null;
 
   const gate = gateRejection({ host, origin });
   if (gate) return gate;
 
-  if (method === "GET" && HEALTH_ROUTE.test(pathname))
-    return { status: 200, json: { configured: Boolean(providerKeyConfigured) } };
+  if (HEALTH_ROUTE.test(pathname)) {
+    if (method !== "GET") return methodMismatch("GET");
+    return { status: 200, json: parseAiHealth({ configured: Boolean(providerKeyConfigured) }) };
+  }
+
+  if (method !== "POST") return methodMismatch("POST");
 
   let request;
   try {
@@ -42,19 +54,17 @@ export const handleAiApi = async ({
       json: { error: "malformed_request", message: "request body is not valid JSON" },
     };
   }
-  if (
-    request === null ||
-    typeof request !== "object" ||
-    !Number.isInteger(request.pr) ||
-    request.pr < 1
-  )
+  try {
+    request = parseAiDraftRequest(request);
+  } catch (error) {
     return {
       status: 400,
       json: {
         error: "malformed_request",
-        message: "a draft request takes a positive integer `pr` field",
+        message: `a draft request takes a positive integer \`pr\` field (${error.message})`,
       },
     };
+  }
 
   if (!providerKeyConfigured)
     return {
@@ -88,7 +98,7 @@ export const handleAiApi = async ({
 
   try {
     const draft = await modelCall({ pr: pullRequest, commitSubjects });
-    return { status: 200, json: draft };
+    return { status: 200, json: parseAiDraftResult(draft) };
   } catch (error) {
     return {
       status: 502,
@@ -110,7 +120,7 @@ export const aiApiPlugin = () => ({
   configureServer(server) {
     server.middlewares.use(async (request, response, next) => {
       const url = new URL(request.url ?? "/", "http://localhost");
-      if (!DRAFT_ROUTE.test(url.pathname) && !HEALTH_ROUTE.test(url.pathname)) return next();
+      if (!isAiRoute(url.pathname)) return next();
       const hostRoot = resolve(process.env.WORKBENCH_SOURCE_ROOT || server.config.root);
       const body = request.method === "POST" ? await readBody(request) : undefined;
       const handled = await handleAiApi({

@@ -19,7 +19,7 @@
     "registry": "https://npm.pkg.github.com"
   },
   "scripts": {
-    "dev": "pnpm sync && vp dev --port 4051 --strictPort",
+    "dev": "pnpm sync && dotenvx run -- vp dev --port 4051 --strictPort",
     "dev:demo": "node scripts/env.mjs && dotenvx run -f .env.demo -f .env -- pnpm dev",
     "worker:deploy": "node scripts/env.mjs && dotenvx run -- alchemy deploy --stage prod",
     "worker:dev": "node scripts/env.mjs && dotenvx run -- alchemy dev",

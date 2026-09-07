@@ -36,3 +36,9 @@ test("rejects a cross-origin browser request", () => {
   strictEqual(rejection?.status, 403);
   strictEqual(rejection?.json.error, "cross_origin");
 });
+
+test("rejects an unparsable origin header as cross-origin", () => {
+  const rejection = gateRejection({ host: "localhost:4051", origin: "not a url" });
+  strictEqual(rejection?.status, 403);
+  strictEqual(rejection?.json.error, "cross_origin");
+});

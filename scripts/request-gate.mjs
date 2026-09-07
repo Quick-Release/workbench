@@ -1,7 +1,8 @@
-// The dashboard's backend answers only the loopback dev-server host, and
-// browser requests must be same-origin (ADR 0005). One shared guard so every
-// API middleware enforces the identical gate rather than copying it: null
-// means pass; anything else is the response part to send back.
+// The loopback-host and same-origin checks the dashboard's API middlewares
+// are meant to enforce (ADR 0005). The AI middleware answers only behind
+// this gate; the other API middlewares predate it and can adopt it in place
+// of their copies when they next change. Null means pass; anything else is
+// the response part to send back.
 
 const LOOPBACK_HOSTNAMES = new Set(["localhost", "127.0.0.1", "[::1]"]);
 
@@ -11,6 +12,14 @@ const hostnameOf = (host) => {
   if (!host) return "";
   if (host.startsWith("[")) return host.slice(0, host.indexOf("]") + 1) || host;
   return host.split(":")[0];
+};
+
+const crossOrigin = {
+  status: 403,
+  json: {
+    error: "cross_origin",
+    message: "browser requests to the dashboard API must be same-origin",
+  },
 };
 
 export const gateRejection = ({ host, origin }) => {
@@ -24,20 +33,13 @@ export const gateRejection = ({ host, origin }) => {
     };
 
   if (origin !== undefined) {
-    let originHost = "";
+    let originHost;
     try {
       originHost = new URL(origin).host;
     } catch {
-      originHost = "\u0000unparsable";
+      return crossOrigin;
     }
-    if (originHost !== host)
-      return {
-        status: 403,
-        json: {
-          error: "cross_origin",
-          message: "browser requests to the dashboard API must be same-origin",
-        },
-      };
+    if (originHost !== host) return crossOrigin;
   }
 
   return null;

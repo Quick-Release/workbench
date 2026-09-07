@@ -101,6 +101,26 @@ test("a malformed request body is a named 400", async () => {
   strictEqual(noPr.status, 400);
   const notANumber = await draftRequest({ body: JSON.stringify({ pr: "12" }) });
   strictEqual(notANumber.status, 400);
+  const extraField = await draftRequest({ body: JSON.stringify({ pr: 12, style: "x" }) });
+  strictEqual(extraField.status, 400);
+});
+
+test("wrong methods are named 405s, not confusing body errors", async () => {
+  const getDraft = await handleAiApi({
+    method: "GET",
+    pathname: "/api/ai/draft",
+    ...loopback,
+    ...workingDeps,
+  });
+  strictEqual(getDraft.status, 405);
+  strictEqual(getDraft.json.error, "method_not_allowed");
+  const postHealth = await handleAiApi({
+    method: "POST",
+    pathname: "/api/ai/health",
+    ...loopback,
+    ...workingDeps,
+  });
+  strictEqual(postHealth.status, 405);
 });
 
 test("an unconfigured provider key is a named error before any work happens", async () => {
