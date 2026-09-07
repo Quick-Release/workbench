@@ -1,5 +1,12 @@
 # @quick-release/workbench
 
+## 0.5.0
+
+### Minor Changes
+
+- 9bc16d9: One-shot "draft description" AI endpoint on the dev server: `POST /api/ai/draft` returns a structured draft title and body for a pull request via one typed TanStack AI round-trip, assembled from the PR record plus the host repo's commit-subject style; `GET /api/ai/health` reports provider-key availability. Lands behind a shared, contract-tested loopback/same-origin request gate (#37).
+- e05bba8: Open pull requests of the host repo sync into the snapshot as a first-class record family (number, title, head/base, author, draft flag, body) — collected page-capped and fail-soft beside the other tracker-backed families, and reported in the sync summary (#79).
+
 ## 0.4.0
 
 ### Minor Changes
