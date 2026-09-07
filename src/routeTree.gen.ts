@@ -14,6 +14,7 @@ import { Route as BlockersRouteImport } from './routes/blockers'
 import { Route as DecisionsRouteImport } from './routes/decisions'
 import { Route as FlowRouteImport } from './routes/flow'
 import { Route as InFlightRouteImport } from './routes/in-flight'
+import { Route as PullRequestsRouteImport } from './routes/pull-requests'
 import { Route as SessionsRouteImport } from './routes/sessions'
 import { Route as ToolsRouteImport } from './routes/tools'
 import { Route as TriageRouteImport } from './routes/triage'
@@ -43,6 +44,11 @@ const InFlightRoute = InFlightRouteImport.update({
   path: '/in-flight',
   getParentRoute: () => rootRouteImport,
 } as any)
+const PullRequestsRoute = PullRequestsRouteImport.update({
+  id: '/pull-requests',
+  path: '/pull-requests',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const SessionsRoute = SessionsRouteImport.update({
   id: '/sessions',
   path: '/sessions',
@@ -65,6 +71,7 @@ export interface FileRoutesByFullPath {
   '/decisions': typeof DecisionsRoute
   '/flow': typeof FlowRoute
   '/in-flight': typeof InFlightRoute
+  '/pull-requests': typeof PullRequestsRoute
   '/sessions': typeof SessionsRoute
   '/tools': typeof ToolsRoute
   '/triage': typeof TriageRoute
@@ -75,6 +82,7 @@ export interface FileRoutesByTo {
   '/decisions': typeof DecisionsRoute
   '/flow': typeof FlowRoute
   '/in-flight': typeof InFlightRoute
+  '/pull-requests': typeof PullRequestsRoute
   '/sessions': typeof SessionsRoute
   '/tools': typeof ToolsRoute
   '/triage': typeof TriageRoute
@@ -86,6 +94,7 @@ export interface FileRoutesById {
   '/decisions': typeof DecisionsRoute
   '/flow': typeof FlowRoute
   '/in-flight': typeof InFlightRoute
+  '/pull-requests': typeof PullRequestsRoute
   '/sessions': typeof SessionsRoute
   '/tools': typeof ToolsRoute
   '/triage': typeof TriageRoute
@@ -98,6 +107,7 @@ export interface FileRouteTypes {
     | '/decisions'
     | '/flow'
     | '/in-flight'
+    | '/pull-requests'
     | '/sessions'
     | '/tools'
     | '/triage'
@@ -108,6 +118,7 @@ export interface FileRouteTypes {
     | '/decisions'
     | '/flow'
     | '/in-flight'
+    | '/pull-requests'
     | '/sessions'
     | '/tools'
     | '/triage'
@@ -118,6 +129,7 @@ export interface FileRouteTypes {
     | '/decisions'
     | '/flow'
     | '/in-flight'
+    | '/pull-requests'
     | '/sessions'
     | '/tools'
     | '/triage'
@@ -129,6 +141,7 @@ export interface RootRouteChildren {
   DecisionsRoute: typeof DecisionsRoute
   FlowRoute: typeof FlowRoute
   InFlightRoute: typeof InFlightRoute
+  PullRequestsRoute: typeof PullRequestsRoute
   SessionsRoute: typeof SessionsRoute
   ToolsRoute: typeof ToolsRoute
   TriageRoute: typeof TriageRoute
@@ -171,6 +184,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof InFlightRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/pull-requests': {
+      id: '/pull-requests'
+      path: '/pull-requests'
+      fullPath: '/pull-requests'
+      preLoaderRoute: typeof PullRequestsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/sessions': {
       id: '/sessions'
       path: '/sessions'
@@ -201,6 +221,7 @@ const rootRouteChildren: RootRouteChildren = {
   DecisionsRoute: DecisionsRoute,
   FlowRoute: FlowRoute,
   InFlightRoute: InFlightRoute,
+  PullRequestsRoute: PullRequestsRoute,
   SessionsRoute: SessionsRoute,
   ToolsRoute: ToolsRoute,
   TriageRoute: TriageRoute,
