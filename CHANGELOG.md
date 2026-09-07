@@ -1,5 +1,18 @@
 # @quick-release/workbench
 
+## 0.6.0
+
+### Minor Changes
+
+- c5cb781: The Cloudflare Agents SDK (pinned to `agents` 0.22.0) lands additively in the telemetry worker behind the existing ingest token gate: the `SubmissionReviewAgent` runs as a SQLite-backed Durable Object keyed one-instance-per-repository, its `/agents/submission-review-agent/<repo>` route mounts strictly after the constant-time bearer-token check (healthz stays unauthenticated), the alchemy stack declares the DO binding with the SQLite-class migration derived automatically, the bare-wrangler escape hatch carries the equivalent binding plus manual migration, and the dependency joins the Renovate weekly group (#31).
+- 0a40728: `computeDigest` in `worker/digest.mjs`: a pure, runtime-free function that turns pending-submission rows into a maintainer digest — total count, fresh/aging/stale age buckets, oldest age, and an oldest-first item list — with `now` injected so the output is deterministic. This is the stable compute seam a future AI summarizer plugs into (#30).
+- 37d8e80: The `SubmissionReviewAgent` now serves the digest (ticket #32): an authenticated request to `/agents/submission-review-agent/<repo>` returns the repository's pending-submission digest — computed by the pure `computeDigest` from rows read through the existing D1 binding — alongside the previous run's persisted digest, so each on-demand run reports what changed since the last review pass. The worker test harness applies the D1 migrations to the workerd suite's database via the plugin's `readD1Migrations`/`applyD1Migrations` pattern.
+- 1435b72: Pull-requests page: the open host-repo pull requests render from the synced snapshot (read-only rows with number, title, author, head → base, and draft flag) behind a new sidebar entry, and each row carries a one-shot "Draft description" action that posts only the PR number to the dev-server draft endpoint, shows a drafting state, and renders the returned title and body in a copyable panel; an in-flight draft is aborted by the next one, failures render readable errors, and a missing provider key renders a configuration hint instead of a broken action (#38).
+
+### Patch Changes
+
+- 7b81cbb: The ingest worker's HTTP contract is now behaviorally tested inside the real workerd runtime via `@cloudflare/vitest-pool-workers`, running under the standard `pnpm test` command beside the existing runtime-free suites; the vitest config gains a two-project split (dashboard pool + workers pool) with the dashboard project carrying its own plugins and alias (#29).
+
 ## 0.5.0
 
 ### Minor Changes
