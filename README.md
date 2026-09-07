@@ -137,9 +137,10 @@ metadata, semantic theme colors, and service sync statuses:
 Supported service adapters are `asana` (project tasks, via `projectGid`),
 `notion` (data-source pages, via `dataSourceId`), `github` (open issues, via
 `repo: "owner/name"`), and `gitlab` (open issues, via a numeric `projectId` or
-`projectPath: "group/project"`). The issue adapters derive task status from
-labels (using the triage vocabulary and any `statusMap` overrides), and both
-accept an optional `apiBaseUrl` for
+`projectPath: "group/project"`). Each adapter reports its sync status and task
+count into the snapshot, accepts an optional `statusMap` for mapping
+service-specific states onto the triage vocabulary, and an optional
+`apiBaseUrl` for
 self-hosted instances. Tokens are read only from the named environment variables
 while `sync` runs — put them in the gitignored `.env` (see above) or export
 them in the shell; for GitHub, an authenticated `gh` CLI is used as a fallback

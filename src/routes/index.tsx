@@ -43,7 +43,7 @@ function WorkbenchRoute() {
   const panelIssueId = panelIdFor(issueParam);
 
   const setIssueParam = (issue: string | undefined) =>
-    navigate({ search: (prev) => ({ ...prev, issue }), replace: true });
+    navigate({ search: (prev) => ({ ...prev, issue }) });
 
   const sync = async () => {
     setSyncPending(true);

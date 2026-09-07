@@ -109,8 +109,8 @@ const relativePath = (path) => relative(rootDirectory, path).split("\\").join("/
 
 // ADR 0008: local ticket files stay an edge-declaring surface — a
 // `Blocked by:` line in `docs/plans/**/tickets/*.md` names its gate in the
-// file's own namespace. Only the ids and texts are collected; the file's
-// status is never read.
+// file's own namespace. Only each file's id, text, and path are collected
+// (the path is the edge's sourceRef); the file's status is never read.
 const ticketIdFrom = (text, filename) => {
   const headingMatch = text.match(/^#\s+([A-Z0-9][A-Z0-9-]*-\d+)\b/m);
   if (headingMatch) return headingMatch[1];

@@ -1,7 +1,6 @@
 import type { BlockerEdgeRecord, TrackerMapRecord, WorkItemRecord } from "../types";
 
-// ADR 0008: the frontier selector runs over the tracker's work items. The
-// frontier is computed, never stored.
+// ADR 0008: the frontier selector runs over the tracker's work items.
 export type FrontierItem = {
   id: string;
   open: boolean;
@@ -41,18 +40,18 @@ export const openBlockers = (
 // closed, closed-is-closed. Map children keep their map order ("first in map
 // order wins"); everything else falls back to issue number ascending.
 export const frontier = (
-  tickets: readonly FrontierItem[],
+  workItems: readonly FrontierItem[],
   blockerEdges: readonly BlockerEdgeRecord[],
   maps: readonly TrackerMapRecord[],
 ): FrontierItem[] => {
-  const byId = itemsById(tickets);
+  const byId = itemsById(workItems);
   const mapOrder = new Map<string, number>();
   for (const map of maps) {
-    for (const ticketId of map.ticketIds)
-      if (!mapOrder.has(ticketId)) mapOrder.set(ticketId, mapOrder.size);
+    for (const itemId of map.ticketIds)
+      if (!mapOrder.has(itemId)) mapOrder.set(itemId, mapOrder.size);
   }
 
-  const grabbable = tickets.filter((item) => {
+  const grabbable = workItems.filter((item) => {
     if (!item.open || item.assignees.length > 0) return false;
     const { open, dangling } = openBlockers(item.id, blockerEdges, byId);
     return open.length === 0 && dangling.length === 0;
