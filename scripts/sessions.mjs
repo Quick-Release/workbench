@@ -127,12 +127,14 @@ const aggregate = (database, sourceRoot) => {
       },
     ]),
   );
+  // Tool usage lands on one session field per tool name; new counted tools
+  // join this map and the SELECT's IN list, nothing else.
+  const countedToolFields = { Edit: "edits", Write: "writes", Skill: "skillCalls" };
   for (const tool of toolRows) {
     const total = sessionTotals.get(tool.session_id);
-    if (!total) continue;
-    if (tool.tool_name === "Edit") total.edits = tool.uses;
-    if (tool.tool_name === "Write") total.writes = tool.uses;
-    if (tool.tool_name === "Skill") total.skillCalls = tool.uses;
+    const field = countedToolFields[tool.tool_name];
+    if (!total || !field) continue;
+    total[field] = tool.uses;
   }
 
   for (const row of usageRows) {

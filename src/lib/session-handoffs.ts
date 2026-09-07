@@ -47,10 +47,10 @@ const detectCycles = (
     const onPath = new Set<string>();
     let current: string = start.id;
     while (current !== "" && !onPath.has(current)) {
-      path.push(byId.get(current)!);
+      const row = byId.get(current)!;
+      path.push(row);
       onPath.add(current);
-      const row = byId.get(current);
-      current = row && row.parent !== "" && byId.has(row.parent) ? row.parent : "";
+      current = row.parent !== "" && byId.has(row.parent) ? row.parent : "";
     }
     if (current === start.id) {
       cycles.push(path);

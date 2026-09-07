@@ -405,7 +405,7 @@ function LensToggle({
       onValueChange={(value) => {
         if (value) onLensChange(value as SessionsLens);
       }}
-      aria-label="Subagent lens"
+      aria-label="Session lens"
     >
       {lensOptions.map(([value, label]) => (
         <ToggleGroupItem key={value} value={value}>
