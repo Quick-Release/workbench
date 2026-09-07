@@ -309,6 +309,7 @@ export const SessionUsageRecordSchema = Schema.Struct({
   model: Schema.String,
   edits: Schema.Number,
   writes: Schema.Number,
+  skillCalls: Schema.Number,
 });
 
 export const SessionUsageSessionsByDaySchema = Schema.Struct({

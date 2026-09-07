@@ -93,7 +93,7 @@ const aggregate = (database, sourceRoot) => {
   const toolRows = database
     .prepare(
       `SELECT session_id, tool_name, COUNT(*) AS uses FROM tool_usage
-       WHERE tool_name IN ('Edit', 'Write') GROUP BY session_id, tool_name`,
+       WHERE tool_name IN ('Edit', 'Write', 'Skill') GROUP BY session_id, tool_name`,
     )
     .all();
 
@@ -123,14 +123,18 @@ const aggregate = (database, sourceRoot) => {
         modelTokens: new Map(),
         edits: 0,
         writes: 0,
+        skillCalls: 0,
       },
     ]),
   );
+  // Tool usage lands on one session field per tool name; new counted tools
+  // join this map and the SELECT's IN list, nothing else.
+  const countedToolFields = { Edit: "edits", Write: "writes", Skill: "skillCalls" };
   for (const tool of toolRows) {
     const total = sessionTotals.get(tool.session_id);
-    if (!total) continue;
-    if (tool.tool_name === "Edit") total.edits = tool.uses;
-    if (tool.tool_name === "Write") total.writes = tool.uses;
+    const field = countedToolFields[tool.tool_name];
+    if (!total || !field) continue;
+    total[field] = tool.uses;
   }
 
   for (const row of usageRows) {

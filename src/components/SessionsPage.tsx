@@ -10,6 +10,8 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { sessionHandoffs } from "@/lib/session-handoffs";
+import type { SessionHandoffForest, SessionHandoffNode } from "@/lib/session-handoffs";
 import { cn } from "@/lib/utils";
 
 import { MetricCard } from "./MetricCard";
@@ -17,7 +19,7 @@ import { sortableTableFeatures } from "@/lib/table";
 import { createColumnHelper, flexRender, useTable } from "@tanstack/react-table";
 import type { OverviewData, SessionUsageModelRow, SessionUsageRecord } from "../types";
 
-export type SessionsLens = "all" | "interactive" | "subagents";
+export type SessionsLens = "all" | "interactive" | "subagents" | "handoffs";
 
 export type SessionsSearch = { subagents: SessionsLens };
 
@@ -25,6 +27,7 @@ const lensOptions = [
   ["all", "All sessions"],
   ["interactive", "Interactive"],
   ["subagents", "Subagents"],
+  ["handoffs", "Handoffs"],
 ] as const;
 
 // Model series colors cycle through the theme accent triads.
@@ -74,6 +77,7 @@ export function SessionsPage({
       return usage.sessions.filter((session) => session.taskType === "subagent_child");
     return usage.sessions;
   }, [usage.sessions, search.subagents]);
+  const handoffs = useMemo(() => sessionHandoffs(usage.sessions), [usage.sessions]);
 
   return (
     <>
@@ -116,12 +120,21 @@ export function SessionsPage({
             </div>
           </section>
 
-          <SessionsTable
-            sessions={visibleSessions}
-            lens={search.subagents}
-            onLensChange={(lens) => onSearchChange({ subagents: lens })}
-            total={usage.sessions.length}
-          />
+          {search.subagents === "handoffs" ? (
+            <SessionHandoffsSection
+              forest={handoffs}
+              lens={search.subagents}
+              onLensChange={(lens) => onSearchChange({ subagents: lens })}
+              total={usage.sessions.length}
+            />
+          ) : (
+            <SessionsTable
+              sessions={visibleSessions}
+              lens={search.subagents}
+              onLensChange={(lens) => onSearchChange({ subagents: lens })}
+              total={usage.sessions.length}
+            />
+          )}
         </>
       )}
     </>
@@ -376,6 +389,33 @@ const sessionColumns = sessionHelper.columns([
   }),
 ]);
 
+function LensToggle({
+  lens,
+  onLensChange,
+}: Readonly<{
+  lens: SessionsLens;
+  onLensChange: (lens: SessionsLens) => void;
+}>) {
+  return (
+    <ToggleGroup
+      type="single"
+      variant="outline"
+      size="sm"
+      value={lens}
+      onValueChange={(value) => {
+        if (value) onLensChange(value as SessionsLens);
+      }}
+      aria-label="Session lens"
+    >
+      {lensOptions.map(([value, label]) => (
+        <ToggleGroupItem key={value} value={value}>
+          {label}
+        </ToggleGroupItem>
+      ))}
+    </ToggleGroup>
+  );
+}
+
 function SessionsTable({
   sessions,
   lens,
@@ -403,22 +443,7 @@ function SessionsTable({
             Where the tokens <em>went.</em>
           </h2>
         </div>
-        <ToggleGroup
-          type="single"
-          variant="outline"
-          size="sm"
-          value={lens}
-          onValueChange={(value) => {
-            if (value) onLensChange(value as SessionsLens);
-          }}
-          aria-label="Subagent lens"
-        >
-          {lensOptions.map(([value, label]) => (
-            <ToggleGroupItem key={value} value={value}>
-              {label}
-            </ToggleGroupItem>
-          ))}
-        </ToggleGroup>
+        <LensToggle lens={lens} onLensChange={onLensChange} />
       </div>
       <div className="result-line" aria-live="polite">
         <span>
@@ -493,5 +518,91 @@ function SessionsTable({
         </Table>
       </div>
     </section>
+  );
+}
+
+// The Session handoffs lens (issue #65): the sessions page observing where
+// work passed between sessions. It renders only what the session database
+// attributes — recorded parent links as trees, skill tool calls collected at
+// sync — and offers no way to act on a session: no buttons, no links.
+function SessionHandoffsSection({
+  forest,
+  lens,
+  onLensChange,
+  total,
+}: Readonly<{
+  forest: SessionHandoffForest;
+  lens: SessionsLens;
+  onLensChange: (lens: SessionsLens) => void;
+  total: number;
+}>) {
+  return (
+    <section className="content-section" id="session-handoffs" aria-label="Session handoffs">
+      <div className="section-heading">
+        <div>
+          <p className="section-kicker">01 / session handoffs</p>
+          <h2>
+            Where work <em>changed hands.</em>
+          </h2>
+        </div>
+        <LensToggle lens={lens} onLensChange={onLensChange} />
+      </div>
+      <div className="result-line" aria-live="polite">
+        <span>
+          <strong>{forest.roots.length}</strong> session tree
+          {forest.roots.length === 1 ? "" : "s"} from {total} sessions ·{" "}
+          <strong>{forest.boundaries}</strong> handoff{" "}
+          {forest.boundaries === 1 ? "boundary" : "boundaries"}
+        </span>
+        <span className="result-hint">
+          Recorded parent links only — a /clear is visible just as a new session row, and compaction
+          is not distinguishable.
+        </span>
+      </div>
+      {forest.roots.length === 0 ? (
+        <p className="py-8 text-center text-sm text-muted-foreground">No sessions recorded.</p>
+      ) : (
+        <ul className="space-y-5">
+          {forest.roots.map((node) => (
+            <HandoffTree key={node.session.id} node={node} depth={0} />
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+const skillCallCopy = (count: number) => `${count} skill call${count === 1 ? "" : "s"}`;
+
+function HandoffTree({ node, depth }: Readonly<{ node: SessionHandoffNode; depth: number }>) {
+  const { session } = node;
+  return (
+    <li
+      className={cn("text-sm", depth > 0 && "border-l-2 border-line pl-4")}
+      data-session-id={session.id}
+    >
+      <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+        {depth > 0 && (
+          <span className="text-[0.65rem] tracking-[0.12em] text-faint uppercase">handoff ↳</span>
+        )}
+        <span className="font-medium">{session.title}</span>
+        <span className="text-[0.65rem] text-faint">{session.taskType}</span>
+        <span className="ml-auto font-mono text-[0.72rem] text-muted-foreground">
+          {skillCallCopy(session.skillCalls)}
+        </span>
+      </div>
+      {node.caveats.map((caveat) => (
+        <p key={caveat.kind} className="mt-0.5 text-xs text-muted-foreground italic">
+          {caveat.message}
+        </p>
+      ))}
+      {node.children.length > 0 && (
+        <ul className="mt-2 space-y-2">
+          {node.children.map((child) => (
+            <HandoffTree key={child.session.id} node={child} depth={depth + 1} />
+          ))}
+        </ul>
+      )}
+    </li>
   );
 }

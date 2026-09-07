@@ -354,6 +354,7 @@ export type SessionUsageRecord = {
   model: string;
   edits: number;
   writes: number;
+  skillCalls: number;
 };
 
 export type SessionUsage = {
