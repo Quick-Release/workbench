@@ -1,4 +1,5 @@
 import tailwindcss from "@tailwindcss/vite";
+import { cloudflareTest } from "@cloudflare/vitest-pool-workers";
 import { defineConfig } from "vite-plus";
 import { tanstackRouter } from "@tanstack/router-plugin/vite";
 import react from "@vitejs/plugin-react";
@@ -9,6 +10,21 @@ import { toolsApiPlugin } from "./scripts/tools-api.mjs";
 import { workflowApiPlugin } from "./scripts/workflow-api.mjs";
 import { aiApiPlugin } from "./scripts/ai-api.mjs";
 
+// Shared by the dev/build pipeline and the dashboard test project: vitest
+// projects don't inherit the root config's plugins or resolve (ticket #29).
+const dashboardPlugins = [
+  tanstackRouter({ target: "react" }),
+  react(),
+  tailwindcss(),
+  toolsApiPlugin(),
+  skillsApiPlugin(),
+  workflowApiPlugin(),
+  aiApiPlugin(),
+];
+const dashboardAlias = {
+  "@": fileURLToPath(new URL("./src", import.meta.url)),
+};
+
 export default defineConfig({
   fmt: {
     ignorePatterns: ["src/routeTree.gen.ts", ".zcode", ".firecrawl"],
@@ -17,20 +33,33 @@ export default defineConfig({
     ignorePatterns: ["src/routeTree.gen.ts", ".zcode", ".firecrawl"],
   },
   test: {
-    include: ["src/**/*.test.{ts,tsx}"],
+    projects: [
+      // The dashboard suite: browser-side components and libs, default pool.
+      {
+        plugins: dashboardPlugins,
+        resolve: { alias: dashboardAlias },
+        test: {
+          include: ["src/**/*.test.{ts,tsx}"],
+        },
+      },
+      // The worker suite (ticket #29): behavioral tests driven inside the
+      // real workerd runtime. cloudflareTest resolves the worker entry and
+      // bindings from worker/wrangler.jsonc — the escape-hatch config a
+      // bare `wrangler deploy` uses (ADR 0003 keeps alchemy as the deploy
+      // surface, so the two must be kept equivalent by hand).
+      {
+        plugins: [
+          cloudflareTest({
+            wrangler: { configPath: "./worker/wrangler.jsonc" },
+          }),
+        ],
+        test: {
+          include: ["worker/runtime.test.mjs"],
+          pool: "@cloudflare/vitest-pool-workers",
+        },
+      },
+    ],
   },
-  plugins: [
-    tanstackRouter({ target: "react" }),
-    react(),
-    tailwindcss(),
-    toolsApiPlugin(),
-    skillsApiPlugin(),
-    workflowApiPlugin(),
-    aiApiPlugin(),
-  ],
-  resolve: {
-    alias: {
-      "@": fileURLToPath(new URL("./src", import.meta.url)),
-    },
-  },
+  plugins: dashboardPlugins,
+  resolve: { alias: dashboardAlias },
 });
