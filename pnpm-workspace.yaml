@@ -2,6 +2,10 @@ packages:
   - .
 
 allowBuilds:
+  # The workers test harness pulls esbuild in directly (via
+  # @cloudflare/vitest-pool-workers); its postinstall validates the
+  # platform binary.
+  esbuild: true
   # alchemy's local dev runtime (workerd) and its state serializer need
   # postinstall scripts; both are transitive deps of alchemy.
   msgpackr-extract: true
