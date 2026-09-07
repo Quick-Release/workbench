@@ -2,6 +2,7 @@ import { Link, linkOptions, useRouterState } from "@tanstack/react-router";
 import {
   Activity,
   GitBranch,
+  GitPullRequest,
   Inbox,
   ReceiptText,
   Rocket,
@@ -37,6 +38,7 @@ const triageLink = linkOptions({ to: "/triage", search: {} });
 const blockersLink = linkOptions({ to: "/blockers", search: {} });
 const inFlightLink = linkOptions({ to: "/in-flight" });
 const decisionsLink = linkOptions({ to: "/decisions" });
+const pullRequestsLink = linkOptions({ to: "/pull-requests" });
 
 type NavItem = { title: string; icon: typeof ReceiptText } & (
   | typeof overviewLink
@@ -47,6 +49,7 @@ type NavItem = { title: string; icon: typeof ReceiptText } & (
   | typeof blockersLink
   | typeof inFlightLink
   | typeof decisionsLink
+  | typeof pullRequestsLink
 );
 
 // Spec #54's sidebar order: Overview, then the Workflow destination group,
@@ -60,6 +63,7 @@ const workflowItems: NavItem[] = [
   { title: "Blockers", icon: Waypoints, ...blockersLink },
   { title: "In flight", icon: Rocket, ...inFlightLink },
   { title: "Decisions", icon: ScrollText, ...decisionsLink },
+  { title: "Pull requests", icon: GitPullRequest, ...pullRequestsLink },
 ];
 
 const closingItems: NavItem[] = [
