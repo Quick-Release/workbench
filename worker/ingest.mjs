@@ -4,7 +4,9 @@
 // token (registry membership is the company boundary); validation is
 // strict on required identity fields and type-checked on enrichment.
 // The deploy entry (worker.mjs) composes the same pieces with the Agents
-// SDK mounted behind the gate.
+// SDK and the session-capture proxy (#35) mounted behind the gate.
+
+import { routeLlm } from "./llm.mjs";
 
 const COMMIT_SHA = /^[0-9a-f]{7,40}$/i;
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
@@ -179,12 +181,14 @@ async function ingestSubmission(request, env) {
 }
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const { pathname } = new URL(request.url);
     if (pathname === "/healthz" && request.method === "GET") {
       return Response.json({ ok: true });
     }
     if (!authorized(request, env)) return unauthorized();
+    const captured = await routeLlm(request, env, ctx);
+    if (captured) return captured;
     return routeIngest(request, env);
   },
 };

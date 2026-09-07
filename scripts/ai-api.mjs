@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import { parseAiDraftRequest, parseAiDraftResult, parseAiHealth } from "../src/schema.ts";
 import { createDraftModelCall, providerConfigured } from "./ai-model.mjs";
 import { ghPullRequestLoader, gitCommitSubjectLister } from "./ai-sources.mjs";
+import { methodMismatch, readBody } from "./api-shared.mjs";
 import { gateRejection } from "./request-gate.mjs";
 
 // The AI middleware (ticket #37): a one-shot draft endpoint and a health
@@ -16,11 +17,6 @@ const DRAFT_ROUTE = /^\/api\/ai\/draft\/?$/;
 const HEALTH_ROUTE = /^\/api\/ai\/health\/?$/;
 
 export const isAiRoute = (pathname) => DRAFT_ROUTE.test(pathname) || HEALTH_ROUTE.test(pathname);
-
-const methodMismatch = (expected) => ({
-  status: 405,
-  json: { error: "method_not_allowed", message: `this endpoint answers ${expected} only` },
-});
 
 export const handleAiApi = async ({
   method,
@@ -106,14 +102,6 @@ export const handleAiApi = async ({
     };
   }
 };
-
-const readBody = (request) =>
-  new Promise((resolveBody, rejectBody) => {
-    const chunks = [];
-    request.on("data", (chunk) => chunks.push(chunk));
-    request.on("end", () => resolveBody(Buffer.concat(chunks).toString("utf8")));
-    request.on("error", rejectBody);
-  });
 
 export const aiApiPlugin = () => ({
   name: "workbench-ai-api",

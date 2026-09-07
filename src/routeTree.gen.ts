@@ -17,6 +17,7 @@ import { Route as InFlightRouteImport } from './routes/in-flight'
 import { Route as PullRequestsRouteImport } from './routes/pull-requests'
 import { Route as SessionsRouteImport } from './routes/sessions'
 import { Route as ToolsRouteImport } from './routes/tools'
+import { Route as TranscriptsRouteImport } from './routes/transcripts'
 import { Route as TriageRouteImport } from './routes/triage'
 
 const IndexRoute = IndexRouteImport.update({
@@ -59,6 +60,11 @@ const ToolsRoute = ToolsRouteImport.update({
   path: '/tools',
   getParentRoute: () => rootRouteImport,
 } as any)
+const TranscriptsRoute = TranscriptsRouteImport.update({
+  id: '/transcripts',
+  path: '/transcripts',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const TriageRoute = TriageRouteImport.update({
   id: '/triage',
   path: '/triage',
@@ -74,6 +80,7 @@ export interface FileRoutesByFullPath {
   '/pull-requests': typeof PullRequestsRoute
   '/sessions': typeof SessionsRoute
   '/tools': typeof ToolsRoute
+  '/transcripts': typeof TranscriptsRoute
   '/triage': typeof TriageRoute
 }
 export interface FileRoutesByTo {
@@ -85,6 +92,7 @@ export interface FileRoutesByTo {
   '/pull-requests': typeof PullRequestsRoute
   '/sessions': typeof SessionsRoute
   '/tools': typeof ToolsRoute
+  '/transcripts': typeof TranscriptsRoute
   '/triage': typeof TriageRoute
 }
 export interface FileRoutesById {
@@ -97,6 +105,7 @@ export interface FileRoutesById {
   '/pull-requests': typeof PullRequestsRoute
   '/sessions': typeof SessionsRoute
   '/tools': typeof ToolsRoute
+  '/transcripts': typeof TranscriptsRoute
   '/triage': typeof TriageRoute
 }
 export interface FileRouteTypes {
@@ -110,6 +119,7 @@ export interface FileRouteTypes {
     | '/pull-requests'
     | '/sessions'
     | '/tools'
+    | '/transcripts'
     | '/triage'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -121,6 +131,7 @@ export interface FileRouteTypes {
     | '/pull-requests'
     | '/sessions'
     | '/tools'
+    | '/transcripts'
     | '/triage'
   id:
     | '__root__'
@@ -132,6 +143,7 @@ export interface FileRouteTypes {
     | '/pull-requests'
     | '/sessions'
     | '/tools'
+    | '/transcripts'
     | '/triage'
   fileRoutesById: FileRoutesById
 }
@@ -144,6 +156,7 @@ export interface RootRouteChildren {
   PullRequestsRoute: typeof PullRequestsRoute
   SessionsRoute: typeof SessionsRoute
   ToolsRoute: typeof ToolsRoute
+  TranscriptsRoute: typeof TranscriptsRoute
   TriageRoute: typeof TriageRoute
 }
 
@@ -205,6 +218,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ToolsRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/transcripts': {
+      id: '/transcripts'
+      path: '/transcripts'
+      fullPath: '/transcripts'
+      preLoaderRoute: typeof TranscriptsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/triage': {
       id: '/triage'
       path: '/triage'
@@ -224,6 +244,7 @@ const rootRouteChildren: RootRouteChildren = {
   PullRequestsRoute: PullRequestsRoute,
   SessionsRoute: SessionsRoute,
   ToolsRoute: ToolsRoute,
+  TranscriptsRoute: TranscriptsRoute,
   TriageRoute: TriageRoute,
 }
 export const routeTree = rootRouteImport
