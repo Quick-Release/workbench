@@ -46,15 +46,21 @@ export default defineConfig({
       // real workerd runtime. cloudflareTest resolves the worker entry and
       // bindings from worker/wrangler.jsonc — the escape-hatch config a
       // bare `wrangler deploy` uses (ADR 0003 keeps alchemy as the deploy
-      // surface, so the two must be kept equivalent by hand).
+      // surface, so the two must be kept equivalent by hand). The test
+      // config carries no TELEMETRY_INGEST_TOKEN binding (alchemy injects
+      // that secret at deploy), so authenticated-path runtime tests supply
+      // it themselves as a Miniflare plain-text binding.
       {
         plugins: [
           cloudflareTest({
             wrangler: { configPath: "./worker/wrangler.jsonc" },
+            miniflare: {
+              bindings: { TELEMETRY_INGEST_TOKEN: "test-ingest-token" },
+            },
           }),
         ],
         test: {
-          include: ["worker/runtime.test.mjs"],
+          include: ["worker/runtime.test.mjs", "worker/*.runtime.test.mjs"],
           pool: "@cloudflare/vitest-pool-workers",
         },
       },

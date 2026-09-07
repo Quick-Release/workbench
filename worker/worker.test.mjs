@@ -3,7 +3,7 @@ import { strictEqual, match } from "node:assert";
 import test from "node:test";
 import { DatabaseSync } from "node:sqlite";
 
-import worker from "./worker.mjs";
+import worker from "./ingest.mjs";
 
 const TOKEN = "ingest-token";
 

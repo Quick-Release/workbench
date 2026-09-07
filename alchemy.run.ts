@@ -18,12 +18,19 @@ export const TelemetryDatabase = Cloudflare.D1.Database("workbench-telemetry", {
 // plain fetch handler; its env type is derived from these bindings.
 export const TelemetryWorker = Cloudflare.Worker("workbench-telemetry", {
   main: "./worker/worker.mjs",
-  compatibility: { date: "2026-08-01" },
+  // nodejs_compat is required by the Agents SDK (ticket #31); the flag is
+  // mirrored in worker/wrangler.jsonc to keep the escape hatch equivalent.
+  compatibility: { date: "2026-08-01", flags: ["nodejs_compat"] },
   env: {
     D1_DB: TelemetryDatabase,
     // Config.redacted binds as secret_text; the value is read from the
     // TELEMETRY_INGEST_TOKEN environment variable at deploy time.
     TELEMETRY_INGEST_TOKEN: Config.redacted("TELEMETRY_INGEST_TOKEN"),
+    // worker/wrangler.jsonc `durable_objects.bindings[0]` — the class is
+    // exported by worker.mjs itself, and alchemy derives the SQLite-class
+    // migration for new DO classes, so no manual migration block is needed
+    // on this deploy path (ADR 0003).
+    SubmissionReviewAgent: Cloudflare.DurableObject("SubmissionReviewAgent"),
   },
 });
 
