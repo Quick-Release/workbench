@@ -24,7 +24,15 @@ export async function routeLlm(request, env, ctx) {
   if (pathname.startsWith(`${PROVIDER_PREFIX}/`)) return capture(request, env, ctx, pathname);
   if (pathname === "/llm/sessions") return listSessions(request, env);
   const transcript = TRANSCRIPT_ROUTE.exec(pathname);
-  if (transcript) return sessionTranscript(request, env, decodeURIComponent(transcript[1]));
+  if (transcript) {
+    let sessionId;
+    try {
+      sessionId = decodeURIComponent(transcript[1]);
+    } catch {
+      return Response.json({ ok: false, error: "malformed session id" }, { status: 400 });
+    }
+    return sessionTranscript(request, env, sessionId);
+  }
   return null;
 }
 
@@ -45,9 +53,20 @@ async function capture(request, env, ctx, pathname) {
   const bodyText = await request.text();
   const headers = {};
   request.headers.forEach((value, key) => {
-    if (key !== "authorization" && key !== "host" && key !== "content-length") headers[key] = value;
+    // The ingest token must never travel upstream: whichever credential
+    // scheme the client used — bearer or the provider's native x-api-key —
+    // it is dropped here and replaced by the provider key.
+    if (
+      key !== "authorization" &&
+      key !== "x-api-key" &&
+      key !== "host" &&
+      key !== "content-length"
+    ) {
+      headers[key] = value;
+    }
   });
   headers.authorization = `Bearer ${env.LLM_PROVIDER_KEY}`;
+  headers["x-api-key"] = env.LLM_PROVIDER_KEY;
 
   const startedAt = Date.now();
   const upstream = await fetch(
@@ -98,57 +117,53 @@ async function capture(request, env, ctx, pathname) {
       requestId,
       eventStream ? "response.sse" : "response.json",
     );
-    const meta = {
+    // One row object feeds both the meta object and the D1 insert, so the
+    // record cannot disagree with itself.
+    const row = {
       session_id: sessionId,
-      request_id: requestId,
       turn_id: request.headers.get("x-turn-id"),
+      request_id: requestId,
       provider: "anthropic",
+      model: requestModel(bodyText),
       api_format: "anthropic",
       status: httpStatus >= 200 && httpStatus < 300 ? "ok" : "error",
       http_status: httpStatus,
-      usage,
+      input_tokens: usage.input_tokens,
+      output_tokens: usage.output_tokens,
+      cache_read_tokens: usage.cache_read_tokens,
+      cache_write_tokens: usage.cache_write_tokens,
       duration_ms: Date.now() - startedAt,
       ttft_ms: ttftMs,
       request_bytes: requestBytes,
       response_bytes: responseBytes,
+      request_key: requestKey,
+      response_key: responseKey,
       received_at: receivedAt,
     };
+
+    // A repeated request id always forwarded; storage keeps only the first
+    // record of it — bodies included, so a replay can never overwrite what
+    // the original row points at.
+    const existing = await env.D1_DB.prepare("SELECT id FROM llm_requests WHERE request_id = ?")
+      .bind(requestId)
+      .first();
+    if (existing) return;
 
     await env.LLM_CAPTURES.put(requestKey, bodyText);
     await env.LLM_CAPTURES.put(responseKey, responseText);
     await env.LLM_CAPTURES.put(
       r2Key(receivedAt, sessionId, requestId, "meta.json"),
-      JSON.stringify(meta, null, 2),
+      JSON.stringify(row, null, 2),
     );
+    const columns = Object.keys(row);
     try {
       await env.D1_DB.prepare(
-        "INSERT INTO llm_requests (session_id, turn_id, request_id, provider, model, api_format, status, http_status, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, duration_ms, ttft_ms, request_bytes, response_bytes, request_key, response_key, received_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        `INSERT INTO llm_requests (${columns.join(", ")}) VALUES (${columns.map(() => "?").join(", ")})`,
       )
-        .bind(
-          sessionId,
-          meta.turn_id,
-          requestId,
-          meta.provider,
-          requestModel(bodyText),
-          meta.api_format,
-          meta.status,
-          httpStatus,
-          usage.input_tokens,
-          usage.output_tokens,
-          usage.cache_read_tokens,
-          usage.cache_write_tokens,
-          meta.duration_ms,
-          ttftMs,
-          requestBytes,
-          responseBytes,
-          requestKey,
-          responseKey,
-          receivedAt,
-        )
+        .bind(...Object.values(row))
         .run();
     } catch (cause) {
-      // A repeated request id always forwarded; storage keeps only the
-      // first record of it.
+      // Backstop for concurrent replays that both pass the existence check.
       if (!isUniqueViolation(cause)) throw cause;
     }
   })();

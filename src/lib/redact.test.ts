@@ -60,6 +60,18 @@ describe("redactTranscript", () => {
     expect(ledger).toHaveLength(1);
   });
 
+  it("does not redact URL path segments that merely look like directories", () => {
+    const { messages, ledger } = redactTranscript([
+      {
+        role: "user",
+        content: "see https://example.com/data/sheets and https://github.com/etc/repo",
+      },
+    ]);
+    expect(messages[0].content).toContain("https://example.com/data/sheets");
+    expect(messages[0].content).toContain("https://github.com/etc/repo");
+    expect(ledger).toEqual([]);
+  });
+
   it("passes clean text through with an empty ledger", () => {
     const { messages, ledger } = redactTranscript([{ role: "user", content: "hello world" }]);
     expect(messages[0].content).toBe("hello world");

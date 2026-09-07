@@ -1,3 +1,4 @@
+import { methodMismatch, readBody } from "./api-shared.mjs";
 import { gateRejection } from "./request-gate.mjs";
 
 // The session-capture API (ticket #35): read-only proxies to the ingest
@@ -27,11 +28,7 @@ export const handleLlmApi = async ({ method, pathname, host, origin, workerFetch
   const gate = gateRejection({ host, origin });
   if (gate) return gate;
 
-  if (method !== "GET")
-    return {
-      status: 405,
-      json: { error: "method_not_allowed", message: "this endpoint answers GET only" },
-    };
+  if (method !== "GET") return methodMismatch("GET");
 
   if (!workerFetch)
     return {
@@ -66,14 +63,6 @@ export const handleLlmApi = async ({ method, pathname, host, origin, workerFetch
   }
   return { status: response.status, json };
 };
-
-const readBody = (request) =>
-  new Promise((resolveBody, rejectBody) => {
-    const chunks = [];
-    request.on("data", (chunk) => chunks.push(chunk));
-    request.on("end", () => resolveBody(Buffer.concat(chunks).toString("utf8")));
-    request.on("error", rejectBody);
-  });
 
 export const llmApiPlugin = () => ({
   name: "workbench-llm-api",

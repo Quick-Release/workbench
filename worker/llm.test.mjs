@@ -61,6 +61,7 @@ const captureRequest = ({ body, bodyText, headers = {}, token = TOKEN } = {}) =>
       "x-session-id": "sess_abc",
       "x-request-id": "req_001",
       "x-turn-id": "turn_1",
+      "x-api-key": "client-sent-credential",
       ...headers,
     },
     body:
@@ -121,6 +122,8 @@ test("relays a non-streaming response verbatim and captures it", async () => {
     strictEqual(upstream.calls[0].url, `${ORIGIN}/v1/messages`);
     strictEqual(upstream.calls[0].init.method, "POST");
     strictEqual(upstream.calls[0].init.headers.authorization, "Bearer provider-key");
+    // The client's own credential is swapped out of both schemes.
+    strictEqual(upstream.calls[0].init.headers["x-api-key"], "provider-key");
     match(String(upstream.calls[0].init.body), /"messages"/);
 
     await ctx.settled();
@@ -208,11 +211,11 @@ test("streams an SSE response byte-identical while capturing usage server-side",
   }
 });
 
-test("a duplicate request id forwards again but stores once", async () => {
+test("a duplicate request id forwards again but stores once, untouched", async () => {
   const env = createEnv();
   const ctx = createCaptureContext();
-  const upstream = stubUpstream(() =>
-    jsonUpstream({ id: "msg_1", usage: { input_tokens: 1, output_tokens: 1 } }),
+  const upstream = stubUpstream((n) =>
+    jsonUpstream({ id: `msg_${n}`, usage: { input_tokens: n, output_tokens: n } }),
   );
   try {
     strictEqual((await ingest.fetch(captureRequest(), env.env, ctx)).status, 200);
@@ -221,6 +224,11 @@ test("a duplicate request id forwards again but stores once", async () => {
     // Both replays reached the provider; the record holds one row.
     strictEqual(upstream.calls.length, 2);
     strictEqual(capturedRow(env).length, 1);
+    // The replay never overwrote the original capture's bodies.
+    strictEqual(env.r2.objects.size, 3);
+    const row = capturedRow(env)[0];
+    match(env.r2.objects.get(row.response_key), /msg_1/);
+    strictEqual(row.response_bytes, env.r2.objects.get(row.response_key).length);
   } finally {
     upstream.restore();
   }
@@ -258,6 +266,18 @@ test("capture without the identifying headers is rejected and forwards nothing",
   } finally {
     upstream.restore();
   }
+});
+
+test("a transcript for a malformed session id answers 400", async () => {
+  const env = createEnv();
+  const response = await ingest.fetch(
+    new Request("https://telemetry.example.com/llm/sessions/%zz/transcript", {
+      headers: { Authorization: `Bearer ${TOKEN}` },
+    }),
+    env.env,
+    createCaptureContext(),
+  );
+  strictEqual(response.status, 400);
 });
 
 test("the session index aggregates per session", async () => {

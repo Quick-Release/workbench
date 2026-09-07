@@ -29,8 +29,9 @@ export interface RedactionLedger {
 // embed credentials in their userinfo (https://token@host or
 // https://user:pass@host). Both patterns are conservative: only strings
 // that unmistakably point at a filesystem location or carry credentials
-// are rewritten.
-const PATH_PATTERN = /\/(?:Users|home|data|tmp|var|opt|etc|srv|mnt)(?:\/[\w.()-]+)+/g;
+// are rewritten — a path must not be preceded by a word character, so URL
+// path segments like /data/ inside a link stay untouched.
+const PATH_PATTERN = /(?<![\w.\-/])\/(?:Users|home|data|tmp|var|opt|etc|srv|mnt)(?:\/[\w.()-]+)+/g;
 const CREDENTIAL_URL_PATTERN = /[a-z][a-z0-9+.-]*:\/\/[^\s/@]+@[^\s<>"']+/g;
 
 class Redactor {
