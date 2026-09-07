@@ -1,9 +1,12 @@
 # Workbench ingest endpoint
 
 The company-owned Cloudflare Worker + D1 store behind workbench Telemetry
-and Content sourcing submissions (ADR 0001). The handler is a pure fetch
-function (`worker.mjs`) — the tests drive it directly with an in-memory
-D1 double, no runtime needed.
+and Content sourcing submissions (ADR 0001). The ingest handler
+(`ingest.mjs`) is a pure fetch function — the runtime-free tests drive it
+directly with an in-memory D1 double, no runtime needed. The deploy entry
+(`worker.mjs`) bundles that handler with the Agents SDK and mounts its
+routes behind the same bearer-token gate; the SDK is exercised through the
+HTTP seam in workerd (`*.runtime.test.mjs`).
 
 ## Routes
 

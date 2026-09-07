@@ -49,7 +49,8 @@ export default defineConfig({
       // surface, so the two must be kept equivalent by hand). The test
       // config carries no TELEMETRY_INGEST_TOKEN binding (alchemy injects
       // that secret at deploy), so authenticated-path runtime tests supply
-      // it themselves as a Miniflare plain-text binding.
+      // it themselves as a Miniflare plain-text binding — a throwaway
+      // fixture, never a real secret.
       {
         plugins: [
           cloudflareTest({
