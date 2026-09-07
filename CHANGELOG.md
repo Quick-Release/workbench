@@ -1,5 +1,15 @@
 # @quick-release/workbench
 
+## 0.7.0
+
+### Minor Changes
+
+- 891b142: The `SubmissionReviewAgent` now measures the review backlog on a schedule (ticket #33): waking an agent arms the Agents SDK's scheduler with one daily tick per repository that computes and persists the digest with no incoming request. The scheduler is an optimization, never a correctness dependency — a missed tick self-corrects on the next authenticated on-demand request, which recomputes from the current pending rows. The tick interval is a plain binding (`DIGEST_TICK_INTERVAL_SECONDS`, default 86,400 seconds) so the workerd suite drives it at one second through the runtime's alarm invocation.
+
+### Patch Changes
+
+- e0c2c1b: The `SubmissionReviewAgent` digest route is hardened (#32 review follow-ups): concurrent digest runs for one repository are serialized around the D1 round-trip so the previous-run chain cannot scramble, non-GET methods answer `405` instead of triggering a run, and a repository identity that does not percent-decode answers `400` instead of an unhandled 500.
+
 ## 0.6.0
 
 ### Minor Changes
