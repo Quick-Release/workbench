@@ -1,9 +1,12 @@
 # Workbench ingest endpoint
 
 The company-owned Cloudflare Worker + D1 store behind workbench Telemetry
-and Content sourcing submissions (ADR 0001). The handler is a pure fetch
-function (`worker.mjs`) — the tests drive it directly with an in-memory
-D1 double, no runtime needed.
+and Content sourcing submissions (ADR 0001). The ingest handler
+(`ingest.mjs`) is a pure fetch function — the runtime-free tests drive it
+directly with an in-memory D1 double, no runtime needed. The deploy entry
+(`worker.mjs`) bundles that handler with the Agents SDK and mounts its
+routes behind the same bearer-token gate; the SDK is exercised through the
+HTTP seam in workerd (`*.runtime.test.mjs`).
 
 ## Routes
 
@@ -12,12 +15,18 @@ D1 double, no runtime needed.
 - `POST /submissions` — one Developer-submitted commit message; duplicates
   (same repo, sha) answer `409`; rows land with `status = 'pending'` for
   marketing review.
+- `/agents/submission-review-agent/<repo>` — the Cloudflare Agents SDK
+  route (ticket #31), served by the `SubmissionReviewAgent` Durable
+  Object (SQLite-backed, one instance per repository identity, carried
+  percent-encoded in the URL). It mounts strictly behind the same bearer
+  token as the POST routes; without a token it answers `401`.
 - `GET /healthz` — liveness, no auth.
 
 Both POST routes require `Authorization: Bearer <token>`; the token is the
 shared ingest secret (set as the `TELEMETRY_INGEST_TOKEN` secret here and
 baked into the workbench package, whose GitHub Packages registry is the
-company boundary).
+company boundary). The agent route requires the same token — agent
+endpoints are never a wider surface than the ingest API.
 
 ## Deploy (Alchemy, from the repo root)
 
@@ -52,6 +61,10 @@ TELEMETRY_INGEST_TOKEN=<current token> \
 (`npx wrangler deploy` from this directory). Schema changes do **not** flow
 through wrangler anymore — `schema.sql` moved to
 `worker/migrations/0001_init.sql` and is applied by Alchemy deploys.
+Durable Object class changes are the one thing wrangler needs spelled out
+that Alchemy derives itself: new agent classes must be added to both
+`durable_objects.bindings` and the `migrations` `new_sqlite_classes` list
+in `wrangler.jsonc` to keep the escape hatch deployable (ADR 0003).
 
 ## Legacy manual runbook (superseded by the above)
 

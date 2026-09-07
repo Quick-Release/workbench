@@ -4,6 +4,8 @@
   "name": "workbench-telemetry",
   "main": "worker.mjs",
   "compatibility_date": "2026-08-01",
+  // Required by the Agents SDK (agents, ticket #31).
+  "compatibility_flags": ["nodejs_compat"],
   "d1_databases": [
     {
       "binding": "D1_DB",
@@ -11,4 +13,17 @@
       "database_id": "REPLACE_AFTER_D1_CREATE",
     },
   ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "SubmissionReviewAgent",
+        "class_name": "SubmissionReviewAgent",
+      },
+    ],
+  },
+  // SQLite-backed storage for the agent class (the SDK's state tables use
+  // the Durable Object SQL API). Alchemy derives this migration itself on
+  // the alchemy.run.ts path; it is spelled out here so the escape hatch
+  // stays deployable (ADR 0003).
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["SubmissionReviewAgent"] }],
 }

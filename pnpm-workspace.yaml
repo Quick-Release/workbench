@@ -2,6 +2,9 @@ packages:
   - .
 
 allowBuilds:
+  # core-js-pure (transitive via the agents SDK) only prompts for funding in
+  # its postinstall; no build output depends on it.
+  core-js-pure: false
   # The workers test harness pulls esbuild in directly (via
   # @cloudflare/vitest-pool-workers); its postinstall validates the
   # platform binary.

@@ -4,8 +4,8 @@
   "rangeStrategy": "bump",
   "packageRules": [
     {
-      "description": "Group Effect RC and alchemy beta pins so they move together",
-      "matchPackagePatterns": ["^effect$", "^@effect/", "^alchemy$"],
+      "description": "Group Effect RC, alchemy beta, and agents 0.x pins so they move together",
+      "matchPackagePatterns": ["^effect$", "^@effect/", "^alchemy$", "^agents$"],
       "groupName": "effect-and-alchemy"
     }
   ]

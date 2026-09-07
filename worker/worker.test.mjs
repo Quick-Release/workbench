@@ -3,7 +3,7 @@ import { strictEqual, match } from "node:assert";
 import test from "node:test";
 import { DatabaseSync } from "node:sqlite";
 
-import worker from "./worker.mjs";
+import ingest from "./ingest.mjs";
 
 const TOKEN = "ingest-token";
 
@@ -63,7 +63,7 @@ const submissionPayload = {
 };
 
 async function callWorker(env, req) {
-  return worker.fetch(req, { D1_DB: env.d1, TELEMETRY_INGEST_TOKEN: TOKEN });
+  return ingest.fetch(req, { D1_DB: env.d1, TELEMETRY_INGEST_TOKEN: TOKEN });
 }
 
 test("healthz responds ok without auth", async () => {

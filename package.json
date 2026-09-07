@@ -47,6 +47,7 @@
     "@tanstack/react-table": "^9.2.4",
     "@tanstack/router-plugin": "1.168.23",
     "@vitejs/plugin-react": "6.0.5",
+    "agents": "0.22.0",
     "alchemy": "2.0.0-beta.76",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
