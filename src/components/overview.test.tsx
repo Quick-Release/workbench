@@ -3,7 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { SidebarProvider } from "./ui/sidebar";
 import { TooltipProvider } from "./ui/tooltip";
-import type { WorkflowStatePayload, WorkItemRecord } from "../types";
+import type { OverviewData, WorkflowStatePayload, WorkItemRecord } from "../types";
 import { OverviewPage } from "./OverviewPage";
 import { SiteHeader } from "./layout/site-header";
 
@@ -38,7 +38,7 @@ const state = (workItems: readonly WorkItemRecord[]): WorkflowStatePayload => ({
   meta: { snapshot: "2026-09-05T12:00:00+01:00", repo: "Quick-Release/workbench" },
 });
 
-const legacyData = {
+const data = {
   meta: {
     projectName: "workbench",
     theme: {
@@ -68,13 +68,7 @@ const legacyData = {
     repositoryUrl: "https://github.com/Quick-Release/workbench",
     docsRoot: "docs",
     sources: [],
-    ticketCount: 0,
-    planCount: 0,
-    changeCount: 0,
   },
-  tickets: [],
-  plans: [],
-  changes: [],
   workItems: [],
   maps: [],
   blockerEdges: [],
@@ -90,7 +84,7 @@ const legacyData = {
     sessionsByDay: [],
     sessions: [],
   },
-};
+} satisfies OverviewData;
 
 const renderOverview = (
   workItems: readonly WorkItemRecord[],
@@ -102,10 +96,7 @@ const renderOverview = (
 ) =>
   renderToString(
     <OverviewPage
-      data={legacyData}
-      search={{ q: "", status: "all", source: "all", stream: "all", view: "all" }}
-      onSearchChange={() => {}}
-      resetSearch={() => {}}
+      data={data}
       state={state(workItems)}
       mode={overrides.mode ?? "live"}
       onOpenIssue={() => {}}
@@ -199,7 +190,7 @@ describe("the header chip", () => {
     const html = renderToString(
       <TooltipProvider>
         <SidebarProvider>
-          <SiteHeader meta={legacyData.meta} />
+          <SiteHeader meta={data.meta} />
         </SidebarProvider>
       </TooltipProvider>,
     );

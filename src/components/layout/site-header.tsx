@@ -52,7 +52,7 @@ export function SiteHeader({ meta }: SiteHeaderProps) {
           LOCAL SNAPSHOT <b className="text-foreground">{snapshotLabel}</b>
         </span>
         <span className="inline-flex items-center gap-1.5 rounded-md border border-border px-1.5 py-0.5 text-[0.67rem] tracking-widest text-muted-foreground uppercase">
-          <i className="size-1.5 rounded-full bg-good" /> read-only / local
+          <i className="size-1.5 rounded-full bg-good" /> control surface / localhost
         </span>
         <a href="/sessions">agent sessions</a>
         {meta.repositoryUrl && (

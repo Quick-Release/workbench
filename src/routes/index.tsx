@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { createFileRoute, stripSearchParams, useNavigate } from "@tanstack/react-router";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { z } from "zod";
 
 import { IssueDetailPanel } from "../components/IssueDetailPanel";
@@ -10,27 +10,7 @@ import { useWorkflowMode, useWorkflowState, setWorkflowState } from "../hooks/us
 import { issueParamFromSearch, panelIdFor } from "../lib/issue-param";
 import { parseSyncTriggerResult } from "../schema";
 
-const statusSchema = z.enum([
-  "all",
-  "complete",
-  "in-progress",
-  "ready",
-  "needs-development",
-  "gated",
-  "blocked",
-  "planned",
-  "deferred",
-]);
-
-const sourceSchema = z.enum(["all", "tickets", "plans", "specs"]);
-const viewSchema = z.enum(["all", "grilling", "spec", "tickets", "implementation"]);
-
 const searchSchema = z.object({
-  q: z.string().trim().max(120).catch(""),
-  status: statusSchema.catch("all"),
-  source: sourceSchema.catch("all"),
-  stream: z.string().trim().max(80).catch("all"),
-  view: viewSchema.catch("all"),
   // The detail panel's param (ticket #60): `?issue=NN` / `?issue=new`,
   // validated by the shared grammar the other views use.
   issue: z.string().catch(""),
@@ -41,29 +21,11 @@ export const Route = createFileRoute("/")({
     ...searchSchema.parse(search),
     issue: issueParamFromSearch(search),
   }),
-  search: {
-    middlewares: [
-      stripSearchParams({ q: "", status: "all", source: "all", stream: "all", view: "all" }),
-    ],
-  },
   component: WorkbenchRoute,
 });
 
 function WorkbenchRoute() {
-  const legacySearch = Route.useSearch();
-  const search = {
-    q: legacySearch.q,
-    status: legacySearch.status,
-    source: legacySearch.source,
-    stream: legacySearch.stream,
-    view: legacySearch.view,
-  };
   const navigate = useNavigate({ from: Route.fullPath });
-  const updateSearch = (next: Partial<typeof search>) =>
-    void navigate({
-      search: (previous) => ({ ...previous, ...next }),
-      replace: true,
-    });
 
   // The shared workflow atom (see use-workflow-state): the header chip and
   // this page read one state, so syncs and panel actions update both.
@@ -114,21 +76,6 @@ function WorkbenchRoute() {
     <>
       <OverviewPage
         data={overviewData}
-        search={search}
-        onSearchChange={updateSearch}
-        resetSearch={() =>
-          void navigate({
-            search: (previous) => ({
-              ...previous,
-              q: "",
-              status: "all",
-              source: "all",
-              stream: "all",
-              view: "all",
-            }),
-            replace: true,
-          })
-        }
         state={state}
         mode={mode}
         onOpenIssue={(issueId) => setIssueParam(issueId.slice(3))}

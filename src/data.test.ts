@@ -3,12 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 import { overviewData } from "./data";
 import { overviewData as generatedData } from "./data.generated";
 import { offlineFallbackCatalog, skillFlowClassification, skillFlowEdges } from "./data/skill-flow";
-import {
-  frontier,
-  frontierItemFromTicket,
-  frontierItemFromWorkItem,
-  openBlockers,
-} from "./lib/frontier";
+import { frontier, frontierItemFromWorkItem, openBlockers } from "./lib/frontier";
 import {
   parseArtifactRecord,
   parseBlockerEdgeRecord,
@@ -29,7 +24,6 @@ import {
   parseSkillsStatus,
   parseSyncTriggerRequest,
   parseSyncTriggerResult,
-  parseTicketRecord,
   parseTriageMoveRequest,
   parseTriageMoveResult,
   parseTrackerMapRecord,
@@ -39,48 +33,6 @@ import {
 
 const expectRejected = (input: unknown, pattern: RegExp) => {
   expect(() => parseOverviewData(input)).toThrow(pattern);
-};
-
-const ticket = {
-  id: "TKT-001",
-  title: "Ready ticket",
-  status: "ready",
-  statusLabel: "ready-for-agent",
-  statusDetail: "",
-  group: "Ticket system",
-  lane: "Core",
-  summary: "Ticket",
-  sourcePath: "docs/plans/ticket-system/tickets/TKT-001.md",
-  sourceUrl: "https://github.com/Quick-Release/banquinha",
-  kind: "plan-ticket",
-  progress: { done: 0, total: 1 },
-};
-
-const plan = {
-  id: "TICKET-SYSTEM",
-  title: "Ticket system",
-  status: "in-progress",
-  statusLabel: "in-progress",
-  statusDetail: "Active implementation",
-  stream: "Ticket system",
-  ticketCount: 1,
-  openTicketCount: 1,
-  completeTicketCount: 0,
-  summary: "A private ticket worker.",
-  sourcePath: "docs/plans/ticket-system/README.md",
-  sourceUrl: "https://github.com/Quick-Release/banquinha",
-};
-
-const change = {
-  id: "add-copilot",
-  title: "Add copilot",
-  status: "planned",
-  statusLabel: "needs-triage",
-  summary: "A staff copilot proposal.",
-  taskCount: 2,
-  completeTaskCount: 0,
-  sourcePath: "openspec/changes/add-copilot/proposal.md",
-  sourceUrl: "https://github.com/Quick-Release/banquinha",
 };
 
 const service = {
@@ -96,36 +48,12 @@ const service = {
 describe("overview data boundary", () => {
   it("decodes the real generated data on import", () => {
     expect(overviewData.meta.projectName).toBeTruthy();
-    expect(overviewData.tickets.length).toBe(overviewData.meta.ticketCount);
   });
 
-  it("accepts a ticket with its optional external source present", () => {
-    expect(parseTicketRecord({ ...ticket, externalSource: "https://example.com/tkt-001" })).toEqual(
-      expect.objectContaining({ externalSource: "https://example.com/tkt-001" }),
-    );
-  });
-
-  it("rejects an unknown ticket status and names the path", () => {
-    expect(() => parseTicketRecord({ ...ticket, status: "done" })).toThrow(/status/);
-  });
-
-  it("rejects a ticket with a missing required field and names the path", () => {
-    const { title: _omitted, ...incomplete } = ticket;
-    expect(() => parseTicketRecord(incomplete)).toThrow(/title/);
-  });
-
-  it("rejects a ticket with an unknown record kind", () => {
-    expect(() => parseTicketRecord({ ...ticket, kind: "release" })).toThrow(/kind/);
-  });
-
-  it("rejects a ticket with non-numeric progress counts", () => {
-    expect(() => parseTicketRecord({ ...ticket, progress: { done: "most", total: 1 } })).toThrow(
-      /done/,
-    );
-  });
-
-  it("rejects a ticket carrying the retired dependencies display string", () => {
-    expect(() => parseTicketRecord({ ...ticket, dependencies: "BQ-001" })).toThrow(/dependencies/);
+  it("rejects the retired ledger arrays as excess keys", () => {
+    expectRejected({ ...generatedData, tickets: [] }, /tickets/);
+    expectRejected({ ...generatedData, plans: [] }, /plans/);
+    expectRejected({ ...generatedData, changes: [] }, /changes/);
   });
 
   it("rejects an unknown theme key and names the path", () => {
@@ -137,22 +65,6 @@ describe("overview data boundary", () => {
       },
     };
     expectRejected(drifted, /not-a-color/);
-  });
-
-  it("rejects a plan with an unknown status", () => {
-    const drifted: unknown = {
-      ...generatedData,
-      plans: [{ ...plan, status: "done" }],
-    };
-    expectRejected(drifted, /status/);
-  });
-
-  it("rejects a spec change with an unknown status", () => {
-    const drifted: unknown = {
-      ...generatedData,
-      changes: [{ ...change, status: "shipped" }],
-    };
-    expectRejected(drifted, /status/);
   });
 
   it("rejects a service with an unknown connection status", () => {
@@ -284,10 +196,7 @@ describe("overview data boundary", () => {
   });
 
   it("names a sound grabbable set over the real snapshot", () => {
-    const items = [
-      ...generatedData.workItems.map(frontierItemFromWorkItem),
-      ...generatedData.tickets.map(frontierItemFromTicket),
-    ];
+    const items = generatedData.workItems.map(frontierItemFromWorkItem);
     const byId = new Map(items.map((item) => [item.id, item]));
     const grabbable = frontier(items, generatedData.blockerEdges, generatedData.maps).map(
       (item) => item.id,

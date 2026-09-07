@@ -39,7 +39,6 @@
         "group": "Project",
         "lane": "Area",
         "id": "Ticket ID",
-        "dependencies": "Dependencies",
         "summary": "Description"
       }
     },

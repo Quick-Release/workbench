@@ -203,9 +203,6 @@
             "id": {
               "type": "string"
             },
-            "dependencies": {
-              "type": "string"
-            },
             "summary": {
               "type": "string"
             }

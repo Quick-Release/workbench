@@ -22,10 +22,7 @@ const meta = {
   repo: "Quick-Release/banquinha",
   repositoryUrl: "https://github.com/Quick-Release/banquinha",
   docsRoot: "docs",
-  sources: [{ label: "Ledger", path: "docs/dashboard-plan/status.md" }],
-  ticketCount: 2,
-  planCount: 1,
-  changeCount: 1,
+  sources: [],
 } satisfies OverviewData["meta"];
 
 const renderShellAt = async (path: string) => {
@@ -80,14 +77,14 @@ describe("app shell (shadcn dashboard frame)", () => {
     expect(html).toContain("stub:overview");
   });
 
-  it("shows the brand, project name, snapshot line, read-only badge, and both header links", async () => {
+  it("shows the brand, project name, snapshot line, posture badge, and both header links", async () => {
     const html = await renderShellAt("/");
     expect(html).toContain("work");
     expect(html).toContain("bench");
     expect(html).toContain("banquinha");
     expect(html).toContain("LOCAL SNAPSHOT");
     expect(html).toContain("29 Aug 2026");
-    expect(html).toContain("read-only / local");
+    expect(html).toContain("control surface / localhost");
     expect(html).toContain("agent sessions");
     expect(html).toContain("repository ↗");
   });
