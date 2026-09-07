@@ -3,11 +3,8 @@ import test from "node:test";
 
 import { computeDigest } from "./digest.mjs";
 
-// The digest is a pure function of the pending-submission rows (ticket #30,
-// the compute step of spec #28's SubmissionReviewAgent): rows in, digest out,
-// no runtime, no clock — `now` is an argument so the output is deterministic
-// and the shape stays the stable contract an AI summarizer plugs into later.
-// Rows carry the submissions table's shape, snake_case as D1 returns them.
+// Rows carry the submissions table's shape, snake_case as D1 returns them;
+// `now` is fixed so the digest is asserted byte-for-byte.
 
 const NOW = "2026-09-07T12:00:00.000Z";
 

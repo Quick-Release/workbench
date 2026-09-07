@@ -1,15 +1,18 @@
 // The digest a maintainer consumes, as a pure function of the
 // pending-submission rows (ticket #30, the compute step of spec #28's
-// SubmissionReviewAgent). No runtime, no clock: `now` is an argument, so the
-// output is deterministic and this shape is the stable contract a future AI
-// summarizer plugs into. Rows carry the submissions table's shape as D1
-// returns it.
+// SubmissionReviewAgent). No runtime, no clock: `now` is an ISO-string
+// argument, so the output is deterministic and this shape is the stable
+// contract a future AI summarizer plugs into. Rows carry the submissions
+// table's shape as D1 returns it.
 
 const DAY_MS = 86_400_000;
 
 // The aging buckets the digest speaks: fresh work can still wait its turn,
 // aging work should be reviewed this week, stale work is at risk of being
 // forgotten. Exactly one day old is aging; exactly one week old is stale.
+// The final bucket is the catch-all, so a row with an unparsable date —
+// which D1's NOT NULL column should never produce — lands in stale: the
+// honest reading of a submission whose age cannot be trusted.
 const BUCKETS = [
   ["fresh", (ageDays) => ageDays < 1],
   ["aging", (ageDays) => ageDays < 7],
@@ -43,7 +46,7 @@ export const computeDigest = (pendingSubmissions, now) => {
     total: items.length,
     byAge,
     oldestAgeDays: items.length > 0 ? items[0].ageDays : null,
-    computedAt: new Date(now).toISOString(),
+    computedAt: new Date(nowMs).toISOString(),
     items,
   };
 };
