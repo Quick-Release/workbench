@@ -19,7 +19,7 @@
     "registry": "https://npm.pkg.github.com"
   },
   "scripts": {
-    "dev": "pnpm sync && vp dev --port 4051 --strictPort",
+    "dev": "pnpm sync && dotenvx run -- vp dev --port 4051 --strictPort",
     "dev:demo": "node scripts/env.mjs && dotenvx run -f .env.demo -f .env -- pnpm dev",
     "worker:deploy": "node scripts/env.mjs && dotenvx run -- alchemy deploy --stage prod",
     "worker:dev": "node scripts/env.mjs && dotenvx run -- alchemy dev",
@@ -29,7 +29,7 @@
     "sync:demo": "node scripts/env.mjs && dotenvx run -f .env.demo -f .env -- pnpm sync",
     "build": "pnpm sync && vp build",
     "preview": "vp preview",
-    "test": "pnpm sync && vp test run && node --test scripts/config.test.mjs scripts/services.test.mjs scripts/source-root.test.mjs scripts/self-defaults.test.mjs scripts/env.test.mjs scripts/init.test.mjs scripts/sessions.test.mjs scripts/skills-api.test.mjs scripts/skills-catalog.test.mjs scripts/tracker.test.mjs scripts/blocker-edges.test.mjs scripts/decisions.test.mjs scripts/workflow-api.test.mjs worker/worker.test.mjs",
+    "test": "pnpm sync && vp test run && node --test scripts/config.test.mjs scripts/services.test.mjs scripts/source-root.test.mjs scripts/self-defaults.test.mjs scripts/env.test.mjs scripts/init.test.mjs scripts/sessions.test.mjs scripts/request-gate.test.mjs scripts/ai-api.test.mjs scripts/ai-sources.test.mjs scripts/skills-api.test.mjs scripts/skills-catalog.test.mjs scripts/tracker.test.mjs scripts/blocker-edges.test.mjs scripts/decisions.test.mjs scripts/workflow-api.test.mjs worker/worker.test.mjs",
     "lint": "vp lint .",
     "format": "vp fmt --write . && vp lint --fix .",
     "check": "pnpm sync && vp fmt --check . && vp lint . && tsc --noEmit",
@@ -41,6 +41,8 @@
     "@effect/platform-node": "4.0.0-rc.112",
     "@fontsource-variable/inter": "^5.3.0",
     "@tailwindcss/vite": "^4.3.3",
+    "@tanstack/ai": "0.53.0",
+    "@tanstack/ai-anthropic": "0.18.5",
     "@tanstack/react-router": "1.170.18",
     "@tanstack/react-table": "^9.2.4",
     "@tanstack/router-plugin": "1.168.23",

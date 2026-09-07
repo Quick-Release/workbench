@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { skillsApiPlugin } from "./scripts/skills-api.mjs";
 import { toolsApiPlugin } from "./scripts/tools-api.mjs";
 import { workflowApiPlugin } from "./scripts/workflow-api.mjs";
+import { aiApiPlugin } from "./scripts/ai-api.mjs";
 
 export default defineConfig({
   fmt: {
@@ -25,6 +26,7 @@ export default defineConfig({
     toolsApiPlugin(),
     skillsApiPlugin(),
     workflowApiPlugin(),
+    aiApiPlugin(),
   ],
   resolve: {
     alias: {
