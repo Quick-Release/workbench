@@ -14,6 +14,11 @@ export const TelemetryDatabase = Cloudflare.D1.Database("workbench-telemetry", {
   migrations: "./worker/migrations",
 });
 
+// worker/wrangler.jsonc `r2_buckets[0]` — binding LLM_CAPTURES, bucket
+// workbench-llm-captures. Session-capture bodies (ticket #35) live here,
+// date-partitioned per session and request.
+export const LlmCapturesBucket = Cloudflare.R2.Bucket("workbench-llm-captures");
+
 // worker/wrangler.jsonc `name`/`main` — async mode: worker.mjs stays a
 // plain fetch handler; its env type is derived from these bindings.
 export const TelemetryWorker = Cloudflare.Worker("workbench-telemetry", {
@@ -31,6 +36,13 @@ export const TelemetryWorker = Cloudflare.Worker("workbench-telemetry", {
     // migration for new DO classes, so no manual migration block is needed
     // on this deploy path (ADR 0003).
     SubmissionReviewAgent: Cloudflare.DurableObject("SubmissionReviewAgent"),
+    // Session capture (ticket #35): the capture bucket, the provider
+    // origin traffic is forwarded to, and the provider key the client's
+    // credential is swapped for — read from LLM_PROVIDER_KEY at deploy
+    // time, so provider keys can come off developer disks.
+    LLM_CAPTURES: LlmCapturesBucket,
+    LLM_PROVIDER_ORIGIN: "https://api.anthropic.com",
+    LLM_PROVIDER_KEY: Config.redacted("LLM_PROVIDER_KEY"),
   },
 });
 

@@ -503,3 +503,54 @@ export const parseAiHealth: (input: unknown) => { configured: boolean } = Schema
   AiHealthSchema,
   { onExcessProperty: "error" },
 );
+
+export const LlmTurnSchema = Schema.Struct({
+  request_id: Schema.String,
+  turn_id: Schema.NullOr(Schema.String),
+  model: Schema.String,
+  status: Schema.String,
+  http_status: Schema.NullOr(Schema.Number),
+  input_tokens: Schema.NullOr(Schema.Number),
+  output_tokens: Schema.NullOr(Schema.Number),
+  duration_ms: Schema.NullOr(Schema.Number),
+  received_at: Schema.String,
+});
+
+export const LlmMessageSchema = Schema.Struct({
+  role: Schema.String,
+  content: Schema.Union([Schema.String, Schema.Array(Schema.Unknown)]),
+});
+
+export const LlmTranscriptSchema = Schema.Struct({
+  session: Schema.String,
+  messages: Schema.Array(LlmMessageSchema),
+  turns: Schema.Array(LlmTurnSchema),
+});
+
+export const LlmSessionSummarySchema = Schema.Struct({
+  session_id: Schema.String,
+  requests: Schema.Number,
+  models: Schema.Array(Schema.String),
+  input_tokens: Schema.Number,
+  output_tokens: Schema.Number,
+  cache_tokens: Schema.Number,
+  first_at: Schema.String,
+  last_at: Schema.String,
+});
+
+export const LlmSessionsIndexSchema = Schema.Struct({
+  sessions: Schema.Array(LlmSessionSummarySchema),
+});
+
+export type LlmTurn = Schema.Schema.Type<typeof LlmTurnSchema>;
+export type LlmMessage = Schema.Schema.Type<typeof LlmMessageSchema>;
+export type LlmTranscript = Schema.Schema.Type<typeof LlmTranscriptSchema>;
+export type LlmSessionSummary = Schema.Schema.Type<typeof LlmSessionSummarySchema>;
+
+export const parseLlmTranscript: (input: unknown) => LlmTranscript = Schema.decodeUnknownSync(
+  LlmTranscriptSchema,
+  { onExcessProperty: "ignore" },
+);
+
+export const parseLlmSessions: (input: unknown) => { sessions: readonly LlmSessionSummary[] } =
+  Schema.decodeUnknownSync(LlmSessionsIndexSchema, { onExcessProperty: "ignore" });

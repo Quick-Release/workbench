@@ -4,6 +4,7 @@ import {
   GitBranch,
   GitPullRequest,
   Inbox,
+  MessagesSquare,
   ReceiptText,
   Rocket,
   ScrollText,
@@ -39,6 +40,7 @@ const blockersLink = linkOptions({ to: "/blockers", search: {} });
 const inFlightLink = linkOptions({ to: "/in-flight" });
 const decisionsLink = linkOptions({ to: "/decisions" });
 const pullRequestsLink = linkOptions({ to: "/pull-requests" });
+const transcriptsLink = linkOptions({ to: "/transcripts" });
 
 type NavItem = { title: string; icon: typeof ReceiptText } & (
   | typeof overviewLink
@@ -50,6 +52,7 @@ type NavItem = { title: string; icon: typeof ReceiptText } & (
   | typeof inFlightLink
   | typeof decisionsLink
   | typeof pullRequestsLink
+  | typeof transcriptsLink
 );
 
 // Spec #54's sidebar order: Overview, then the Workflow destination group,
@@ -68,6 +71,7 @@ const workflowItems: NavItem[] = [
 
 const closingItems: NavItem[] = [
   { title: "Agent sessions", icon: Activity, ...sessionsLink },
+  { title: "Session capture", icon: MessagesSquare, ...transcriptsLink },
   { title: "Tools", icon: Wrench, ...toolsLink },
 ];
 

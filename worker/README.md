@@ -26,7 +26,33 @@ HTTP seam in workerd (`*.runtime.test.mjs`).
   request; the interval defaults to 86,400 seconds and is overridable with
   the `DIGEST_TICK_INTERVAL_SECONDS` variable (the workerd suite drives it
   at one second).
+- `/llm/anthropic/*` — the session-capture proxy (ticket #35): forwards
+  the request to the provider origin with the client's credential swapped
+  for the provider key, relays the response untouched (streamed as it
+  arrives), and records the bodies in R2 plus one metadata row in D1.
+  Requires `x-session-id` and `x-request-id` headers; a repeated request
+  id always forwards and stores once. Same bearer token; without it, 401.
+- `GET /llm/sessions` and `GET /llm/sessions/<session_id>/transcript` —
+  authenticated read APIs over the capture record: the session index with
+  aggregates, and one session's conversation reassembled from the
+  turn-final request.
 - `GET /healthz` — liveness, no auth.
+
+## Onboarding an agent to session capture
+
+Capture is strictly opt-in: the proxy only sees traffic a Developer
+deliberately points at it. Onboarding is a provider base-URL swap in the
+agent's existing provider config — no client code:
+
+1. Base URL: `https://workbench-telemetry.<account>.workers.dev/llm/anthropic`
+2. API key field: the shared ingest token (the proxy authenticates it as
+   the bearer credential and swaps it for the provider key before
+   forwarding).
+3. Session headers: the agent sends `x-session-id`, `x-request-id`, and
+   `x-turn-id` per request; capture groups and dedupes on them.
+
+Set `TELEMETRY_INGEST_URL` and `TELEMETRY_INGEST_TOKEN` in the workbench
+`.env` for the dashboard's session-capture page to read the record.
 
 Both POST routes require `Authorization: Bearer <token>`; the token is the
 shared ingest secret (set as the `TELEMETRY_INGEST_TOKEN` secret here and

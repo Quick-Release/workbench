@@ -48,6 +48,10 @@ _Avoid_: feed, showcase
 The Telemetry group measuring a Developer's merged work on a host repo — pull-request counts and merge timing.
 _Avoid_: productivity metrics (evaluative connotation)
 
+**Session capture**:
+The content-bearing record of a Developer's own agent traffic — prompts, completions, and per-request metadata — collected only after the Developer points their agent at the capture proxy. Distinct from Telemetry: capture carries content, and exists only behind an explicit opt-in configuration.
+_Avoid_: LLM logging, traffic recording (both imply automatic collection), Telemetry (the two postures must never be conflated)
+
 ### Skills and workflow
 
 Language for the skills ecosystem the dashboard renders, resolved from the Ask Matt skill map.
