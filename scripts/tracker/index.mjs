@@ -12,6 +12,7 @@ import {
 } from "./issues.mjs";
 import { lineEdgesForBody, mergeBlockerEdges } from "./edges.mjs";
 import { resolutionDecisionFromIssue, sortDecisions, specDecisionFromIssue } from "./decisions.mjs";
+import { fetchOpenPullRequests } from "./pulls.mjs";
 import { deriveWorkItem, loadWorkflowVocabulary } from "./labels.mjs";
 
 const execFileAsync = promisify(execFile);
@@ -49,7 +50,14 @@ export const collectTrackerState = async ({
 }) => {
   // Every record family the sync merge iterates rides even the degraded
   // returns — a missing decisions array crashes the sort, not a warning.
-  const empty = { workItems: [], maps: [], blockerEdges: [], decisions: [], warnings: [] };
+  const empty = {
+    workItems: [],
+    maps: [],
+    blockerEdges: [],
+    decisions: [],
+    pullRequests: [],
+    warnings: [],
+  };
   if (!REPO_PATTERN.test(repo ?? ""))
     return {
       ...empty,
@@ -80,6 +88,8 @@ export const collectTrackerState = async ({
   warnings.push(...sweep.warnings);
   const mapIssues = await fetchMapIssues({ repo, token, apiBase, fetchImpl, maxPages });
   warnings.push(...mapIssues.warnings);
+  const openPulls = await fetchOpenPullRequests({ repo, token, apiBase, fetchImpl, maxPages });
+  warnings.push(...openPulls.warnings);
 
   const workItems = [];
   const recordsById = new Map();
@@ -276,6 +286,7 @@ export const collectTrackerState = async ({
     maps,
     blockerEdges: merged.edges,
     decisions: sortDecisions([...resolutions, ...specBundles]),
+    pullRequests: [...openPulls.pulls].sort((left, right) => left.number - right.number),
     warnings,
   };
 };

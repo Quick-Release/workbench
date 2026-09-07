@@ -340,6 +340,19 @@ export type SessionUsageSessionsByDay = {
   sessions: number;
 };
 
+// The pull-request record family: open pull requests of the host repo,
+// collected at sync beside the other tracker-backed families.
+export type PullRequestRecord = {
+  number: number;
+  title: string;
+  url: string;
+  head: string;
+  base: string;
+  author: string;
+  isDraft: boolean;
+  body: string;
+};
+
 export type SessionUsageRecord = {
   id: string;
   taskType: string;
@@ -384,6 +397,7 @@ export type OverviewData = {
   blockerEdges: readonly BlockerEdgeRecord[];
   decisions: readonly DecisionRecord[];
   artifacts: readonly ArtifactRecord[];
+  pullRequests: readonly PullRequestRecord[];
   skills: readonly SkillRecord[];
   skillInstalls: readonly string[];
   sessions: SessionUsage;

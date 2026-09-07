@@ -138,6 +138,19 @@ export const TrackerMapRecordSchema = Schema.Struct({
   ticketIds: Schema.Array(Schema.String),
 });
 
+// The pull-request record family (ticket #79): open pull requests of the
+// host repo, collected at sync and schema-validated like every family.
+export const PullRequestRecordSchema = Schema.Struct({
+  number: Schema.Number,
+  title: Schema.String,
+  url: Schema.String,
+  head: Schema.String,
+  base: Schema.String,
+  author: Schema.String,
+  isDraft: Schema.Boolean,
+  body: Schema.String,
+});
+
 // The execution seam's contracts (ticket #59): the workflow read payload and
 // the triage move action, validated in both directions at the seam boundary.
 export const WorkflowStateMetaSchema = Schema.Struct({
@@ -361,6 +374,7 @@ export const OverviewDataSchema = Schema.Struct({
   blockerEdges: Schema.Array(BlockerEdgeRecordSchema),
   decisions: Schema.Array(DecisionRecordSchema),
   artifacts: Schema.Array(ArtifactRecordSchema),
+  pullRequests: Schema.Array(PullRequestRecordSchema),
   skills: Schema.Array(SkillRecordSchema),
   skillInstalls: Schema.Array(Schema.String),
   sessions: SessionUsageSchema,

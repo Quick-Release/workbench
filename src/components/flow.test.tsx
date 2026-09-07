@@ -28,6 +28,7 @@ const data = {
   blockerEdges: [],
   decisions: [],
   artifacts: [],
+  pullRequests: [],
   skills: catalog,
   skillInstalls: ["tdd", "implement", "grill-with-docs"],
   sessions: {

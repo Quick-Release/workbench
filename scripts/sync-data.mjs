@@ -281,6 +281,7 @@ const main = async () => {
     blockerEdges: blockerEdges.edges,
     decisions,
     artifacts,
+    pullRequests: tracker.pullRequests,
     skills: skillsCatalog.skills,
     skillInstalls: skillsCatalog.installedIds,
     sessions,
@@ -295,7 +296,7 @@ const main = async () => {
       (sessions.enabled
         ? ` Sessions: ${sessions.sessions.length} tracked (${sessions.perModel.length} models).`
         : " Sessions sync disabled.") +
-      ` Decisions: ${decisions.length} (${artifacts.length} artifacts).`,
+      ` Decisions: ${decisions.length} (${artifacts.length} artifacts). ${tracker.pullRequests.length} open pull requests.`,
   );
   if (trackerWarnings.length > 0) {
     console.log(`Tracker warnings (${trackerWarnings.length}):`);

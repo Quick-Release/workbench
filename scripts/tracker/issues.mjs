@@ -20,6 +20,10 @@ const headers = (token) => ({
   Authorization: `Bearer ${token}`,
 });
 
+// The standard tracker REST headers, shared with the other read layers
+// (pull requests) so the API version stays pinned in one place.
+export const githubHeaders = headers;
+
 const isIssue = (entry) =>
   entry && typeof entry === "object" && typeof entry.number === "number" && !entry.pull_request;
 
