@@ -1,7 +1,7 @@
 import { deepStrictEqual, strictEqual } from "node:assert";
-import { copyFileSync, existsSync, mkdtempSync, rmSync } from "node:fs";
+import { copyFileSync, existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import test from "node:test";
 
 import { collectSessionUsage } from "./sessions.mjs";
@@ -191,6 +191,9 @@ const buildFixture = (directory) => {
   tools.run(3, "sess_root-1", "Write", "completed");
   tools.run(4, "sess_root-1", "Read", "completed");
   tools.run(5, "sess_child-1", "Write", "completed");
+  tools.run(6, "sess_root-1", "Skill", "completed");
+  tools.run(7, "sess_root-1", "Skill", "completed");
+  tools.run(8, "sess_root-1", "Skill", "error");
   database.close();
   return join(directory, "db.sqlite");
 };
@@ -288,6 +291,37 @@ test("rolls up sessions scoped to the source root with tool counts", () => {
       { day: "2026-09-01", sessions: 2 },
       { day: "2026-09-02", sessions: 1 },
     ]);
+  });
+});
+
+test("collects skill tool calls per session and keeps parent links intact", () => {
+  if (!hasSqlite) return;
+  withFixture(({ databasePath, sourceRoot }) => {
+    const usage = collectSessionUsage({ databasePath, sourceRoot });
+    strictEqual(usage.sessions.length, 2);
+    const [root, child] = usage.sessions;
+    // Skill calls attribute to the session that ran them; a session that
+    // never reached for a skill stays at zero rather than undefined.
+    strictEqual(root.skillCalls, 3);
+    strictEqual(child.skillCalls, 0);
+    // The join into handoff trees rests on the recorded parent link.
+    strictEqual(root.parent, "");
+    strictEqual(child.parent, "sess_root-1");
+  });
+});
+
+test("reads the session database only — rollout log content never reaches the snapshot", () => {
+  if (!hasSqlite) return;
+  withFixture(({ databasePath, sourceRoot }) => {
+    const rollout = join(dirname(databasePath), "rollout-sess_root-1.jsonl");
+    writeFileSync(
+      rollout,
+      `${JSON.stringify({ display: "ROLLOUT-SECRET-PROMPT-TEXT" })}\n`,
+      "utf8",
+    );
+    const usage = collectSessionUsage({ databasePath, sourceRoot });
+    strictEqual(JSON.stringify(usage).includes("ROLLOUT-SECRET-PROMPT-TEXT"), false);
+    rmSync(rollout);
   });
 });
 

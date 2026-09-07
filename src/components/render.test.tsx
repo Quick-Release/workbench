@@ -50,6 +50,7 @@ const sessions = {
       model: "GLM-5.3-Flash",
       edits: 2,
       writes: 1,
+      skillCalls: 2,
     },
     {
       id: "sess_child-1",
@@ -65,9 +66,16 @@ const sessions = {
       model: "GLM-5.3-Flash",
       edits: 0,
       writes: 0,
+      skillCalls: 1,
     },
   ],
 } satisfies OverviewData["sessions"];
+
+const sectionHtml = (html: string, label: string) => {
+  const start = html.indexOf(`aria-label="${label}"`);
+  const rest = html.slice(start);
+  return rest.slice(0, rest.indexOf("</section>"));
+};
 
 const data = {
   meta: {
@@ -90,6 +98,32 @@ const data = {
   skills: [{ id: "tdd", category: "engineering", source: "matt-pocock" }],
   skillInstalls: ["tdd"],
   sessions,
+} satisfies OverviewData;
+
+const handoffsData = {
+  ...data,
+  sessions: {
+    ...sessions,
+    sessions: [
+      ...sessions.sessions,
+      {
+        id: "sess_lost-1",
+        taskType: "subagent_child",
+        parent: "sess_gone",
+        title: "Follow-up from a cleared parent",
+        directory: "/tmp/checkout",
+        started: "2026-09-01T11:00:00.000Z",
+        requests: 1,
+        inputTokens: 100,
+        outputTokens: 100,
+        modelMs: 1000,
+        model: "GLM-5.3-Flash",
+        edits: 0,
+        writes: 0,
+        skillCalls: 0,
+      },
+    ],
+  },
 } satisfies OverviewData;
 
 const overviewPageProps = {
@@ -157,5 +191,56 @@ describe("rendered dashboard shell (shadcn rebuild)", () => {
     );
     expect(html).toContain("Session tracking is off");
     expect(html).not.toContain("Model share");
+  });
+
+  it("renders the handoffs lens as trees with boundaries and skill calls", () => {
+    const html = renderToString(
+      <SessionsPage
+        data={handoffsData}
+        search={{ subagents: "handoffs" }}
+        onSearchChange={() => {}}
+      />,
+    );
+    expect(html).toContain('aria-label="Session handoffs"');
+    // The tree: parent above child, the recorded boundary between them.
+    expect(html).toContain("Build the thing");
+    expect(html).toContain("Explore side quest");
+    expect(html).toContain("2 skill calls");
+    expect(html).toContain("1 skill call");
+    // Two recorded parent links: the in-view join and the out-of-view one.
+    expect(withoutComments(html)).toContain(">2</strong> handoff boundaries");
+    // A parent outside the view renders naming the gap, never silently.
+    expect(html).toContain("sess_gone");
+    expect(html).toContain("not in this view");
+  });
+
+  it("renders no action affordances in the handoffs lens — sessions stay observed", () => {
+    const html = renderToString(
+      <SessionsPage
+        data={handoffsData}
+        search={{ subagents: "handoffs" }}
+        onSearchChange={() => {}}
+      />,
+    );
+    // The heading's toggle is view navigation shared with the table lens;
+    // everything the lens shows about the sessions themselves carries no
+    // way to act.
+    const section = sectionHtml(html, "Session handoffs");
+    const fromSummary = section.slice(section.indexOf('class="result-line"'));
+    expect(fromSummary).not.toContain("<button");
+    expect(fromSummary).not.toContain("<a ");
+    expect(fromSummary).not.toContain("<form");
+  });
+
+  it("keeps the handoffs lens out of the disabled state", () => {
+    const html = renderToString(
+      <SessionsPage
+        data={{ ...handoffsData, sessions: { ...handoffsData.sessions, enabled: false } }}
+        search={{ subagents: "handoffs" }}
+        onSearchChange={() => {}}
+      />,
+    );
+    expect(html).toContain("Session tracking is off");
+    expect(html).not.toContain('aria-label="Session handoffs"');
   });
 });

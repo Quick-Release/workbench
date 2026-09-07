@@ -4,7 +4,7 @@ import { z } from "zod";
 import { overviewData } from "../data";
 import { SessionsPage } from "../components/SessionsPage";
 
-const lensSchema = z.enum(["all", "interactive", "subagents"]);
+const lensSchema = z.enum(["all", "interactive", "subagents", "handoffs"]);
 
 const searchSchema = z.object({
   subagents: lensSchema.catch("all"),

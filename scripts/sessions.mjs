@@ -93,7 +93,7 @@ const aggregate = (database, sourceRoot) => {
   const toolRows = database
     .prepare(
       `SELECT session_id, tool_name, COUNT(*) AS uses FROM tool_usage
-       WHERE tool_name IN ('Edit', 'Write') GROUP BY session_id, tool_name`,
+       WHERE tool_name IN ('Edit', 'Write', 'Skill') GROUP BY session_id, tool_name`,
     )
     .all();
 
@@ -123,6 +123,7 @@ const aggregate = (database, sourceRoot) => {
         modelTokens: new Map(),
         edits: 0,
         writes: 0,
+        skillCalls: 0,
       },
     ]),
   );
@@ -131,6 +132,7 @@ const aggregate = (database, sourceRoot) => {
     if (!total) continue;
     if (tool.tool_name === "Edit") total.edits = tool.uses;
     if (tool.tool_name === "Write") total.writes = tool.uses;
+    if (tool.tool_name === "Skill") total.skillCalls = tool.uses;
   }
 
   for (const row of usageRows) {
