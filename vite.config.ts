@@ -1,5 +1,5 @@
 import tailwindcss from "@tailwindcss/vite";
-import { cloudflareTest } from "@cloudflare/vitest-pool-workers";
+import { cloudflareTest, readD1Migrations } from "@cloudflare/vitest-pool-workers";
 import { defineConfig } from "vite-plus";
 import { tanstackRouter } from "@tanstack/router-plugin/vite";
 import react from "@vitejs/plugin-react";
@@ -24,6 +24,12 @@ const dashboardPlugins = [
 const dashboardAlias = {
   "@": fileURLToPath(new URL("./src", import.meta.url)),
 };
+// The worker suite's D1 starts empty; the migration SQL is handed in as a
+// plain binding and applied by the tests that need the tables (the
+// documented applyD1Migrations pattern of the vitest-pool-workers plugin).
+const workerD1Migrations = await readD1Migrations(
+  fileURLToPath(new URL("./worker/migrations", import.meta.url)),
+);
 
 export default defineConfig({
   fmt: {
@@ -56,7 +62,10 @@ export default defineConfig({
           cloudflareTest({
             wrangler: { configPath: "./worker/wrangler.jsonc" },
             miniflare: {
-              bindings: { TELEMETRY_INGEST_TOKEN: "test-ingest-token" },
+              bindings: {
+                TELEMETRY_INGEST_TOKEN: "test-ingest-token",
+                TEST_MIGRATIONS: workerD1Migrations,
+              },
             },
           }),
         ],
