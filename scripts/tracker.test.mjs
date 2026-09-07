@@ -30,13 +30,15 @@ const issue = (number, overrides = {}) => ({
   ...overrides,
 });
 
-// Routes the tracker's four read shapes: the open-issue sweep, the
-// wayfinder:map query, per-issue sub_issues lists, and targeted single reads.
+// Routes the tracker's read shapes: the open-issue sweep, the wayfinder:map
+// query, per-issue sub_issues lists, targeted single reads, and the
+// open-pull-requests walk.
 const routeFetch = ({
   openPages = [[]],
   maps = [],
   subIssues = {},
   singles = {},
+  pulls = [],
   status = 200,
 }) => {
   const calls = [];
@@ -45,6 +47,7 @@ const routeFetch = ({
     const u = new URL(url);
     calls.push(u);
     if (u.searchParams.get("labels") === "wayfinder:map") return jsonResponse(maps, status);
+    if (u.pathname.endsWith("/pulls")) return jsonResponse(pulls, status);
     if (u.pathname.endsWith("/sub_issues")) {
       const number = u.pathname.match(/\/issues\/(\d+)\/sub_issues$/)[1];
       return jsonResponse(subIssues[number] ?? [], status);

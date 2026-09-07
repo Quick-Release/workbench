@@ -74,6 +74,7 @@ const data = {
   blockerEdges: [],
   decisions: [],
   artifacts: [],
+  pullRequests: [],
   skills: [],
   skillInstalls: [],
   sessions: {
