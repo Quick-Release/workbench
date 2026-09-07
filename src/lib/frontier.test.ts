@@ -1,10 +1,9 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import type { BlockerEdgeRecord, TrackerMapRecord, TicketRecord, WorkItemRecord } from "../types";
+import type { BlockerEdgeRecord, TrackerMapRecord, WorkItemRecord } from "../types";
 import {
   effortFor,
   frontier,
-  frontierItemFromTicket,
   frontierItemFromWorkItem,
   openBlockers,
   type FrontierItem,
@@ -22,22 +21,6 @@ const workItem = (id: string, overrides: Partial<WorkItemRecord> = {}): WorkItem
   category: null,
   kind: null,
   summary: "",
-  ...overrides,
-});
-
-const ticket = (id: string, overrides: Partial<TicketRecord> = {}): TicketRecord => ({
-  id,
-  title: `Ticket ${id}`,
-  status: "ready",
-  statusLabel: "ready-for-agent",
-  statusDetail: "",
-  group: "Dashboard",
-  lane: "Core",
-  summary: "",
-  sourcePath: `docs/plans/dashboard/tickets/${id}.md`,
-  sourceUrl: "",
-  kind: "ledger",
-  progress: { done: 0, total: 0 },
   ...overrides,
 });
 
@@ -128,35 +111,6 @@ describe("frontier selector", () => {
       "GH-7",
       "GH-9",
     ]);
-  });
-
-  it("reads a ledger ticket as vacuously unclaimed and closed only when complete", () => {
-    const items = [
-      frontierItemFromTicket(ticket("BQ-12")),
-      frontierItemFromTicket(ticket("BQ-13", { status: "complete" })),
-    ];
-
-    expect(items.map((item) => item.open)).toEqual([true, false]);
-    expect(items.map((item) => item.assignees)).toEqual([[], []]);
-
-    const edges = [edge("GH-1", "BQ-12", "blocked-by-line"), edge("GH-2", "BQ-13")];
-    const everything = [
-      frontierItemFromWorkItem(workItem("GH-1")),
-      frontierItemFromWorkItem(workItem("GH-2")),
-      ...items,
-    ];
-
-    expect(frontier(everything, edges, []).map((item) => item.id)).toEqual(["GH-2", "BQ-12"]);
-  });
-
-  it("gates cross-source edges on the blocker's recorded state", () => {
-    const items = [
-      frontierItemFromTicket(ticket("BQ-12")),
-      frontierItemFromWorkItem(workItem("GH-47")),
-    ];
-    const edges = [edge("BQ-12", "GH-47", "blocked-by-line")];
-
-    expect(frontier(items, edges, []).map((item) => item.id)).toEqual(["GH-47"]);
   });
 });
 

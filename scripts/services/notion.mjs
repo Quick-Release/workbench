@@ -20,7 +20,6 @@ const DEFAULT_PROPERTIES = Object.freeze({
   group: "Project",
   lane: "Section",
   id: "",
-  dependencies: "Dependencies",
   summary: "Description",
 });
 
@@ -89,7 +88,6 @@ const pageRecord = (page, service) => {
   const status = statusFromService(service, rawStatus, rawStatus.toLocaleLowerCase() === "true");
   const group = propertyText(properties[names.group]);
   const lane = propertyText(properties[names.lane]);
-  const dependencies = propertyText(properties[names.dependencies]);
   const summary = propertyText(properties[names.summary]);
   const configuredId = names.id ? propertyText(properties[names.id]) : "";
   const pageId = plainText(page.id).replaceAll("-", "");
@@ -102,7 +100,6 @@ const pageRecord = (page, service) => {
     statusDetail: rawStatus,
     group: group || service.group || serviceLabel(service),
     lane: lane || service.lane || "Notion",
-    dependencies,
     summary,
     sourcePath: `${serviceLabel(service)} / data source ${service.dataSourceId}`,
     sourceUrl: httpUrl(page.url || page.public_url),

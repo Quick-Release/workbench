@@ -1,9 +1,13 @@
 # Workbench
 
-A read-only TanStack Router/Vite workbench for a bird's-eye view of a
-repository's planning and development work. It is published as the npm
-package `@quick-release/workbench` so host repositories can pin a SemVer
-version as a regular dependency instead of tracking a git submodule.
+A control surface for a repository's planning and development work: a
+TanStack Router/Vite dashboard that renders the host repo's planning state
+live and starts actions on it — reads and actions both flow through one
+validated localhost execution seam
+([ADR 0005](docs/adr/0005-control-surface-localhost-seam.md)). It is
+published as the npm package `@quick-release/workbench` so host repositories
+can pin a SemVer version as a regular dependency instead of tracking a git
+submodule.
 
 ## Install it in a host repository
 
@@ -59,7 +63,7 @@ Set `WORKBENCH_SOURCE_ROOT=/path/to/repository` when detection cannot see the
 host (standalone checkouts, global installs, relocated package stores); the
 override wins over both detection and demo mode.
 When no host repository or demo source is selected, Workbench defaults to
-its own read-only GitHub issue source (`Quick-Release/workbench`), including
+its own GitHub issue source (`Quick-Release/workbench`), including
 when the command is launched from an ordinary directory outside Git. An
 explicit `services` configuration, host repository, or demo source takes
 precedence. GitHub authentication comes from `GITHUB_TOKEN` or the local
@@ -103,7 +107,7 @@ Copy `workbench.config.example.json` to `workbench.config.json` in the host
 repository. The JSON schema ships with the package at
 `node_modules/@quick-release/workbench/workbench.config.schema.json` (and at
 the repository root for standalone checkouts). The config controls project
-metadata, semantic theme colors, and read-only service snapshots:
+metadata, semantic theme colors, and service sync statuses:
 
 ```json
 {
@@ -133,15 +137,15 @@ metadata, semantic theme colors, and read-only service snapshots:
 Supported service adapters are `asana` (project tasks, via `projectGid`),
 `notion` (data-source pages, via `dataSourceId`), `github` (open issues, via
 `repo: "owner/name"`), and `gitlab` (open issues, via a numeric `projectId` or
-`projectPath: "group/project"`). The issue adapters derive ticket status from
-issue labels (using the same triage vocabulary as local records and any
-`statusMap` overrides), and both accept an optional `apiBaseUrl` for
+`projectPath: "group/project"`). The issue adapters derive task status from
+labels (using the triage vocabulary and any `statusMap` overrides), and both
+accept an optional `apiBaseUrl` for
 self-hosted instances. Tokens are read only from the named environment variables
 while `sync` runs — put them in the gitignored `.env` (see above) or export
 them in the shell; for GitHub, an authenticated `gh` CLI is used as a fallback
 when the token variable is unset. Tokens are never written to the config or
-bundled into the browser. Service failures are reported in the snapshot and do
-not hide local Markdown records. Add future providers behind the adapter seam in
+bundled into the browser. Service failures are reported in the snapshot and
+never fail the sync. Add future providers behind the adapter seam in
 `scripts/services/` rather than adding arbitrary browser-side URLs.
 
 ### Agent sessions (opt-in)
@@ -170,22 +174,31 @@ built-in `node:sqlite` module (Node ≥ 22.13).
 
 ## Sources
 
-`scripts/sync-data.mjs` reads local Markdown and produces the ignored,
-generated `src/data.generated.ts` snapshot. It recognizes these conventions:
+`scripts/sync-data.mjs` collects the host repo's planning state and produces
+the ignored, generated `src/data.generated.ts` snapshot. It reads:
 
-- `docs/plans/**/tickets/*.md` — implementation-ticket records;
-- `docs/plans/*/{README,plan,roadmap}.md` — plan-level context and ticket load;
-- `docs/dashboard-plan/status.md` — an optional canonical status ledger;
-- `openspec/changes/*/{proposal,tasks}.md` — optional specification changes.
+- the host repo's tracker — GitHub issues for work items, map membership,
+  and blocker edges (GitHub native blocked-by, plus `Blocked by:` lines in
+  issue bodies and in `docs/plans/**/tickets/*.md`; local ticket files
+  contribute their ids and gate lines only, never a status);
+- `docs/adr/*.md` — ADR decision records;
+- `docs/research/*.md` — research-note artifacts;
+- the skills catalog from `mattpocock/skills`, and the configured service
+  adapters' sync statuses;
+- the session database, when enabled, for the usage rollups.
 
-Missing optional directories are valid, so the app can be used by repositories
-that adopt only part of the conventions. Status labels preserve the canonical
-engineering vocabulary when it appears in source Markdown.
+Missing optional directories are valid, so the app can be used by
+repositories that adopt only part of the conventions.
 
-The browser app does not call GitHub, include credentials, query a ticket
-database, or mutate remote issues — all network access belongs to
-workbench's Node process (the `sync` script and the local server), and the
-browser talks only to localhost. During `sync`, workbench contacts only
+The dashboard is a control surface, not a mirror: the browser reads live
+state and starts actions only through the localhost `/api/*` execution seam,
+behind which run just the tools a Developer would run by hand (`gh`,
+`pnpm sync`, the skills CLI), with everything crossing the seam validated at
+the Effect Schema boundary. The browser makes zero remote network calls and
+never holds a credential; with no dev server running it degrades to the last
+synced snapshot with copy-the-command affordances
+([ADR 0005](docs/adr/0005-control-surface-localhost-seam.md)). During
+`sync`, workbench contacts only
 explicitly configured service read endpoints — or the canonical Workbench
 GitHub issue endpoint in standalone mode — with tokens supplied through
 the shell environment, and reports identified telemetry to the company

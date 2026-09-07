@@ -1,9 +1,7 @@
-import type { BlockerEdgeRecord, TicketRecord, TrackerMapRecord, WorkItemRecord } from "../types";
+import type { BlockerEdgeRecord, TrackerMapRecord, WorkItemRecord } from "../types";
 
-// ADR 0008: the frontier selector runs over tickets from every source —
-// tracker work items and ledger ticket records alike. A source without an
-// assignee concept is vacuously unclaimed; complete is a ledger ticket's
-// closed.
+// ADR 0008: the frontier selector runs over the tracker's work items. The
+// frontier is computed, never stored.
 export type FrontierItem = {
   id: string;
   open: boolean;
@@ -16,12 +14,6 @@ export const frontierItemFromWorkItem = (record: WorkItemRecord): FrontierItem =
   id: record.id,
   open: record.state === "open",
   assignees: record.assignees,
-});
-
-export const frontierItemFromTicket = (record: TicketRecord): FrontierItem => ({
-  id: record.id,
-  open: record.status !== "complete",
-  assignees: [],
 });
 
 export const itemsById = (items: readonly FrontierItem[]): ItemsById =>

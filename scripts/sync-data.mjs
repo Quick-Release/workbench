@@ -76,41 +76,7 @@ const { rootDirectory, usingDemoSource, usingSelfRepository } = resolveSourceRoo
 });
 const docsDirectory = join(rootDirectory, "docs");
 const plansDirectory = join(docsDirectory, "plans");
-const changesDirectory = join(rootDirectory, "openspec/changes");
 const outputPath = join(appDirectory, "src/data.generated.ts");
-
-const statusLabels = {
-  complete: "complete",
-  "in-progress": "in-progress",
-  ready: "ready-for-agent",
-  "needs-development": "needs-development",
-  gated: "ready-for-human",
-  blocked: "blocked",
-  planned: "needs-triage",
-  deferred: "deferred",
-};
-
-const skillLabels = ["needs-triage", "needs-info", "ready-for-agent", "ready-for-human", "wontfix"];
-const skillLabelPattern = new RegExp(`\\b(${skillLabels.join("|")})\\b`, "i");
-
-const statusOrder = {
-  gated: 0,
-  blocked: 1,
-  "needs-development": 2,
-  ready: 3,
-  "in-progress": 4,
-  planned: 5,
-  deferred: 6,
-  complete: 7,
-};
-
-const canonicalStatus = {
-  complete: "complete",
-  "in-progress": "in-progress",
-  "needs-development": "needs-development",
-  "human-gate": "gated",
-  deferred: "deferred",
-};
 
 const readDirectory = async (directory) => {
   try {
@@ -141,140 +107,15 @@ const readText = async (path) => {
 
 const relativePath = (path) => relative(rootDirectory, path).split("\\").join("/");
 
-const cleanText = (value) =>
-  value
-    .replace(/^\s*>\s?/gm, "")
-    .replace(/^\s*[-*]\s+/gm, "")
-    .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
-    .replace(/[`*_]/g, "")
-    .replace(/\s+/g, " ")
-    .trim();
-
-const shorten = (value, limit = 240) => {
-  const text = cleanText(value);
-  if (text.length <= limit) return text;
-  return `${text.slice(0, limit - 1).trimEnd()}…`;
-};
-
-const firstHeading = (text) => {
-  const match = text.match(/^#\s+(.+)$/m);
-  return match ? cleanText(match[1]) : "";
-};
-
-const sectionParagraph = (text, names) => {
-  const lines = text.split(/\r?\n/);
-  const wanted = names.map((name) => name.toLocaleLowerCase());
-  for (let index = 0; index < lines.length; index += 1) {
-    const heading = lines[index].match(/^##\s+(.+)$/);
-    if (!heading || !wanted.includes(cleanText(heading[1]).toLocaleLowerCase())) continue;
-    const section = [];
-    for (let next = index + 1; next < lines.length; next += 1) {
-      if (/^##\s+/.test(lines[next])) break;
-      section.push(lines[next]);
-    }
-    const paragraph = section
-      .join("\n")
-      .split(/\n\s*\n/)
-      .map((part) => shorten(part))
-      .find(Boolean);
-    if (paragraph) return paragraph;
-  }
-  return "";
-};
-
-const firstParagraph = (text) =>
-  text
-    .split(/\n\s*\n/)
-    .map((part) => shorten(part))
-    .find((part) => part && !part.startsWith("#")) || "";
-
-const summaryFrom = (text) =>
-  sectionParagraph(text, [
-    "Outcome",
-    "Objective",
-    "Why",
-    "What Changes",
-    "Conclusion",
-    "Executive summary",
-  ]) ||
-  firstParagraph(text) ||
-  "No summary recorded.";
-
-const rawStatusFrom = (text) => {
-  const match = text.match(/^\s*(?:[-*]\s*)?(?:\*\*)?Status(?:\*\*)?\s*[:：]\s*(.+)$/im);
-  return match ? shorten(match[1], 180) : "Not explicitly stated";
-};
-
-const statusLabelFrom = (rawStatus, status) => {
-  const match = rawStatus.match(skillLabelPattern);
-  if (match) return match[1].toLocaleLowerCase();
-  return statusLabels[status];
-};
-
-const normalizeStatus = (rawStatus) => {
-  const status = rawStatus.toLocaleLowerCase();
-  if (status.includes("deferred")) return "deferred";
-  if (status.includes("blocked")) return "blocked";
-  if (
-    status.includes("needs-info") ||
-    status.includes("ready-for-human") ||
-    status.includes("human gate") ||
-    status.includes("externally gated") ||
-    status.includes("external")
-  )
-    return "gated";
-  if (status.includes("ready-for-agent") || status.includes("ready for agent")) return "ready";
-  if (status.includes("needs-development") || status.includes("needs development"))
-    return "needs-development";
-  if (
-    status.includes("complete") ||
-    status.includes("implemented") ||
-    status.includes("accepted") ||
-    status === "closed"
-  ) {
-    if (status.includes("remains in progress")) return "in-progress";
-    return "complete";
-  }
-  if (
-    status.includes("in-progress") ||
-    status.includes("in progress") ||
-    status.includes("active implementation") ||
-    status.includes("active")
-  )
-    return "in-progress";
-  return "planned";
-};
-
-const progressFrom = (text) => {
-  const checks = [...text.matchAll(/^\s*-\s+\[([ xX~!])\]/gm)].map((match) => match[1]);
-  return {
-    done: checks.filter((mark) => mark.toLocaleLowerCase() === "x").length,
-    total: checks.length,
-  };
-};
-
-const humanize = (value) =>
-  value
-    .split("/")
-    .map((part) =>
-      part
-        .replaceAll("-", " ")
-        .replaceAll("_", " ")
-        .replace(/\b\w/g, (character) => character.toLocaleUpperCase()),
-    )
-    .join(" / ");
-
+// ADR 0008: local ticket files stay an edge-declaring surface — a
+// `Blocked by:` line in `docs/plans/**/tickets/*.md` names its gate in the
+// file's own namespace. Only the ids and texts are collected; the file's
+// status is never read.
 const ticketIdFrom = (text, filename) => {
   const headingMatch = text.match(/^#\s+([A-Z0-9][A-Z0-9-]*-\d+)\b/m);
   if (headingMatch) return headingMatch[1];
   const filenameMatch = filename.match(/^([A-Z0-9][A-Z0-9-]*-\d+)/i);
   return filenameMatch ? filenameMatch[1].toUpperCase() : "";
-};
-
-const titleFrom = (text, id, filename) => {
-  const heading = firstHeading(text);
-  const title = heading.replace(new RegExp(`^${id}\\s*[—–:-]?\\s*`, "i"), "").trim();
-  return title || humanize(filename.replace(/\.md$/i, ""));
 };
 
 const repositoryWebUrlFrom = (remote) => {
@@ -291,145 +132,6 @@ const repositoryNameFrom = (repositoryUrl) => {
   } catch {
     return basename(rootDirectory);
   }
-};
-
-const sourceUrlFor = (repositoryUrl, branch, path) =>
-  repositoryUrl ? `${repositoryUrl}/blob/${encodeURIComponent(branch)}/${path}` : "";
-
-const planGroupFrom = (path) => {
-  const parts = relativePath(path).split("/");
-  const plansIndex = parts.indexOf("plans");
-  const ticketsIndex = parts.indexOf("tickets");
-  if (plansIndex === -1 || ticketsIndex === -1) return "Other";
-  return humanize(parts.slice(plansIndex + 1, ticketsIndex).join("/"));
-};
-
-const recordFromFile = (path, text, repositoryUrl, branch, kind = "plan-ticket") => {
-  const filename = path.split(/[\\/]/).pop() || "";
-  const id = ticketIdFrom(text, filename);
-  if (!id) return null;
-  const rawStatus = rawStatusFrom(text);
-  const status = normalizeStatus(rawStatus);
-  const statusLabel = statusLabelFrom(rawStatus, status);
-  const group = planGroupFrom(path);
-  return {
-    id,
-    title: titleFrom(text, id, filename),
-    status,
-    statusLabel,
-    statusDetail: rawStatus === "Not explicitly stated" ? "" : rawStatus,
-    group,
-    lane: sectionParagraph(text, ["Phase", "Milestone", "Lane"]) || "Planning",
-    summary: summaryFrom(text),
-    sourcePath: relativePath(path),
-    sourceUrl: sourceUrlFor(repositoryUrl, branch, relativePath(path)),
-    kind,
-    progress: progressFrom(text),
-  };
-};
-
-const parseDashboardLedger = async (repositoryUrl, branch, sourceTexts) => {
-  const ledgerPath = join(docsDirectory, "dashboard-plan/status.md");
-  const text = await readText(ledgerPath);
-  const records = [];
-  const rowPattern = /^\|\s*(BQ-\d+)\s*\|\s*`([^`]+)`\s*\|\s*\[([^\]]+)\]\(([^)]+)\)\s*\|/gm;
-  for (const match of text.matchAll(rowPattern)) {
-    const [, id, rawStatus, title, link] = match;
-    const sourcePath = resolve(dirname(ledgerPath), (link || "").split("#")[0]);
-    const sourceText = await readText(sourcePath);
-    if (sourceText)
-      sourceTexts.push({ id, text: sourceText, sourcePath: relativePath(sourcePath) });
-    const status = canonicalStatus[rawStatus] || normalizeStatus(rawStatus);
-    records.push({
-      id,
-      title: cleanText(title),
-      status,
-      statusLabel: statusLabelFrom(rawStatus, status),
-      statusDetail: `Canonical ledger: ${rawStatus}`,
-      group: "Dashboard",
-      lane: sectionParagraph(sourceText, ["Milestone", "Phase", "Lane"]) || "Dashboard backlog",
-      summary: sourceText ? summaryFrom(sourceText) : "No ticket file found.",
-      sourcePath: relativePath(sourcePath),
-      sourceUrl: sourceUrlFor(repositoryUrl, branch, relativePath(sourcePath)),
-      kind: "ledger",
-      progress: progressFrom(sourceText),
-    });
-  }
-  return records;
-};
-
-const sortTickets = (tickets) =>
-  tickets.sort((left, right) => {
-    const statusDifference = statusOrder[left.status] - statusOrder[right.status];
-    return statusDifference || left.id.localeCompare(right.id);
-  });
-
-const parsePlans = async (directoryNames, filesByDirectory, tickets, repositoryUrl, branch) => {
-  const plans = [];
-  for (const directory of directoryNames) {
-    const sourceName = ["README.md", "plan.md", "roadmap.md"].find((name) =>
-      filesByDirectory.get(directory)?.has(name),
-    );
-    if (!sourceName) continue;
-    const sourcePath = join(plansDirectory, directory, sourceName);
-    const sourceText = await readText(sourcePath);
-    const planTickets = tickets.filter((ticket) =>
-      ticket.sourcePath.startsWith(`docs/plans/${directory}/`),
-    );
-    const completeTicketCount = planTickets.filter((ticket) => ticket.status === "complete").length;
-    const rawStatus = rawStatusFrom(sourceText);
-    const status = normalizeStatus(rawStatus);
-    plans.push({
-      id: directory.toUpperCase(),
-      title: firstHeading(sourceText) || humanize(directory),
-      status,
-      statusLabel: statusLabelFrom(rawStatus, status),
-      statusDetail: rawStatus === "Not explicitly stated" ? "" : rawStatus,
-      stream: humanize(directory),
-      ticketCount: planTickets.length,
-      openTicketCount: planTickets.length - completeTicketCount,
-      completeTicketCount,
-      summary: summaryFrom(sourceText),
-      sourcePath: relativePath(sourcePath),
-      sourceUrl: sourceUrlFor(repositoryUrl, branch, relativePath(sourcePath)),
-    });
-  }
-  return plans.sort(
-    (left, right) =>
-      right.openTicketCount - left.openTicketCount || left.title.localeCompare(right.title),
-  );
-};
-
-const parseSpecChanges = async (changeDirectories, repositoryUrl, branch) => {
-  const changes = [];
-  for (const directory of changeDirectories) {
-    const proposalPath = join(changesDirectory, directory, "proposal.md");
-    const tasksPath = join(changesDirectory, directory, "tasks.md");
-    const proposal = await readText(proposalPath);
-    const tasks = await readText(tasksPath);
-    if (!proposal) continue;
-    const marks = [...tasks.matchAll(/^\s*-\s+\[([ xX~!])\]/gm)].map((match) => match[1]);
-    const completeTaskCount = marks.filter((mark) => mark.toLocaleLowerCase() === "x").length;
-    const taskCount = marks.length;
-    const status =
-      taskCount > 0 && completeTaskCount === taskCount
-        ? "complete"
-        : taskCount > 0
-          ? "in-progress"
-          : "planned";
-    changes.push({
-      id: directory,
-      title: firstHeading(proposal) || humanize(directory),
-      status,
-      statusLabel: statusLabels[status],
-      summary: summaryFrom(proposal),
-      taskCount,
-      completeTaskCount,
-      sourcePath: relativePath(proposalPath),
-      sourceUrl: sourceUrlFor(repositoryUrl, branch, relativePath(proposalPath)),
-    });
-  }
-  return changes.sort((left, right) => left.title.localeCompare(right.title));
 };
 
 // Last-good skills data: the committed generated snapshot from the previous
@@ -470,7 +172,7 @@ const main = async () => {
     new Date().toISOString(),
     rootDirectory,
   );
-  const { records: serviceTickets, statuses: serviceStatuses } = await fetchConfiguredServices(
+  const { statuses: serviceStatuses } = await fetchConfiguredServices(
     servicesForSource(config.services, usingSelfRepository && !hasConfig),
   );
 
@@ -506,51 +208,15 @@ const main = async () => {
     lastGood: Array.isArray(previous.skills) ? previous.skills : [],
   });
 
-  const planFiles = (await walk(plansDirectory)).filter((path) => path.endsWith(".md"));
-  const planTicketFiles = planFiles.filter((path) => relativePath(path).includes("/tickets/"));
-  const genericTickets = [];
   const ticketFileTexts = [];
-  for (const path of planTicketFiles) {
+  for (const path of (await walk(plansDirectory)).filter((path) => path.endsWith(".md"))) {
+    if (!relativePath(path).includes("/tickets/")) continue;
     const text = await readText(path);
     if (!text) continue;
-    const record = recordFromFile(path, text, repositoryUrl, branch);
-    if (!record) continue;
-    genericTickets.push(record);
-    ticketFileTexts.push({ id: record.id, text, sourcePath: relativePath(path) });
+    const id = ticketIdFrom(text, path.split(/[\\/]/).pop() || "");
+    if (!id) continue;
+    ticketFileTexts.push({ id, text, sourcePath: relativePath(path) });
   }
-  const dashboardTickets = await parseDashboardLedger(repositoryUrl, branch, ticketFileTexts);
-  const ticketMap = new Map(genericTickets.map((ticket) => [ticket.id, ticket]));
-  for (const ticket of dashboardTickets) ticketMap.set(ticket.id, ticket);
-  for (const ticket of serviceTickets) ticketMap.set(ticket.id, ticket);
-  const tickets = sortTickets([...ticketMap.values()]);
-
-  const planEntries = await readDirectory(plansDirectory);
-  const planDirectoryNames = planEntries
-    .filter((entry) => entry.isDirectory())
-    .map((entry) => entry.name)
-    .sort();
-  const filesByDirectory = new Map();
-  for (const directory of planDirectoryNames) {
-    const prefix = `${join(plansDirectory, directory)}${process.platform === "win32" ? "\\" : "/"}`;
-    const names = new Set(
-      planFiles.filter((path) => path.startsWith(prefix)).map((path) => path.split(/[\\/]/).pop()),
-    );
-    filesByDirectory.set(directory, names);
-  }
-  const plans = await parsePlans(
-    planDirectoryNames,
-    filesByDirectory,
-    tickets,
-    repositoryUrl,
-    branch,
-  );
-
-  const changeEntries = await readDirectory(changesDirectory);
-  const changeDirectories = changeEntries
-    .filter((entry) => entry.isDirectory())
-    .map((entry) => entry.name)
-    .sort();
-  const changes = await parseSpecChanges(changeDirectories, repositoryUrl, branch);
 
   // ADR 0008: one flat top-level blockerEdges list. Repo-level native
   // precedence was already applied tracker-side to the two tracker syntaxes;
@@ -565,7 +231,7 @@ const main = async () => {
     ),
     knownIds: new Set([
       ...tracker.workItems.map((item) => item.id),
-      ...tickets.map((ticket) => ticket.id),
+      ...ticketFileTexts.map((file) => file.id),
     ]),
   });
   // Tracker-side hygiene re-reports over the combined list (cross-source
@@ -577,24 +243,6 @@ const main = async () => {
 
   const sources = [];
   sources.push({ label: "Tracker", path: `github / repo ${repo}` });
-  if (dashboardTickets.length > 0) {
-    sources.push({
-      label: "Status ledger",
-      path: relativePath(join(docsDirectory, "dashboard-plan/status.md")),
-    });
-  }
-  if (planTicketFiles.length > 0) {
-    sources.push({
-      label: "Plan tickets",
-      path: `${relativePath(plansDirectory)}/**/tickets/*.md`,
-    });
-  }
-  if (changes.length > 0) {
-    sources.push({
-      label: "Change proposals",
-      path: `${relativePath(changesDirectory)}/*/`,
-    });
-  }
   // ADR 0009: the decision sources name themselves even when a host repo
   // lacks the convention — the empty entry is the honest report.
   if (decisions.length > 0 || adrCollection.exists) {
@@ -627,13 +275,7 @@ const main = async () => {
       repositoryUrl,
       docsRoot: relativePath(docsDirectory),
       sources,
-      ticketCount: tickets.length,
-      planCount: plans.length,
-      changeCount: changes.length,
     },
-    tickets,
-    plans,
-    changes,
     workItems: tracker.workItems,
     maps: tracker.maps,
     blockerEdges: blockerEdges.edges,
@@ -648,7 +290,7 @@ const main = async () => {
     `import type { OverviewData } from './types';\n\n// Generated by pnpm workbench sync. Do not edit by hand.\nexport const overviewData = ${JSON.stringify(data, null, 2)} satisfies OverviewData;\n`,
   );
   console.log(
-    `Synced ${tickets.length} tickets, ${plans.length} plans, ${changes.length} OpenSpec changes, ${serviceTickets.length} service tasks, and ${skillsCatalog.skills.length} catalog skills.` +
+    `Synced ${tracker.workItems.length} work items, ${tracker.maps.length} maps, ${blockerEdges.edges.length} blocker edges, and ${skillsCatalog.skills.length} catalog skills.` +
       (skillsCatalog.degraded ? " Skills catalog fell back to curated data." : "") +
       (sessions.enabled
         ? ` Sessions: ${sessions.sessions.length} tracked (${sessions.perModel.length} models).`

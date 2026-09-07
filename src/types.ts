@@ -1,18 +1,3 @@
-export const ticketStatuses = [
-  "complete",
-  "in-progress",
-  "ready",
-  "needs-development",
-  "gated",
-  "blocked",
-  "planned",
-  "deferred",
-] as const;
-
-export type TicketStatus = (typeof ticketStatuses)[number];
-
-export const ticketKinds = ["ledger", "plan-ticket", "external"] as const;
-
 export const serviceStatuses = ["connected", "skipped", "error"] as const;
 
 export const skillFlowRoles = [
@@ -133,22 +118,6 @@ export type TrackerMapRecord = {
   title: string;
   url: string;
   ticketIds: readonly string[];
-};
-
-export type TicketRecord = {
-  id: string;
-  title: string;
-  status: TicketStatus;
-  statusLabel: string;
-  statusDetail: string;
-  group: string;
-  lane: string;
-  summary: string;
-  sourcePath: string;
-  sourceUrl: string;
-  kind: (typeof ticketKinds)[number];
-  externalSource?: string;
-  progress: { done: number; total: number };
 };
 
 // ADR 0008: blocker edges are first-class records over namespaced work-item
@@ -308,47 +277,6 @@ export type ArtifactRecord = {
   workItemId: string | null;
 };
 
-export type PlanRecord = {
-  id: string;
-  title: string;
-  status: TicketStatus;
-  statusLabel: string;
-  statusDetail: string;
-  stream: string;
-  ticketCount: number;
-  openTicketCount: number;
-  completeTicketCount: number;
-  summary: string;
-  sourcePath: string;
-  sourceUrl: string;
-};
-
-export type SpecChangeRecord = {
-  id: string;
-  title: string;
-  status: TicketStatus;
-  statusLabel: string;
-  summary: string;
-  taskCount: number;
-  completeTaskCount: number;
-  sourcePath: string;
-  sourceUrl: string;
-};
-
-export const sourceFilters = ["all", "tickets", "plans", "specs"] as const;
-
-export const overviewViews = ["all", "grilling", "spec", "tickets", "implementation"] as const;
-
-export type OverviewView = (typeof overviewViews)[number];
-
-export type OverviewSearch = {
-  q: string;
-  status: TicketStatus | "all";
-  source: (typeof sourceFilters)[number];
-  stream: string;
-  view: OverviewView;
-};
-
 export type OverviewSource = {
   label: string;
   path: string;
@@ -449,13 +377,7 @@ export type OverviewData = {
     repositoryUrl: string;
     docsRoot: string;
     sources: readonly OverviewSource[];
-    ticketCount: number;
-    planCount: number;
-    changeCount: number;
   };
-  tickets: readonly TicketRecord[];
-  plans: readonly PlanRecord[];
-  changes: readonly SpecChangeRecord[];
   workItems: readonly WorkItemRecord[];
   maps: readonly TrackerMapRecord[];
   blockerEdges: readonly BlockerEdgeRecord[];

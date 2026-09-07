@@ -15,17 +15,11 @@ import {
   serviceStatuses,
   skillFlowEdgeKinds,
   skillFlowRoles,
-  ticketKinds,
-  ticketStatuses,
   trackerCategories,
   triageStates,
   wayfinderKinds,
   workflowPhases,
 } from "./types.ts";
-export const TicketStatusSchema = Schema.Literals(ticketStatuses);
-
-export const TicketKindSchema = Schema.Literals(ticketKinds);
-
 export const ServiceStatusSchema = Schema.Literals(serviceStatuses);
 
 export const SkillFlowRoleSchema = Schema.NullOr(Schema.Literals(skillFlowRoles));
@@ -81,22 +75,6 @@ export const TriageStateSchema = Schema.Literals(triageStates);
 export const WayfinderKindSchema = Schema.NullOr(Schema.Literals(wayfinderKinds));
 
 export const TrackerCategorySchema = Schema.NullOr(Schema.Literals(trackerCategories));
-
-export const TicketRecordSchema = Schema.Struct({
-  id: Schema.String,
-  title: Schema.String,
-  status: TicketStatusSchema,
-  statusLabel: Schema.String,
-  statusDetail: Schema.String,
-  group: Schema.String,
-  lane: Schema.String,
-  summary: Schema.String,
-  sourcePath: Schema.String,
-  sourceUrl: Schema.String,
-  kind: TicketKindSchema,
-  externalSource: Schema.optional(Schema.String),
-  progress: Schema.Struct({ done: Schema.Number, total: Schema.Number }),
-});
 
 export const BlockerEdgeSourceSchema = Schema.Literals(blockerEdgeSources);
 
@@ -259,33 +237,6 @@ export const EdgeWriteResultSchema = Schema.Struct({
   state: WorkflowStatePayloadSchema,
 });
 
-export const PlanRecordSchema = Schema.Struct({
-  id: Schema.String,
-  title: Schema.String,
-  status: TicketStatusSchema,
-  statusLabel: Schema.String,
-  statusDetail: Schema.String,
-  stream: Schema.String,
-  ticketCount: Schema.Number,
-  openTicketCount: Schema.Number,
-  completeTicketCount: Schema.Number,
-  summary: Schema.String,
-  sourcePath: Schema.String,
-  sourceUrl: Schema.String,
-});
-
-export const SpecChangeRecordSchema = Schema.Struct({
-  id: Schema.String,
-  title: Schema.String,
-  status: TicketStatusSchema,
-  statusLabel: Schema.String,
-  summary: Schema.String,
-  taskCount: Schema.Number,
-  completeTaskCount: Schema.Number,
-  sourcePath: Schema.String,
-  sourceUrl: Schema.String,
-});
-
 export const WorkbenchThemeSchema = Schema.Struct({
   ink: Schema.String,
   muted: Schema.String,
@@ -386,13 +337,7 @@ export const OverviewDataSchema = Schema.Struct({
     repositoryUrl: Schema.String,
     docsRoot: Schema.String,
     sources: Schema.Array(OverviewSourceSchema),
-    ticketCount: Schema.Number,
-    planCount: Schema.Number,
-    changeCount: Schema.Number,
   }),
-  tickets: Schema.Array(TicketRecordSchema),
-  plans: Schema.Array(PlanRecordSchema),
-  changes: Schema.Array(SpecChangeRecordSchema),
   workItems: Schema.Array(WorkItemRecordSchema),
   maps: Schema.Array(TrackerMapRecordSchema),
   blockerEdges: Schema.Array(BlockerEdgeRecordSchema),
@@ -410,10 +355,6 @@ export const parseOverviewData: (input: unknown) => OverviewData = Schema.decode
   OverviewDataSchema,
   { onExcessProperty: "error" },
 );
-
-export const parseTicketRecord = Schema.decodeUnknownSync(TicketRecordSchema, {
-  onExcessProperty: "error",
-});
 
 export const parseSkillRecord = Schema.decodeUnknownSync(SkillRecordSchema, {
   onExcessProperty: "error",
