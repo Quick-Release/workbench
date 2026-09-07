@@ -1,5 +1,18 @@
 # @quick-release/workbench
 
+## 0.3.0
+
+### Minor Changes
+
+- 3b65273: Land the blocker graph view at `/blockers` (spec #54, ticket #61). The approved prototype ports behind the GraphView seam: depth columns from a pure longest-path layout (blockers left, blocked right), closed tickets contracted behind an expand toggle, frontier highlighting, and the edge grammar — solid amber open gates, dashed gray satisfied edges, dashed red broken references that fail closed as warning nodes. The execution seam gains blocker-edge add/remove endpoints over the native blocked-by API (removal confirmed, destructive), and the shared issue panel carries both actions, degrading to copy-the-command on static builds. Effort, focus, and expand ride the `?effort`/`?focus`/`?expand` params; the panel's show-in-graph jump lands focused.
+- bbf69e1: Retire the legacy ledger (spec #54, ticket #66). The eight-value ticket status vocabulary, the truncated dependencies display string, the ledger snapshot arrays (tickets, plans, spec changes) and their parsers — the normalizeStatus string heuristics, the dashboard-plan ledger row parser, and the legacy local `Status:` line mapping — and the TicketTable, PlanTable, and SpecPanel components with their tests are deleted; the Overview keeps the next-action hero, the frontier strip, in-flight rows, and the sync trigger, with the workflow-views toggle and status/stream/source lenses gone. Display derives entirely from tracker-backed records (work items, maps, blocker edges, decisions, artifacts); local ticket files remain an edge-declaring surface, contributing ids and `Blocked by:` lines only. The generic service adapters stay in place and keep reporting their sync statuses and counts into the snapshot (only the retired Notion Dependencies read is removed), but their task records no longer enter the snapshot. The README and header badge state the control-surface posture — live reads and actions through the one validated localhost execution seam (ADR 0005); the telemetry contract is unchanged.
+- cb556cc: Land the Skill flow view at /flow with the skills-ecosystem Catalog (spec #54, ticket #58). Sync fetches the Catalog from mattpocock/skills (one recursive trees call, fail-open to last-good data and then the curated offline fallback) and snapshots installed state for static degradation; the execution seam serves the Catalog joined with live disk state and gains a per-skill install endpoint. The flow graph renders hand-rolled SVG behind the new GraphView seam with pure deterministic layout modules ported from the approved prototype; uninstalled entries dim, upstream-new skills land on the shelf, favorites become a filter, and the skills route retires for one Catalog home.
+
+### Patch Changes
+
+- b63b94f: Load environment variables through dotenvx. Package scripts (`sync`, `worker:*`, and the demo entries) run via `dotenvx run`; the new gitignored `.env` is seeded from `.env.example` on first run, and the committed `.env.demo` replaces the inline `WORKBENCH_DEMO_SOURCE=1` prefix. Dev-workflow only — the published CLI and host repositories are unchanged.
+- 8326189: The `pnpm test` gate is green again on Node 22 and 24 (issue #69). The init suite drives clack through synthesized keypress events instead of raw keystroke bytes, whose terminal decoding garbled control keys on mock streams and deadlocked the interactive flow. Cancelling at the token-env prompt no longer crashes `runInit` with a TypeError; the cancel flows out to the caller's `isCancel` check like every other prompt.
+
 ## 0.2.1
 
 ### Patch Changes
