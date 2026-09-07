@@ -151,3 +151,50 @@ it("recomputes on demand after a missed tick", async () => {
   expect(body.digest.total).toBe(2);
   expect(body.previous.total).toBe(1);
 });
+
+it("answers 405 for non-GET methods on the digest route", async () => {
+  // Computing and persisting a digest is a read: a POST must not trigger a
+  // run, so the route answers method-not-allowed instead.
+  const methodRepo = `/agents/submission-review-agent/${encodeURIComponent("git@github.com:acme/methods.git")}`;
+  const response = await SELF.fetch(`https://example.com${methodRepo}`, {
+    method: "POST",
+    headers: { Authorization: "Bearer test-ingest-token" },
+  });
+  expect(response.status).toBe(405);
+  expect(response.headers.get("allow")).toBe("GET");
+  expect(await response.json()).toEqual({ ok: false, error: "method not allowed" });
+});
+
+it("answers 400 for a malformed repository identity", async () => {
+  // A percent-encoded segment that does not decode names no repository;
+  // it must be a client error, not an unhandled 500 behind the gate.
+  const response = await SELF.fetch("https://example.com/agents/submission-review-agent/%zz", {
+    headers: { Authorization: "Bearer test-ingest-token" },
+  });
+  expect(response.status).toBe(400);
+  expect(await response.json()).toEqual({ ok: false, error: "malformed repository identity" });
+});
+
+it("serializes concurrent digest runs into one previous-run chain", async () => {
+  // Input gates do not span the D1 round-trip, so unsynchronized concurrent
+  // runs can all observe an empty history and persist out of order. The
+  // runs must land one at a time: exactly the first has no predecessor, and
+  // every later run's previous is the run just before it.
+  const raceRepo = "git@github.com:acme/race-serialization.git";
+  const raceRoute = `/agents/submission-review-agent/${encodeURIComponent(raceRepo)}`;
+  await submit(raceRepo, "f4".repeat(20), "feat: one pending row", hoursAgo(1));
+
+  const bodies = await Promise.all(
+    Array.from({ length: 6 }, () => requestDigest(raceRoute).then((r) => r.json())),
+  );
+  for (const body of bodies) expect(body.digest.total).toBe(1);
+
+  const byTime = [...bodies].sort((left, right) =>
+    left.digest.computedAt < right.digest.computedAt ? -1 : 1,
+  );
+  expect(byTime[0].previous).toBeNull();
+  for (let i = 1; i < byTime.length; i++) {
+    expect(byTime[i].previous.total).toBe(1);
+    expect(byTime[i].previous.computedAt).toBe(byTime[i - 1].digest.computedAt);
+  }
+});

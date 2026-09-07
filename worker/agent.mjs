@@ -27,8 +27,13 @@ const DAY_SECONDS = 86_400;
 export class SubmissionReviewAgent extends Agent {
   // The repository identity this instance owns: the URL-carried instance
   // name, decoded back to the repo remote the submissions table keys on.
-  get repo() {
-    return decodeURIComponent(this.name);
+  // Null when the segment is not valid percent-encoding — it names no repo.
+  repoIdentity() {
+    try {
+      return decodeURIComponent(this.name);
+    } catch {
+      return null;
+    }
   }
 
   async onStart() {
@@ -37,27 +42,39 @@ export class SubmissionReviewAgent extends Agent {
     await this.scheduleEvery(intervalSeconds, "digestTick");
   }
 
-  async onRequest() {
-    const digest = await this.persistDigest(this.repo);
-    return Response.json({
-      ok: true,
-      repo: this.repo,
-      digest: digest.current,
-      previous: digest.previous,
-    });
+  async onRequest(request) {
+    if (request.method !== "GET") {
+      return Response.json(
+        { ok: false, error: "method not allowed" },
+        { status: 405, headers: { Allow: "GET" } },
+      );
+    }
+    const repo = this.repoIdentity();
+    if (repo === null) {
+      return Response.json({ ok: false, error: "malformed repository identity" }, { status: 400 });
+    }
+    const digest = await this.persistDigest(repo);
+    return Response.json({ ok: true, repo, digest: digest.current, previous: digest.previous });
   }
 
   // The scheduler's named callback (#33): the same fetch, compute, and
-  // persist as the on-demand path, with no request behind it.
+  // persist as the on-demand path, with no request behind it. An instance
+  // whose identity never decoded persists nothing.
   async digestTick() {
-    await this.persistDigest(this.repo);
+    const repo = this.repoIdentity();
+    if (repo !== null) await this.persistDigest(repo);
   }
 
   async persistDigest(repo) {
-    const { results } = await this.env.D1_DB.prepare(PENDING_SUBMISSIONS).bind(repo).all();
-    const current = computeDigest(results, new Date().toISOString());
-    const previous = (await this.ctx.storage.get(LAST_DIGEST)) ?? null;
-    await this.ctx.storage.put(LAST_DIGEST, current);
-    return { current, previous };
+    // One run at a time per repository: input gates don't span the D1
+    // round-trip, so unsynchronized concurrent runs can interleave and
+    // scramble the previous-run chain. The tick serializes the same way.
+    return this.ctx.blockConcurrencyWhile(async () => {
+      const { results } = await this.env.D1_DB.prepare(PENDING_SUBMISSIONS).bind(repo).all();
+      const current = computeDigest(results, new Date().toISOString());
+      const previous = (await this.ctx.storage.get(LAST_DIGEST)) ?? null;
+      await this.ctx.storage.put(LAST_DIGEST, current);
+      return { current, previous };
+    });
   }
 }

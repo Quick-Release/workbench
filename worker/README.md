@@ -19,11 +19,13 @@ HTTP seam in workerd (`*.runtime.test.mjs`).
   route (ticket #31), served by the `SubmissionReviewAgent` Durable
   Object (SQLite-backed, one instance per repository identity, carried
   percent-encoded in the URL). It mounts strictly behind the same bearer
-  token as the POST routes; without a token it answers `401`. Waking an
-  agent arms its SDK scheduler with one daily tick (#33) that persists
-  the digest with no request; the interval defaults to 86,400 seconds
-  and is overridable with the `DIGEST_TICK_INTERVAL_SECONDS` variable
-  (the workerd suite drives it at one second).
+  token as the POST routes; without a token it answers `401`. Only `GET`
+  computes a run — other methods answer `405` — and a repository identity
+  that does not decode answers `400`. Waking an agent arms its SDK
+  scheduler with one daily tick (#33) that persists the digest with no
+  request; the interval defaults to 86,400 seconds and is overridable with
+  the `DIGEST_TICK_INTERVAL_SECONDS` variable (the workerd suite drives it
+  at one second).
 - `GET /healthz` — liveness, no auth.
 
 Both POST routes require `Authorization: Bearer <token>`; the token is the
