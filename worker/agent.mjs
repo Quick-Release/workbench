@@ -4,12 +4,13 @@
 // it fetches the repository's pending submissions through the existing D1
 // binding, computes the digest with the pure runtime-free function, and
 // persists each run in its own SQLite-backed storage so the next request
-// can report the previous one (#32). Waking the agent arms the SDK's
-// scheduler with one daily tick per repository (#33) — idempotent across
-// wakes — so the backlog is measured even when nobody asks; a missed tick
-// self-corrects on the next on-demand request, which recomputes from the
-// current rows. The tick interval is a plain binding so the workerd suite
-// can drive it at one second; production falls back to the daily default.
+// can report the previous one (#32). Waking the agent — its first
+// authenticated request — arms the SDK's scheduler with one daily tick per
+// repository (#33), idempotent across wakes, so pending Submissions are
+// measured even when nobody asks; a missed tick self-corrects on the next
+// on-demand request, which recomputes from the current rows. The tick
+// interval is a plain binding so the workerd suite can drive it at one
+// second; production falls back to the daily default.
 // Lives apart from ingest.mjs so the runtime-free suite never loads the
 // Agents SDK.
 
@@ -24,6 +25,12 @@ const LAST_DIGEST = "last-digest";
 const DAY_SECONDS = 86_400;
 
 export class SubmissionReviewAgent extends Agent {
+  // The repository identity this instance owns: the URL-carried instance
+  // name, decoded back to the repo remote the submissions table keys on.
+  get repo() {
+    return decodeURIComponent(this.name);
+  }
+
   async onStart() {
     const override = Number(this.env?.DIGEST_TICK_INTERVAL_SECONDS);
     const intervalSeconds = Number.isInteger(override) && override > 0 ? override : DAY_SECONDS;
@@ -31,15 +38,19 @@ export class SubmissionReviewAgent extends Agent {
   }
 
   async onRequest() {
-    const repo = decodeURIComponent(this.name);
-    const digest = await this.persistDigest(repo);
-    return Response.json({ ok: true, repo, digest: digest.current, previous: digest.previous });
+    const digest = await this.persistDigest(this.repo);
+    return Response.json({
+      ok: true,
+      repo: this.repo,
+      digest: digest.current,
+      previous: digest.previous,
+    });
   }
 
   // The scheduler's named callback (#33): the same fetch, compute, and
   // persist as the on-demand path, with no request behind it.
   async digestTick() {
-    await this.persistDigest(decodeURIComponent(this.name));
+    await this.persistDigest(this.repo);
   }
 
   async persistDigest(repo) {
