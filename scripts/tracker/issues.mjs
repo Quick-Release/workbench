@@ -14,7 +14,7 @@ const issuesUrl = (apiBase, repo, path = "", params = {}) => {
   return url;
 };
 
-const headers = (token) => ({
+const githubHeaders = (token) => ({
   Accept: "application/vnd.github+json",
   "X-GitHub-Api-Version": API_VERSION,
   Authorization: `Bearer ${token}`,
@@ -22,7 +22,7 @@ const headers = (token) => ({
 
 // The standard tracker REST headers, shared with the other read layers
 // (pull requests) so the API version stays pinned in one place.
-export const githubHeaders = headers;
+export { githubHeaders };
 
 const isIssue = (entry) =>
   entry && typeof entry === "object" && typeof entry.number === "number" && !entry.pull_request;
@@ -36,7 +36,12 @@ const pagedIssues = async ({ fetchImpl, token, urlFor, maxPages, what }) => {
   for (let page = 1, hasMore = true; hasMore && page <= maxPages; page += 1) {
     let payload;
     try {
-      payload = await requestJson(fetchImpl, urlFor(page), { headers: headers(token) }, "tracker");
+      payload = await requestJson(
+        fetchImpl,
+        urlFor(page),
+        { headers: githubHeaders(token) },
+        "tracker",
+      );
     } catch (error) {
       warnings.push(
         issues.length === 0
@@ -114,7 +119,7 @@ export const fetchIssue = async ({ repo, token, apiBase, issueNumber, fetchImpl 
     const payload = await requestJson(
       fetchImpl,
       issuesUrl(apiBase, repo, `/${issueNumber}`),
-      { headers: headers(token) },
+      { headers: githubHeaders(token) },
       "tracker",
     );
     return isIssue(payload) ? { issue: payload, warnings: [] } : { issue: null, warnings: [] };
@@ -147,7 +152,7 @@ export const fetchIssueComments = async ({
       payload = await requestJson(
         fetchImpl,
         issuesUrl(apiBase, repo, `/${issueNumber}/comments`, { per_page: PER_PAGE, page }),
-        { headers: headers(token) },
+        { headers: githubHeaders(token) },
         "tracker",
       );
     } catch (error) {

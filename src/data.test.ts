@@ -18,6 +18,7 @@ import {
   parseIssueEditRequest,
   parseIssueEditResult,
   parseOverviewData,
+  parsePullRequestRecord,
   parseSkillClassification,
   parseSkillFlowEdge,
   parseSkillRecord,
@@ -173,6 +174,52 @@ describe("overview data boundary", () => {
   it("rejects data missing the artifacts key entirely", () => {
     const { artifacts: _omitted, ...withoutArtifacts } = generatedData;
     expectRejected(withoutArtifacts, /artifacts/);
+  });
+
+  it("rejects data missing the pull requests key entirely", () => {
+    const { pullRequests: _omitted, ...withoutPullRequests } = generatedData;
+    expectRejected(withoutPullRequests, /pullRequests/);
+  });
+
+  it("rejects a pull request record with an excess property", () => {
+    const pullRequest = {
+      number: 80,
+      title: "Version Packages",
+      url: "https://github.com/Quick-Release/workbench/pull/80",
+      head: "changeset-release/main",
+      base: "main",
+      author: "github-actions[bot]",
+      isDraft: false,
+      body: "This PR was opened by the Changesets release action.",
+    };
+    const drifted: unknown = {
+      ...generatedData,
+      pullRequests: [{ ...pullRequest, merged: true }],
+    };
+    expectRejected(drifted, /merged/);
+  });
+
+  it("rejects a pull request record missing its draft flag", () => {
+    const pullRequest = {
+      number: 80,
+      title: "Version Packages",
+      url: "https://github.com/Quick-Release/workbench/pull/80",
+      head: "changeset-release/main",
+      base: "main",
+      author: "github-actions[bot]",
+      body: "This PR was opened by the Changesets release action.",
+    };
+    const drifted: unknown = {
+      ...generatedData,
+      pullRequests: [pullRequest],
+    };
+    expectRejected(drifted, /isDraft/);
+  });
+
+  it("carries pull requests from the generated snapshot", () => {
+    expect(Array.isArray(generatedData.pullRequests)).toBe(true);
+    for (const record of generatedData.pullRequests)
+      expect(parsePullRequestRecord(record)).toBeTruthy();
   });
 
   it("carries decisions and artifacts from the generated snapshot", () => {

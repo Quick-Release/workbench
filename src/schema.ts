@@ -425,6 +425,17 @@ export const parseArtifactRecord = Schema.decodeUnknownSync(ArtifactRecordSchema
   onExcessProperty: "error",
 });
 
+export const parsePullRequestRecord: (input: unknown) => {
+  number: number;
+  title: string;
+  url: string;
+  head: string;
+  base: string;
+  author: string;
+  isDraft: boolean;
+  body: string;
+} = Schema.decodeUnknownSync(PullRequestRecordSchema, { onExcessProperty: "error" });
+
 export const parseWorkflowStatePayload = Schema.decodeUnknownSync(WorkflowStatePayloadSchema, {
   onExcessProperty: "error",
 });
