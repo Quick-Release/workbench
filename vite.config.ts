@@ -65,6 +65,11 @@ export default defineConfig({
               bindings: {
                 TELEMETRY_INGEST_TOKEN: "test-ingest-token",
                 TEST_MIGRATIONS: workerD1Migrations,
+                // The agent's daily tick runs on the SDK scheduler, which
+                // only fires rows past their scheduled time; the one-second
+                // interval makes a forced alarm deterministically find it
+                // due (production defaults to 86,400 seconds).
+                DIGEST_TICK_INTERVAL_SECONDS: "1",
               },
             },
           }),

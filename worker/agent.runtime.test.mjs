@@ -1,15 +1,18 @@
-import { applyD1Migrations, env, SELF } from "cloudflare:test";
+import { applyD1Migrations, env, runDurableObjectAlarm, SELF } from "cloudflare:test";
 import { beforeAll, expect, it } from "vitest";
 
-// The agent route's HTTP contract (tickets #31 and #32), driven inside the
-// real workerd runtime. The Agents SDK routes /agents/<agent>/<instance> to
-// a Durable Object named by the URL — one instance per repository identity,
-// carried percent-encoded because repo remotes contain slashes — but the
-// route mounts strictly after the same constant-time bearer-token check
-// that guards the ingest routes: agent endpoints are never a wider surface
-// than the ingest API (ADR 0001). The digest itself is exercised through
-// the real ingest path: submissions go in via POST /submissions, the agent
-// reads them back through the same D1 binding production uses.
+// The agent route's HTTP contract (tickets #31, #32, and #33), driven inside
+// the real workerd runtime. The Agents SDK routes /agents/<agent>/<instance>
+// to a Durable Object named by the URL — one instance per repository
+// identity, carried percent-encoded because repo remotes contain slashes —
+// but the route mounts strictly after the same constant-time bearer-token
+// check that guards the ingest routes: agent endpoints are never a wider
+// surface than the ingest API (ADR 0001). The digest itself is exercised
+// through the real ingest path: submissions go in via POST /submissions,
+// the agent reads them back through the same D1 binding production uses.
+// The daily tick is exercised through the runtime's alarm invocation: the
+// test binding runs the tick every second, so a forced alarm deterministically
+// finds it due.
 
 const REPO = "git@github.com:acme/widgets.git";
 const AGENT_ROUTE = `/agents/submission-review-agent/${encodeURIComponent(REPO)}`;
@@ -101,4 +104,50 @@ it("recomputes on demand and reports the previous run", async () => {
   expect(secondBody.previous.total).toBe(1);
   expect(secondBody.previous.computedAt).toBe(firstBody.digest.computedAt);
   expect(secondBody.previous.items.map((item) => item.sha)).not.toContain("e".repeat(40));
+});
+
+it("persists a digest on the scheduled tick without any request", async () => {
+  // A repo of its own, so no other test's digest runs can masquerade as
+  // this tick's. Waking the agent once through the authenticated route
+  // arms the schedule; the tick itself then runs alarm-driven, with no
+  // digest-serving request involved.
+  const tickRepo = "git@github.com:acme/tick-runs.git";
+  const tickRoute = `/agents/submission-review-agent/${encodeURIComponent(tickRepo)}`;
+  const tickStub = env.SubmissionReviewAgent.get(
+    env.SubmissionReviewAgent.idFromName(encodeURIComponent(tickRepo)),
+  );
+
+  await submit(tickRepo, "f0".repeat(20), "feat: before arming", hoursAgo(2));
+  const armedBody = await (await requestDigest(tickRoute)).json();
+  expect(armedBody.digest.total).toBe(1);
+
+  // Past the one-second test interval, the forced alarm finds the tick due
+  // and it persists the digest from the rows as they are now — a request
+  // to the agent route is never made.
+  await submit(tickRepo, "f1".repeat(20), "feat: before the tick", hoursAgo(1));
+  await new Promise((resolve) => setTimeout(resolve, 1_100));
+  expect(await runDurableObjectAlarm(tickStub)).toBe(true);
+
+  const nextBody = await (await requestDigest(tickRoute)).json();
+  expect(nextBody.digest.total).toBe(2);
+  // The only run persisted between the two requests was the tick's: its
+  // digest already counted the second submission.
+  expect(nextBody.previous.total).toBe(2);
+  expect(nextBody.previous.computedAt).not.toBe(armedBody.digest.computedAt);
+});
+
+it("recomputes on demand after a missed tick", async () => {
+  // The scheduler is an optimization, never a correctness dependency: with
+  // the schedule armed but the tick not fired, the on-demand request still
+  // computes from the current pending rows.
+  const missedRepo = "git@github.com:acme/missed-ticks.git";
+  const missedRoute = `/agents/submission-review-agent/${encodeURIComponent(missedRepo)}`;
+  await submit(missedRepo, "f2".repeat(20), "feat: at arming", hoursAgo(2));
+  const armedBody = await (await requestDigest(missedRoute)).json();
+  expect(armedBody.digest.total).toBe(1);
+
+  await submit(missedRepo, "f3".repeat(20), "feat: after arming, unticked", hoursAgo(1));
+  const body = await (await requestDigest(missedRoute)).json();
+  expect(body.digest.total).toBe(2);
+  expect(body.previous.total).toBe(1);
 });
