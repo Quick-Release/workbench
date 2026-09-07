@@ -1,11 +1,21 @@
 import { useRef, useState } from "react";
 import { GitPullRequest } from "lucide-react";
 
-import { DraftPanel } from "@/components/DraftPanel";
+import { DraftPanel, UnconfiguredHint } from "@/components/DraftPanel";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { draftingState, idleState, mapDraftResponse, type DraftState } from "@/lib/draft-state";
+import {
+  boardState,
+  emptyBoard,
+  failDraft,
+  NETWORK_ERROR,
+  resolveDraft,
+  startDraft,
+  type AiDraftPayload,
+  type DraftBoard,
+  type DraftState,
+} from "@/lib/draft-state";
 import type { PullRequestRecord } from "@/types";
 
 // The pull-requests page (ticket #38): the open pull requests of the host
@@ -14,10 +24,9 @@ import type { PullRequestRecord } from "@/types";
 // and the request carries nothing but the PR number — the server assembles
 // the prompt from its own records (tickets #37, #79). `aiConfigured` is the
 // health probe's verdict, passed in as data: null is "unknown yet", false
-// renders the configuration hint instead of a broken action.
-
-const NETWORK_ERROR =
-  "could not reach the draft endpoint — is `pnpm dev` running with the AI middleware loaded?";
+// renders the configuration hint instead of a broken action. All draft
+// state decisions live in the pure board (src/lib/draft-state.ts); this
+// container only fires the fetch and hands events back.
 
 function PullRequestRow({
   record,
@@ -76,24 +85,18 @@ export function PullRequestsPage({
   pullRequests: readonly PullRequestRecord[];
   aiConfigured: boolean | null;
 }) {
-  const [drafts, setDrafts] = useState<Record<number, DraftState>>({});
-  const controllerRef = useRef<AbortController | null>(null);
-  const inFlightRef = useRef<number | null>(null);
+  const [board, setBoard] = useState<DraftBoard>(emptyBoard);
+  // The live session: the abort handle for the in-flight request plus the
+  // token the board handed it, so its resolution can be identified. Refs,
+  // not state — they update synchronously across rapid clicks.
+  const sessionRef = useRef<{ controller: AbortController; token: number } | null>(null);
 
-  const startDraft = (pr: number) => {
-    // One draft in flight at a time: starting another aborts the previous
-    // request and resets its row, so the stale response — rejected or
-    // arrived late — can never clobber the newer panel. Every set below is
-    // guarded by controller ownership for the same reason.
-    controllerRef.current?.abort();
-    const previous = inFlightRef.current;
-    if (previous !== null && previous !== pr) {
-      setDrafts((current) => ({ ...current, [previous]: idleState }));
-    }
+  const runDraft = (pr: number) => {
+    sessionRef.current?.controller.abort();
     const controller = new AbortController();
-    controllerRef.current = controller;
-    inFlightRef.current = pr;
-    setDrafts((current) => ({ ...current, [pr]: draftingState }));
+    const token = (sessionRef.current?.token ?? 0) + 1;
+    sessionRef.current = { controller, token };
+    setBoard((current) => startDraft(current, pr));
 
     void (async () => {
       try {
@@ -103,20 +106,10 @@ export function PullRequestsPage({
           body: JSON.stringify({ pr }),
           signal: controller.signal,
         });
-        const payload = (await response.json().catch(() => null)) as {
-          title?: unknown;
-          body?: unknown;
-          message?: unknown;
-          error?: unknown;
-        } | null;
-        if (controllerRef.current !== controller) return;
-        setDrafts((current) => ({ ...current, [pr]: mapDraftResponse(response.status, payload) }));
+        const payload = (await response.json().catch(() => null)) as AiDraftPayload;
+        setBoard((current) => resolveDraft(current, pr, token, response.status, payload));
       } catch {
-        if (controllerRef.current !== controller) return;
-        setDrafts((current) => ({ ...current, [pr]: { phase: "error", message: NETWORK_ERROR } }));
-      } finally {
-        if (controllerRef.current === controller) controllerRef.current = null;
-        if (inFlightRef.current === pr) inFlightRef.current = null;
+        setBoard((current) => failDraft(current, pr, token, NETWORK_ERROR));
       }
     })();
   };
@@ -134,8 +127,7 @@ export function PullRequestsPage({
       </p>
       {aiConfigured === false && (
         <p data-slot="ai-unconfigured" className="text-sm text-muted-foreground">
-          No model provider key is configured — set <code>ANTHROPIC_API_KEY</code> in{" "}
-          <code>.env</code> and restart <code>pnpm dev</code> to enable drafting.
+          <UnconfiguredHint />
         </p>
       )}
       {pullRequests.length === 0 ? (
@@ -155,9 +147,9 @@ export function PullRequestsPage({
                 <PullRequestRow
                   key={record.number}
                   record={record}
-                  state={drafts[record.number] ?? idleState}
+                  state={boardState(board, record.number)}
                   aiConfigured={aiConfigured}
-                  onStart={startDraft}
+                  onStart={runDraft}
                 />
               ))}
             </ul>

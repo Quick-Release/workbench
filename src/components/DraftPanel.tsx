@@ -4,6 +4,15 @@ import { Check, Copy, LoaderCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { DraftState } from "@/lib/draft-state";
 
+// The not-configured copy lives here once; the panel's hint state and the
+// page's banner render the same sentence (ticket #38).
+export const UnconfiguredHint = () => (
+  <>
+    No model provider key is configured — set <code>ANTHROPIC_API_KEY</code> in <code>.env</code>{" "}
+    and restart <code>pnpm dev</code> to enable drafting.
+  </>
+);
+
 // The draft panel (ticket #38) is deliberately presentational: its whole
 // state arrives as one data prop, so the server-render tests can place it
 // in any state and the container owns only the fetch wiring. The host
@@ -17,7 +26,8 @@ export function DraftPanel({ state }: { state: DraftState }) {
     if (state.phase !== "done") return;
     void navigator.clipboard
       .writeText(`${state.title}\n\n${state.body}`)
-      .then(() => setCopied(true));
+      .then(() => setCopied(true))
+      .catch(() => setCopied(false));
   };
 
   return (
@@ -55,8 +65,7 @@ export function DraftPanel({ state }: { state: DraftState }) {
 
       {state.phase === "unconfigured" && (
         <p data-slot="draft-hint" className="text-muted-foreground">
-          No model provider key is configured — set <code>ANTHROPIC_API_KEY</code> in{" "}
-          <code>.env</code> and restart <code>pnpm dev</code> to enable drafting.
+          <UnconfiguredHint />
         </p>
       )}
     </div>
