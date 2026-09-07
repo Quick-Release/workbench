@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { match, strictEqual } from "node:assert";
 import test from "node:test";
 import { Readable, Writable } from "node:stream";
@@ -20,8 +20,8 @@ const withRoot = async (fn) => {
   }
 };
 
-// Mock stream doubles following the pattern of clack's own suites: a push-driven
-// Readable that emits keypress bytes, and a Writable that captures everything.
+// Mock stream doubles following the pattern of clack's own suites: an inert
+// Readable for prompts to attach to, and a Writable that captures everything.
 class MockWritable extends Writable {
   chunks = [];
   _write(chunk, _encoding, callback) {
@@ -41,14 +41,42 @@ const mockStreams = () => ({ input: new MockReadable(), output: new MockWritable
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+// Translate one keystroke byte into the keypress event a terminal would emit
+// for it. Events are synthesized instead of pushing raw bytes because the byte
+// path rides readline's terminal decoding, which drops or garbles control keys
+// on in-memory streams and deadlocks the flow (#69).
+const keypresses = function* (keys) {
+  for (let i = 0; i < keys.length;) {
+    if (keys.startsWith("\x1b[B", i)) {
+      yield ["", { name: "down", sequence: "\x1b[B" }];
+      i += 3;
+      continue;
+    }
+    const ch = keys[i];
+    const named =
+      ch === "\r"
+        ? "return"
+        : ch === "\x03"
+          ? "c"
+          : ch === "\x1b"
+            ? "escape"
+            : ch === " "
+              ? "space"
+              : ch;
+    // Named keys other than space carry an empty payload like clack's own
+    // suites do, so they can never masquerade as typed text; space keeps its
+    // character so a prompt that types it inserts it, while clack still
+    // dispatches the multiselect toggle from the key's name.
+    yield [named === ch || named === "space" ? ch : "", { name: named, sequence: ch }];
+    i += 1;
+  }
+};
+
 // Send one batch of keystrokes, giving the active prompt time to consume them.
 const submit = async (input, keys) => {
   await wait(15);
-  input.push(keys);
+  for (const [ch, key] of keypresses(keys)) input.emit("keypress", ch, key);
 };
-
-// Clear a pre-filled text field (excess backspaces are no-ops), then type.
-const clearAndType = async (input, keys) => submit(input, `\x7f`.repeat(80) + keys);
 
 const assertNoConfig = async (directory) => {
   await stat(join(directory, "workbench.config.json")).then(
@@ -77,11 +105,13 @@ test("happy path writes a config that loads through the existing loader", async 
     const { input, output } = mockStreams();
     const flow = runInit({ rootDirectory: directory, input, output, interactive: true });
 
-    // projectName → repositoryUrl → multiselect (toggle github) → repo → tokenEnv → add another? No
-    await clearAndType(input, "My Project\r");
-    await clearAndType(input, "https://github.com/example/project/\r");
+    // projectName (accept the directory-name default) → repositoryUrl (typed) →
+    // multiselect (toggle github) → repo (accept the URL-inferred default) →
+    // tokenEnv (typed) → add another? No
+    await submit(input, "\r");
+    await submit(input, "https://github.com/example/project\r");
     await submit(input, " \r");
-    await clearAndType(input, "example/other\r");
+    await submit(input, "\r");
     await submit(input, "GITHUB_TOKEN\r");
     await submit(input, "\r");
 
@@ -91,11 +121,11 @@ test("happy path writes a config that loads through the existing loader", async 
 
     // The oracle: whatever init wrote must load and normalize via the loader.
     const config = await loadWorkbenchConfig(directory);
-    strictEqual(config.projectName, "My Project");
+    strictEqual(config.projectName, basename(directory));
     strictEqual(config.repositoryUrl, "https://github.com/example/project");
     strictEqual(config.services.length, 1);
     strictEqual(config.services[0].type, "github");
-    strictEqual(config.services[0].repo, "example/other");
+    strictEqual(config.services[0].repo, "example/project");
     strictEqual(config.services[0].tokenEnv, "GITHUB_TOKEN");
 
     // Tokens never land in the file, only env names.
@@ -177,12 +207,14 @@ test("cancelling at the add-another prompt keeps the earlier answers unwritten",
     const { input, output } = mockStreams();
     const flow = runInit({ rootDirectory: directory, input, output, interactive: true });
 
-    await clearAndType(input, "My Project\r");
-    await clearAndType(input, "https://github.com/example/project\r");
+    // projectName (default) → repositoryUrl (typed) → multiselect (toggle github) →
+    // repo (default) → tokenEnv (typed) → Ctrl+C at "Add another github service?"
+    await submit(input, "\r");
+    await submit(input, "https://github.com/example/project\r");
     await submit(input, " \r");
-    await clearAndType(input, "example/other\r");
+    await submit(input, "\r");
     await submit(input, "GITHUB_TOKEN\r");
-    await submit(input, "\x03"); // Ctrl+C at "Add another github service?"
+    await submit(input, "\x03");
 
     const result = await flow;
     strictEqual(result.status, "cancelled");
@@ -220,14 +252,14 @@ test("re-running init offers existing values as accepted-by-enter defaults", asy
     const { input, output } = mockStreams();
     const flow = runInit({ rootDirectory: directory, input, output, interactive: true });
 
-    // "y" accept overwrite → name (default) → URL (default) → services (preselected github,
-    // submit as-is) → repo (default) → tokenEnv (typed) → add another? No
+    // "y" accept overwrite → name (default) → URL (default) → services (preselected
+    // github, submit as-is) → repo (default) → tokenEnv (default) → add another? No
     await submit(input, "y\r");
     await submit(input, "\r");
     await submit(input, "\r");
     await submit(input, "\r");
     await submit(input, "\r");
-    await clearAndType(input, "GITHUB_TOKEN\r");
+    await submit(input, "\r");
     await submit(input, "\r");
 
     const result = await flow;
@@ -239,29 +271,55 @@ test("re-running init offers existing values as accepted-by-enter defaults", asy
     strictEqual(config.services.length, 1);
     strictEqual(config.services[0].id, "github");
     strictEqual(config.services[0].repo, "example/old");
-    strictEqual(config.services[0].tokenEnv, "GITHUB_TOKEN");
+    strictEqual(config.services[0].tokenEnv, "OLD_TOKEN");
   });
 });
 
-test("invalid token env name is rejected at the prompt, then accepted once valid", async () => {
+test("a rejected token env name blocks the prompt, then a valid one is accepted", async () => {
   await withRoot(async (directory) => {
     const { input, output } = mockStreams();
     const flow = runInit({ rootDirectory: directory, input, output, interactive: true });
 
-    await clearAndType(input, "My Project\r");
-    await clearAndType(input, "https://github.com/example/project\r");
+    // projectName (default) → URL (typed) → multiselect (toggle github) →
+    // repo (default) → tokenEnv: submit empty (rejected: required), then type →
+    // add another? No
+    await submit(input, "\r");
+    await submit(input, "https://github.com/example/project\r");
     await submit(input, " \r");
-    await clearAndType(input, "example/other\r");
-    await submit(input, "bad_name\r"); // rejected: lowercase env name
-    await clearAndType(input, "GITHUB_TOKEN\r"); // accepted
+    await submit(input, "\r");
+    await submit(input, "\r"); // rejected: the token env name is required
+    await submit(input, "GITHUB_TOKEN\r"); // accepted
     await submit(input, "\r");
 
     const result = await flow;
+    // If the empty submit had been accepted, the flow would have ended in the
+    // staging gate rejecting the empty token env, not in a written config.
     strictEqual(result.status, "written");
-    match(output.text(), /environment variable name/i);
 
     const config = await loadWorkbenchConfig(directory);
     strictEqual(config.services[0].tokenEnv, "GITHUB_TOKEN");
+  });
+});
+
+test("an invalid token env name is rejected at the prompt with a rendered reason", async () => {
+  await withRoot(async (directory) => {
+    const { input, output } = mockStreams();
+    const flow = runInit({ rootDirectory: directory, input, output, interactive: true });
+
+    // projectName (default) → URL (typed) → multiselect (toggle github) →
+    // repo (default) → tokenEnv: "bad_name" (rejected: the rendered reason is
+    // the assertion) → Ctrl+C rather than clearing the rejected residue
+    await submit(input, "\r");
+    await submit(input, "https://github.com/example/project\r");
+    await submit(input, " \r");
+    await submit(input, "\r");
+    await submit(input, "bad_name\r"); // rejected: lowercase env name
+    await submit(input, "\x03");
+
+    const result = await flow;
+    strictEqual(result.status, "cancelled");
+    match(output.text(), /environment variable name like GITHUB_TOKEN/i);
+    await assertNoConfig(directory);
   });
 });
 
@@ -270,10 +328,10 @@ test("gitlab services collect a project path and token env", async () => {
     const { input, output } = mockStreams();
     const flow = runInit({ rootDirectory: directory, input, output, interactive: true });
 
-    // projectName → URL → multiselect (down to gitlab, toggle) → mode (projectPath
-    // default) → path → tokenEnv → done
-    await clearAndType(input, "My Project\r");
-    await clearAndType(input, "https://gitlab.example.com/group/project\r");
+    // projectName (default) → URL (typed) → multiselect (down to gitlab, toggle) →
+    // mode (projectPath default) → path (typed) → tokenEnv (typed) → done
+    await submit(input, "\r");
+    await submit(input, "https://gitlab.example.com/group/project\r");
     await submit(input, "\x1b[B \r");
     await submit(input, "\r");
     await submit(input, "group/project\r");
@@ -296,13 +354,16 @@ test("two services of the same type get distinct stable ids", async () => {
     const { input, output } = mockStreams();
     const flow = runInit({ rootDirectory: directory, input, output, interactive: true });
 
-    await clearAndType(input, "My Project\r");
-    await clearAndType(input, "https://github.com/example/project\r");
+    // projectName (default) → URL (typed) → multiselect (toggle github) →
+    // repo (default) → tokenEnv (typed) → add another? Yes → repo (default) →
+    // tokenEnv (typed) → done
+    await submit(input, "\r");
+    await submit(input, "https://github.com/example/project\r");
     await submit(input, " \r");
-    await clearAndType(input, "example/one\r");
+    await submit(input, "\r");
     await submit(input, "ONE_TOKEN\r");
     await submit(input, "y\r"); // add another github service
-    await clearAndType(input, "example/two\r");
+    await submit(input, "\r"); // repo: same inferred default
     await submit(input, "TWO_TOKEN\r");
     await submit(input, "\r"); // done
 
@@ -312,8 +373,8 @@ test("two services of the same type get distinct stable ids", async () => {
     const config = await loadWorkbenchConfig(directory);
     strictEqual(config.services.length, 2);
     strictEqual(config.services[0].id, "github");
-    strictEqual(config.services[0].repo, "example/one");
+    strictEqual(config.services[0].repo, "example/project");
     strictEqual(config.services[1].id, "github-2");
-    strictEqual(config.services[1].repo, "example/two");
+    strictEqual(config.services[1].repo, "example/project");
   });
 });

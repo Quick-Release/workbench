@@ -223,16 +223,19 @@ export const runInit = async ({
     if (prefillByType.has(service.type)) prefillByType.get(service.type).push(service);
   }
 
-  const promptTokenEnv = async (type, prior) =>
-    (
-      await p.text({
-        message: `Environment variable holding the ${type} token`,
-        placeholder: TOKEN_ENV_PLACEHOLDER[type],
-        initialValue: prior?.tokenEnv,
-        validate: tokenEnvSchema,
-        ...streams,
-      })
-    )?.trim();
+  const promptTokenEnv = async (type, prior) => {
+    const answer = await p.text({
+      message: `Environment variable holding the ${type} token`,
+      placeholder: TOKEN_ENV_PLACEHOLDER[type],
+      initialValue: prior?.tokenEnv,
+      validate: tokenEnvSchema,
+      ...streams,
+    });
+    // The cancel symbol flows through untouched so the caller's isCancel
+    // check sees it; trimming it here would crash the flow (#69).
+    if (p.isCancel(answer)) return answer;
+    return answer.trim();
+  };
 
   const promptFieldThenTokenEnv = async (type, prior, promptFields) => {
     const fields = await promptFields();

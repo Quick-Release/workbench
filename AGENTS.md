@@ -38,9 +38,9 @@ Agent worktrees are stored under:
 
 Examples:
 
-* Codex: `/data/agents/workspaces/codex/getquick/workbench/<task>`
-* Claude: `/data/agents/workspaces/claude/getquick/workbench/<task>`
-* Pi: `/data/agents/workspaces/pi/getquick/workbench/<task>`
+- Codex: `/data/agents/workspaces/codex/getquick/workbench/<task>`
+- Claude: `/data/agents/workspaces/claude/getquick/workbench/<task>`
+- Pi: `/data/agents/workspaces/pi/getquick/workbench/<task>`
 
 Branches created for agent work must follow:
 
@@ -48,9 +48,9 @@ Branches created for agent work must follow:
 
 Examples:
 
-* `agent/codex/fix-auth`
-* `agent/claude/refactor-api`
-* `agent/pi/update-dependencies`
+- `agent/codex/fix-auth`
+- `agent/claude/refactor-api`
+- `agent/pi/update-dependencies`
 
 ## Before modifying files
 
@@ -103,23 +103,23 @@ Never commit `.env`, `.env.local`, credentials, API keys, tokens, or other secre
 
 Before starting:
 
-* Fetch the latest remote state.
-* Create a dedicated agent branch.
-* Work only in that branch/worktree.
+- Fetch the latest remote state.
+- Create a dedicated agent branch.
+- Work only in that branch/worktree.
 
 During work:
 
-* Keep changes scoped to the requested task.
-* Do not modify unrelated files.
-* Do not rewrite existing commits.
-* Do not force-push.
+- Keep changes scoped to the requested task.
+- Do not modify unrelated files.
+- Do not rewrite existing commits.
+- Do not force-push.
 
 Before finishing:
 
-* Review `git diff`.
-* Run the project's relevant lint, typecheck, tests, and build commands.
-* Report any checks that could not be run or did not pass.
-* Leave unrelated user changes untouched.
+- Review `git diff`.
+- Run the project's relevant lint, typecheck, tests, and build commands.
+- Report any checks that could not be run or did not pass.
+- Leave unrelated user changes untouched.
 
 ## Pull requests
 
