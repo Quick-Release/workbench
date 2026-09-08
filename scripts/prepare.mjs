@@ -2,12 +2,15 @@
 // local CI gate runs on every commit. The git probe keeps installs succeeding
 // outside git checkouts (source zips, packaged copies), where the hook could
 // not run anyway; linked worktrees have `.git` as a file, so the probe goes
-// through git itself rather than the filesystem.
+// through git itself rather than the filesystem. CI stays off the hook: its
+// automation commits (changesets version commits) have no dev machine behind
+// them, and CI runs its own gates.
 import { execFileSync } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-export const ensureHooksPath = ({ directory, hooksPath = ".githooks" }) => {
+export const ensureHooksPath = ({ directory, hooksPath = ".githooks", ci = process.env.CI }) => {
+  if (ci) return { enabled: false };
   const options = { cwd: directory, stdio: "ignore" };
   try {
     execFileSync("git", ["rev-parse", "--git-dir"], options);

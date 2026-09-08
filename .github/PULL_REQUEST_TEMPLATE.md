@@ -1,4 +1,4 @@
-## PR Guidelines
+# PR Guidelines
 
 - [ ] Keep this PR in **Draft** mode while actively committing work; mark it ready only when it's reviewable end-to-end.
 - [ ] **Batch pushes** together rather than pushing commit-by-commit — incremental auto-reviews are disabled, so batches are what get reviewed.
