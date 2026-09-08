@@ -87,6 +87,14 @@ TELEMETRY_INGEST_TOKEN=<current token> \
 
 `--adopt` is needed once, until Alchemy's state records ownership.
 
+## Releases
+
+Merging the changesets `Version Packages` PR publishes the package, then
+the Release workflow tags the version commit `v<version>`, pushes the tag,
+and creates the GitHub release from the version's CHANGELOG section
+(`scripts/tagged-release.mjs`, ticket #77). The script is idempotent: a
+rerun only fills in whatever is missing.
+
 ### Escape hatch
 
 `worker/wrangler.jsonc` still works for a script-only deploy

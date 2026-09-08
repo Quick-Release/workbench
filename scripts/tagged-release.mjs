@@ -11,9 +11,10 @@ import { pathToFileURL } from "node:url";
 // origin and no GitHub release is created. This script finishes the
 // release the repo's way, deterministically: a v-prefixed tag on the
 // version commit, pushed, plus a GitHub release whose notes are the
-// version's CHANGELOG section. Idempotent: it no-ops when the tag
-// already exists. The flow is injectable so the tests pin it without
-// touching git, gh, or the network.
+// version's CHANGELOG section. Tagging and releasing are keyed
+// separately, so a rerun after a partial failure heals the missing half.
+// The flow is injectable so the tests pin it without touching git, gh,
+// or the network.
 
 export const tagNameFor = (version) => `v${version}`;
 
@@ -31,28 +32,41 @@ export function extractChangelogSection(changelog, version) {
   return section.length > 0 ? section : null;
 }
 
-export async function taggedRelease({ version, changelog, hasTag, tag, pushTag, createRelease }) {
+export async function taggedRelease({
+  version,
+  changelog,
+  hasTag,
+  hasRelease,
+  tag,
+  pushTag,
+  createRelease,
+}) {
   const name = tagNameFor(version);
-  if (await hasTag(name)) return { action: "none", tag: name, released: false };
-
-  await tag(name);
-  await pushTag(name);
+  let action = "none";
+  if (!(await hasTag(name))) {
+    await tag(name);
+    await pushTag(name);
+    action = "tagged";
+  }
 
   const notes = changelog ? extractChangelogSection(changelog, version) : null;
   let released = false;
-  if (notes && createRelease) {
-    await createRelease({ tag: name, title: name, body: notes });
-    released = true;
+  if (notes) {
+    if (!(await hasRelease(name))) {
+      await createRelease({ tag: name, title: name, body: notes });
+      released = true;
+    }
+  } else {
+    console.warn(`tagged-release: no CHANGELOG section for ${version}; skipping the release`);
   }
-  return { action: "tagged", tag: name, released };
+  return { action, tag: name, released };
 }
 
 const git = (args) => execFileSync("git", args, { encoding: "utf8" });
 
 async function main() {
-  const repoRoot = process.env.WORKBENCH_RELEASE_ROOT ?? process.cwd();
-  const version = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8")).version;
-  const changelogPath = join(repoRoot, "CHANGELOG.md");
+  const version = JSON.parse(readFileSync(join(process.cwd(), "package.json"), "utf8")).version;
+  const changelogPath = join(process.cwd(), "CHANGELOG.md");
   const changelog = existsSync(changelogPath) ? readFileSync(changelogPath, "utf8") : "";
 
   const result = await taggedRelease({
@@ -60,6 +74,14 @@ async function main() {
     changelog,
     hasTag: async (name) =>
       git(["ls-remote", "--tags", "origin", `refs/tags/${name}`]).trim().length > 0,
+    hasRelease: async (name) => {
+      try {
+        execFileSync("gh", ["release", "view", name], { stdio: "ignore" });
+        return true;
+      } catch {
+        return false;
+      }
+    },
     tag: async (name) => {
       git(["tag", name]);
     },
@@ -67,7 +89,7 @@ async function main() {
       git(["push", "origin", name]);
     },
     createRelease: async ({ tag, title, body }) => {
-      const notesFile = join(tmpdir(), `${tag.replace(/\//g, "-")}-notes.md`);
+      const notesFile = join(tmpdir(), `${tag}-notes.md`);
       writeFileSync(notesFile, `${body}\n`);
       execFileSync(
         "gh",

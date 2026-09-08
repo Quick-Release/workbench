@@ -34,13 +34,10 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NPM_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      # changesets v3's publish creates lightweight npm-style tags, which
-      # the action's `git push --follow-tags` never pushes (it only pushes
-      # annotated tags), and its release detection finds no v-tag — so
-      # published versions silently never got tagged or released (#77).
-      # This step finishes the release the repo's way: v-tag on HEAD,
-      # pushed, plus the GitHub release from the CHANGELOG section.
-      # Idempotent: it no-ops when the tag already exists.
+      # The changesets action silently skips the tag push and the GitHub
+      # release (its --follow-tags push misses changesets v3's lightweight
+      # tags) — this step finishes the release the repo's way (#77), and
+      # no-ops when the tag and release already exist.
       - name: Tag and release the published version
         env:
           GH_TOKEN: ${{ github.token }}
