@@ -1,6 +1,8 @@
 import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 
 import { collectCommitCandidates } from "./commit-candidates.mjs";
+import { recordHealthError, reportTelemetry } from "./telemetry.mjs";
 import { loadWorkbenchConfig } from "./config.mjs";
 import { SELF_REPOSITORY_URL, servicesForSource } from "./self-defaults.mjs";
 import { fetchConfiguredServices } from "./services/index.mjs";
@@ -315,6 +317,28 @@ const main = async () => {
       `Tracker: ${tracker.workItems.length} work items, ${tracker.maps.length} maps, no warnings.`,
     );
   }
+
+  // Telemetry rides the end of a successful sync (ADR 0001): one payload
+  // per Developer per repo per UTC day, delivery failures logged and
+  // swallowed so reporting never breaks the run.
+  await reportTelemetry({
+    appDirectory,
+    rootDirectory,
+    repositoryUrl,
+    demo: usingDemoSource,
+    sessions,
+    version: packageVersion,
+  });
 };
 
-await main();
+const packageVersion = JSON.parse(readFileSync(join(appDirectory, "package.json"), "utf8")).version;
+
+try {
+  await main();
+} catch (cause) {
+  // Health (#15): an uncaught sync error is reported on the payload —
+  // buffered so the next successful flush carries it — before the sync
+  // still fails visibly.
+  recordHealthError({ appDirectory, error: cause, version: packageVersion });
+  throw cause;
+}

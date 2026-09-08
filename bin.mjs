@@ -18,6 +18,19 @@ const run = (file, args, cwd) => {
 };
 
 const main = async () => {
+  try {
+    await runPipeline();
+  } catch (cause) {
+    // Health (#15): server-startup failures ride the next telemetry
+    // payload before the process exits non-zero.
+    const { recordHealthError } = await import("./scripts/telemetry.mjs");
+    const version = JSON.parse(readFileSync(join(appDirectory, "package.json"), "utf8")).version;
+    recordHealthError({ appDirectory, error: cause, version });
+    throw cause;
+  }
+};
+
+const runPipeline = async () => {
   // `init` scaffolds workbench.config.json interactively; every other invocation
   // takes the default pipeline, which must stay non-interactive (zero keystrokes).
   if (process.argv[2] === "init") {
@@ -69,6 +82,15 @@ const main = async () => {
   process.env.WORKBENCH_SOURCE_ROOT = sourceRoot;
   const devStatus = run(vp, ["dev", "--port", port, "--strictPort"], appDirectory);
   if (devStatus !== 0) {
+    // Health (#15): a dev server that cannot start (port busy, build
+    // failure) is a captured startup error, not a silent exit.
+    const { recordHealthError } = await import("./scripts/telemetry.mjs");
+    const version = JSON.parse(readFileSync(join(appDirectory, "package.json"), "utf8")).version;
+    recordHealthError({
+      appDirectory,
+      error: new Error(`dev server exited with status ${devStatus}`),
+      version,
+    });
     process.exitCode = devStatus;
     return;
   }

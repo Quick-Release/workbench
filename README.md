@@ -200,10 +200,12 @@ never holds a credential; with no dev server running it degrades to the last
 synced snapshot with copy-the-command affordances
 ([ADR 0005](docs/adr/0005-control-surface-localhost-seam.md)). During
 `sync`, workbench contacts only
-explicitly configured service read endpoints — or the canonical Workbench
-GitHub issue endpoint in standalone mode — with tokens supplied through
-the shell environment, and reports identified telemetry to the company
-endpoint ([ADR 0001](docs/adr/0001-mandatory-telemetry-internal-tool.md)).
+explicitly configured service read endpoints, the company Telemetry
+endpoint (ADR 0001), and the GitHub API for the Developer's Outcomes — or
+the canonical Workbench GitHub issue endpoint in standalone mode — with
+tokens supplied through the shell environment, and reports identified
+telemetry to the company endpoint
+([ADR 0001](docs/adr/0001-mandatory-telemetry-internal-tool.md)).
 Telemetry carries aggregates and identifiers only; commit messages and
 other content never leave the machine except through an explicit Developer
 submission. Links point to the detected repository remote for source
