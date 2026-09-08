@@ -36,7 +36,16 @@ export async function submitHighlight(
     const response = await fetchImpl("/api/submissions", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify(candidate),
+      // The route hands over the page's richer CommitCandidate; the seam's
+      // schema rejects excess properties, so the wire body is built from the
+      // contract's fields only.
+      body: JSON.stringify({
+        sha: candidate.sha,
+        subject: candidate.subject,
+        body: candidate.body,
+        author: candidate.author,
+        ticketRef: candidate.ticketRef,
+      }),
     });
     const body = (await response.json().catch(() => ({}))) as { ok?: boolean; error?: string };
     return submissionOutcomeFromResponse(response.status, body);

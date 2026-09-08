@@ -2,6 +2,7 @@ import { deepStrictEqual, strictEqual } from "node:assert";
 import { describe, expect, it } from "vite-plus/test";
 
 import { submissionOutcomeFromResponse, submitHighlight } from "./submissions";
+import type { CommitCandidate } from "../types";
 import type { HighlightCandidateInput } from "./submissions";
 
 // The Submission client (ticket #12): the one module-boundary mock in the
@@ -33,6 +34,19 @@ describe("submitHighlight", () => {
     strictEqual(calls[0].url, "/api/submissions");
     strictEqual(calls[0].init.method, "POST");
     deepStrictEqual(JSON.parse(String(calls[0].init.body)), candidate);
+  });
+
+  it("sends only the schema's fields when handed a richer candidate", async () => {
+    // The route passes the page's CommitCandidate, which carries the display
+    // date; the seam's schema rejects excess properties, so the wire body is
+    // pinned to the client contract whatever the input carries.
+    const richer: CommitCandidate = { ...candidate, date: "2026-09-03T10:00:00.000Z" };
+    const bodies: string[] = [];
+    await submitHighlight(richer, async (_url: string, init: RequestInit) => {
+      bodies.push(String(init.body));
+      return jsonResponse({ ok: true });
+    });
+    deepStrictEqual(JSON.parse(bodies[0]), candidate);
   });
 
   it("maps a duplicate to its own outcome", async () => {
