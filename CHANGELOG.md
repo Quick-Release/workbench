@@ -1,5 +1,16 @@
 # @quick-release/workbench
 
+## 0.11.0
+
+### Minor Changes
+
+- 03cab2b: Engine health checks with actionable setup guidance (issue 24, epic 20). New review-runner seam: `scripts/review-runner.mjs` probes the CodeRabbit and zcode CLIs through an injected spawn — binary found (with version), auth / provider status — as typed states, never running a review. The dev server answers `GET /api/review/health` behind the shared request gate with the payload validated at the Effect Schema boundary, and the pull-requests page probes it on load: each engine renders ready or not-ready with its one-step remediation command (`brew install coderabbit`, `coderabbit auth login --api-key …`, `zcode login`), and a not-ready engine is given no start affordance.
+
+### Patch Changes
+
+- 0107b79: Fixed: git probes no longer inherit the caller's git context. A pre-commit hook exports `GIT_DIR`, `GIT_WORK_TREE`, and `GIT_INDEX_FILE` to everything it spawns — including the test suite behind the new pre-commit gate — which redirected `workbench init`'s origin probe (deadlocking its suite) and made `prepare`'s repo detection treat any directory as a repository (pointing the caller's `core.hooksPath` at workbench). The init and prepare git subprocesses, and the suites' fixture git calls, now strip that context.
+- 633993a: Fixed the Highlights Submit action: the submission client now pins the wire body to the seam's contract fields, so a Submission no longer fails the seam's excess-property validation when the page's candidate carries its display date — every real Submit was being rejected as `malformed_request`. The seam schema rejects excess properties by design; the client, not the caller, owns the payload. Also adds the interactive Submit coverage ticket #18 asked for: a happy-dom component test that clicks a rendered Submit button and asserts the network boundary receives exactly the contract payload, plus a client-level unit pin.
+
 ## 0.10.0
 
 ### Minor Changes
