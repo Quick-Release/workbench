@@ -85,6 +85,7 @@ const data = {
     sessionsByDay: [],
     sessions: [],
   },
+  highlights: [],
 } satisfies OverviewData;
 
 const renderOverview = (

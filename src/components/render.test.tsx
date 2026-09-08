@@ -99,6 +99,7 @@ const data = {
   skills: [{ id: "tdd", category: "engineering", source: "matt-pocock" }],
   skillInstalls: ["tdd"],
   sessions,
+  highlights: [],
 } satisfies OverviewData;
 
 const handoffsData = {
@@ -125,6 +126,7 @@ const handoffsData = {
       },
     ],
   },
+  highlights: [],
 } satisfies OverviewData;
 
 const overviewPageProps = {

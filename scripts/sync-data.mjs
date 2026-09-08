@@ -1,4 +1,6 @@
 import { execFileSync } from "node:child_process";
+
+import { collectCommitCandidates } from "./commit-candidates.mjs";
 import { loadWorkbenchConfig } from "./config.mjs";
 import { SELF_REPOSITORY_URL, servicesForSource } from "./self-defaults.mjs";
 import { fetchConfiguredServices } from "./services/index.mjs";
@@ -241,6 +243,11 @@ const main = async () => {
     ...new Set([...tracker.warnings, ...blockerEdges.warnings, ...adrCollection.warnings]),
   ];
 
+  // Ticket #17: the Highlights read path — recent commit messages that
+  // carry a body and a ticket reference, capped to the most recent 30.
+  // Local-only reads; nothing here leaves the machine.
+  const highlights = await collectCommitCandidates({ rootDirectory });
+
   const sources = [];
   sources.push({ label: "Tracker", path: `github / repo ${repo}` });
   // ADR 0009: the decision sources name themselves even when a host repo
@@ -257,6 +264,7 @@ const main = async () => {
       path: service.sourcePath || `${service.type} service`,
     });
   }
+  sources.push({ label: "Highlights", path: "git log (recent commits)" });
   sources.push(
     skillsCatalog.degraded
       ? { label: "Skills catalog", path: "curated fallback (upstream unreachable)" }
@@ -285,6 +293,7 @@ const main = async () => {
     skills: skillsCatalog.skills,
     skillInstalls: skillsCatalog.installedIds,
     sessions,
+    highlights,
   };
   await writeFile(
     outputPath,
@@ -296,7 +305,7 @@ const main = async () => {
       (sessions.enabled
         ? ` Sessions: ${sessions.sessions.length} tracked (${sessions.perModel.length} models).`
         : " Sessions sync disabled.") +
-      ` Decisions: ${decisions.length} (${artifacts.length} artifacts). ${tracker.pullRequests.length} open pull requests.`,
+      ` Decisions: ${decisions.length} (${artifacts.length} artifacts). ${tracker.pullRequests.length} open pull requests. ${highlights.length} highlight candidates.`,
   );
   if (trackerWarnings.length > 0) {
     console.log(`Tracker warnings (${trackerWarnings.length}):`);

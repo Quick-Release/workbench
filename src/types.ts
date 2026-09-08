@@ -379,6 +379,15 @@ export type SessionUsage = {
   sessions: readonly SessionUsageRecord[];
 };
 
+export type CommitCandidate = {
+  sha: string;
+  subject: string;
+  body: string;
+  author: string;
+  date: string;
+  ticketRef: string;
+};
+
 export type OverviewData = {
   meta: {
     projectName: string;
@@ -401,4 +410,5 @@ export type OverviewData = {
   skills: readonly SkillRecord[];
   skillInstalls: readonly string[];
   sessions: SessionUsage;
+  highlights: readonly CommitCandidate[];
 };

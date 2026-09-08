@@ -356,6 +356,17 @@ export const SessionUsageSchema = Schema.Struct({
   sessions: Schema.Array(SessionUsageRecordSchema),
 });
 
+export const CommitCandidateSchema = Schema.Struct({
+  sha: Schema.String,
+  subject: Schema.String,
+  body: Schema.String,
+  author: Schema.String,
+  date: Schema.String,
+  ticketRef: Schema.String,
+});
+
+export type CommitCandidate = Schema.Schema.Type<typeof CommitCandidateSchema>;
+
 export const OverviewDataSchema = Schema.Struct({
   meta: Schema.Struct({
     projectName: Schema.String,
@@ -378,6 +389,7 @@ export const OverviewDataSchema = Schema.Struct({
   skills: Schema.Array(SkillRecordSchema),
   skillInstalls: Schema.Array(Schema.String),
   sessions: SessionUsageSchema,
+  highlights: Schema.Array(CommitCandidateSchema),
 });
 
 // Annotating the decoded output with the domain type is the compile-time check
@@ -385,6 +397,11 @@ export const OverviewDataSchema = Schema.Struct({
 // or missing fails the build instead of the dashboard.
 export const parseOverviewData: (input: unknown) => OverviewData = Schema.decodeUnknownSync(
   OverviewDataSchema,
+  { onExcessProperty: "error" },
+);
+
+export const parseCommitCandidate: (input: unknown) => CommitCandidate = Schema.decodeUnknownSync(
+  CommitCandidateSchema,
   { onExcessProperty: "error" },
 );
 
