@@ -10,12 +10,12 @@ import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 export const ensureHooksPath = ({ directory, hooksPath = ".githooks", ci = process.env.CI }) => {
-  if (ci) return { enabled: false };
+  if (ci) return { enabled: false, reason: "ci" };
   const options = { cwd: directory, stdio: "ignore" };
   try {
     execFileSync("git", ["rev-parse", "--git-dir"], options);
   } catch {
-    return { enabled: false };
+    return { enabled: false, reason: "no-repo" };
   }
   execFileSync("git", ["config", "core.hooksPath", hooksPath], options);
   return { enabled: true };
@@ -23,8 +23,10 @@ export const ensureHooksPath = ({ directory, hooksPath = ".githooks", ci = proce
 
 const main = () => {
   const appDirectory = join(dirname(fileURLToPath(import.meta.url)), "..");
-  const { enabled } = ensureHooksPath({ directory: appDirectory });
-  if (!enabled) console.log("[workbench] not a git checkout; skipping git hooks setup");
+  const { reason } = ensureHooksPath({ directory: appDirectory });
+  // CI skips are the expected outcome there, so they stay silent; only a
+  // real checkout without git infrastructure is worth a line of output.
+  if (reason === "no-repo") console.log("[workbench] not a git checkout; skipping git hooks setup");
 };
 
 // Guard so importing this module (prepare.test.mjs) does not touch git config.

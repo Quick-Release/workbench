@@ -21,6 +21,7 @@ test("enables the hook path inside a git repository", async () => {
   const directory = await prepare("enables", true);
   const result = ensureHooksPath({ directory, ci: false });
   strictEqual(result.enabled, true);
+  strictEqual(result.reason, undefined);
   strictEqual(
     execFileSync("git", ["-C", directory, "config", "--get", "core.hooksPath"], {
       encoding: "utf8",
@@ -33,10 +34,12 @@ test("skips outside a git repository without failing", async () => {
   const directory = await prepare("skips");
   const result = ensureHooksPath({ directory, ci: false });
   strictEqual(result.enabled, false);
+  strictEqual(result.reason, "no-repo");
 });
 
 test("skips in CI even inside a git repository", async () => {
   const directory = await prepare("ci", true);
   const result = ensureHooksPath({ directory, ci: "1" });
   strictEqual(result.enabled, false);
+  strictEqual(result.reason, "ci");
 });
