@@ -11,6 +11,7 @@ import { workflowApiPlugin } from "./scripts/workflow-api.mjs";
 import { aiApiPlugin } from "./scripts/ai-api.mjs";
 import { llmApiPlugin } from "./scripts/llm-api.mjs";
 import { submissionsApiPlugin } from "./scripts/submissions-api.mjs";
+import { reviewApiPlugin } from "./scripts/review-api.mjs";
 
 // Shared by the dev/build pipeline and the dashboard test project: vitest
 // projects don't inherit the root config's plugins or resolve (ticket #29).
@@ -24,6 +25,7 @@ const dashboardPlugins = [
   aiApiPlugin(),
   llmApiPlugin(),
   submissionsApiPlugin(),
+  reviewApiPlugin(),
 ];
 const dashboardAlias = {
   "@": fileURLToPath(new URL("./src", import.meta.url)),

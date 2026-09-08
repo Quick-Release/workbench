@@ -2,6 +2,7 @@ import { useRef, useState } from "react";
 import { GitPullRequest } from "lucide-react";
 
 import { DraftPanel, UnconfiguredHint } from "@/components/DraftPanel";
+import { ReviewEngines } from "@/components/ReviewEngines";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -16,7 +17,7 @@ import {
   type DraftBoard,
   type DraftState,
 } from "@/lib/draft-state";
-import type { PullRequestRecord } from "@/types";
+import type { PullRequestRecord, ReviewEngineHealth } from "@/types";
 
 // The pull-requests page (ticket #38): the open pull requests of the host
 // repo, synced into the snapshot, each with a one-shot "Draft description"
@@ -81,9 +82,14 @@ function PullRequestRow({
 export function PullRequestsPage({
   pullRequests,
   aiConfigured,
+  engineHealth = null,
 }: {
   pullRequests: readonly PullRequestRecord[];
   aiConfigured: boolean | null;
+  // The review runner's health verdict (ticket #24): the route probes
+  // /api/review/health on load and hands the per-engine states down as data;
+  // null is "unknown yet" and renders the probing hint.
+  engineHealth?: readonly ReviewEngineHealth[] | null;
 }) {
   const [board, setBoard] = useState<DraftBoard>(emptyBoard);
   // The live session: the abort handle for the in-flight request plus the
@@ -125,6 +131,7 @@ export function PullRequestsPage({
         sends only the PR number to the local dev server, which assembles the prompt from its own
         records — the draft lands here for you to copy, edit, or discard.
       </p>
+      <ReviewEngines health={engineHealth} />
       {aiConfigured === false && (
         <p data-slot="ai-unconfigured" className="text-sm text-muted-foreground">
           <UnconfiguredHint />

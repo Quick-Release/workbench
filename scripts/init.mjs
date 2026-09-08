@@ -7,6 +7,7 @@ import { z } from "zod";
 import * as p from "@clack/prompts";
 
 import { loadWorkbenchConfig } from "./config.mjs";
+import { envWithoutGitContext } from "./git-context.mjs";
 
 const execFileAsync = promisify(execFile);
 
@@ -102,10 +103,13 @@ const TOKEN_ENV_PLACEHOLDER = {
 };
 
 // git remote get-url origin, translated to the http(s) form the config wants.
+// The probe targets rootDirectory, so the caller's git context is stripped
+// from the subprocess (scripts/git-context.mjs) or it redirects the probe.
 const inferOriginUrl = async (rootDirectory) => {
   try {
     const { stdout } = await execFileAsync("git", ["remote", "get-url", "origin"], {
       cwd: rootDirectory,
+      env: envWithoutGitContext(),
     });
     const url = stdout.trim();
     const ssh = url.match(/^git@([^:]+):(.+?)(?:\.git)?$/);

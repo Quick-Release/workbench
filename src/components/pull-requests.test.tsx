@@ -66,6 +66,27 @@ describe("the draft panel states, passed as data props", () => {
 });
 
 describe("the pull-requests page", () => {
+  it("renders the review-engines health panel from the runner's verdict", () => {
+    const html = renderToString(
+      <PullRequestsPage
+        pullRequests={[pr(82)]}
+        aiConfigured={null}
+        engineHealth={[
+          { engine: "coderabbit", state: "ready", version: "coderabbit 1.2.3" },
+          {
+            engine: "zcode",
+            state: "provider_missing",
+            version: "0.16.5",
+            remediation: "run `zcode login` to configure a model provider",
+          },
+        ]}
+      />,
+    );
+    expect(html).toContain('data-slot="review-engines"');
+    expect(html).toContain('data-engine-state="ready"');
+    expect(html).toContain("run `zcode login` to configure a model provider");
+  });
+
   it("lists each open pull request with its coordinates and a draft action", () => {
     const html = renderPage([pr(82), pr(78, { title: "AI middleware", isDraft: true })]);
     expect(html).toContain('data-pr="82"');
