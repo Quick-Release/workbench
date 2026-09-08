@@ -1,17 +1,24 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import type { CommitCandidate } from "../types";
+import type { SubmissionOutcome } from "../lib/submissions";
 
-// The Highlights page (ticket #17): commit-message candidates gathered at
-// sync for marketing write-ups. Display-only — the explainer
-// card states the consent posture up front: nothing leaves the machine
-// until a Developer makes an explicit Submission of one candidate.
+// The Highlights page (tickets #17 and #12): commit-message candidates
+// gathered at sync for marketing write-ups. The consent posture sits in
+// the explainer card — nothing leaves the machine until a Developer
+// Submits one candidate, which is the page's single action. The Submit
+// handler arrives as a prop; the page tracks per-candidate outcomes so a
+// submitted commit never offers its button again.
 
 interface HighlightsPageProps {
   highlights: readonly CommitCandidate[];
+  onSubmit?: (candidate: CommitCandidate) => Promise<SubmissionOutcome>;
+  submitted?: ReadonlySet<string>;
 }
 
-export function HighlightsPage({ highlights }: HighlightsPageProps) {
+export function HighlightsPage({ highlights, onSubmit, submitted }: HighlightsPageProps) {
+  const submittedShas = submitted ?? new Set<string>();
   return (
     <div className="flex flex-1 flex-col gap-4 p-4 lg:gap-6 lg:p-6">
       <div>
@@ -51,10 +58,25 @@ export function HighlightsPage({ highlights }: HighlightsPageProps) {
                   <p className="whitespace-pre-wrap text-sm text-muted-foreground">
                     {candidate.body}
                   </p>
-                  <p className="text-xs text-muted-foreground">
-                    {candidate.author} ·{" "}
-                    <time dateTime={candidate.date}>{candidate.date.slice(0, 10)}</time>
-                  </p>
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="text-xs text-muted-foreground">
+                      {candidate.author} ·{" "}
+                      <time dateTime={candidate.date}>{candidate.date.slice(0, 10)}</time>
+                    </p>
+                    {submittedShas.has(candidate.sha) ? (
+                      <Badge variant="outline">Submitted</Badge>
+                    ) : (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={!onSubmit}
+                        onClick={() => void onSubmit?.(candidate)}
+                        data-sha={candidate.sha}
+                      >
+                        Submit
+                      </Button>
+                    )}
+                  </div>
                 </CardContent>
               </Card>
             </li>

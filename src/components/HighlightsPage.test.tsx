@@ -37,4 +37,29 @@ describe("HighlightsPage", () => {
     const html = renderPage([]);
     expect(html).toContain("No commit-message candidates");
   });
+
+  it("renders a Submit action per candidate that names its commit", () => {
+    const submitted = new Set<string>();
+    const html = renderToString(
+      <HighlightsPage
+        highlights={[candidate(11)]}
+        onSubmit={async () => ({ status: "submitted", message: "ok" })}
+        submitted={submitted}
+      />,
+    );
+    expect(html).toContain("Submit");
+    expect(html).toContain('data-sha="sha-11"');
+  });
+
+  it("marks a submitted candidate instead of offering its button again", () => {
+    const html = renderToString(
+      <HighlightsPage
+        highlights={[candidate(11)]}
+        onSubmit={async () => ({ status: "submitted", message: "ok" })}
+        submitted={new Set(["sha-11"])}
+      />,
+    );
+    expect(html).toContain("Submitted");
+    expect(html).not.toContain(">Submit<");
+  });
 });

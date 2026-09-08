@@ -18,6 +18,19 @@ const run = (file, args, cwd) => {
 };
 
 const main = async () => {
+  try {
+    await runPipeline();
+  } catch (cause) {
+    // Health (#15): server-startup failures ride the next telemetry
+    // payload before the process exits non-zero.
+    const { recordHealthError } = await import("./scripts/telemetry.mjs");
+    const version = JSON.parse(readFileSync(join(appDirectory, "package.json"), "utf8")).version;
+    recordHealthError({ appDirectory, error: cause, version });
+    throw cause;
+  }
+};
+
+const runPipeline = async () => {
   // `init` scaffolds workbench.config.json interactively; every other invocation
   // takes the default pipeline, which must stay non-interactive (zero keystrokes).
   if (process.argv[2] === "init") {
