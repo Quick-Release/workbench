@@ -16,21 +16,15 @@ export const Route = createFileRoute("/highlights")({
 // localhost seam — the dev server attaches the ingest token server-side —
 // and the outcome is confirmed per candidate immediately.
 function HighlightsRoute() {
-  const [submitted, setSubmitted] = useState<ReadonlySet<string>>(new Set());
+  const [outcomes, setOutcomes] = useState<ReadonlyMap<string, SubmissionOutcome>>(new Map());
 
   const onSubmit = useCallback(async (candidate: CommitCandidate) => {
     const outcome = await submitHighlight(candidate);
-    if (outcome.status === "submitted") {
-      setSubmitted((current) => new Set(current).add(candidate.sha));
-    }
-    return outcome as SubmissionOutcome;
+    setOutcomes((current) => new Map(current).set(candidate.sha, outcome));
+    return outcome;
   }, []);
 
   return (
-    <HighlightsPage
-      highlights={overviewData.highlights}
-      onSubmit={onSubmit}
-      submitted={submitted}
-    />
+    <HighlightsPage highlights={overviewData.highlights} onSubmit={onSubmit} outcomes={outcomes} />
   );
 }

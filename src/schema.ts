@@ -400,6 +400,22 @@ export const parseOverviewData: (input: unknown) => OverviewData = Schema.decode
   { onExcessProperty: "error" },
 );
 
+export const SubmissionRequestSchema = Schema.Struct({
+  sha: Schema.NonEmptyString,
+  subject: Schema.NonEmptyString,
+  body: Schema.String,
+  author: Schema.NonEmptyString,
+  ticketRef: Schema.optional(Schema.String),
+});
+
+export const parseSubmissionRequest: (input: unknown) => {
+  sha: string;
+  subject: string;
+  body: string;
+  author: string;
+  ticketRef?: string;
+} = Schema.decodeUnknownSync(SubmissionRequestSchema, { onExcessProperty: "error" });
+
 export const parseCommitCandidate: (input: unknown) => CommitCandidate = Schema.decodeUnknownSync(
   CommitCandidateSchema,
   { onExcessProperty: "error" },

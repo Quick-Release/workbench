@@ -23,7 +23,7 @@ const app = () => mkdtempSync(join(tmpdir(), "telemetry-"));
 const cleanup = (dir) => rmSync(dir, { recursive: true, force: true });
 
 const ENV = {
-  WORKBENCH_TELEMETRY_URL: "https://telemetry.example.com",
+  TELEMETRY_INGEST_URL: "https://telemetry.example.com",
   TELEMETRY_INGEST_TOKEN: "ingest-token",
 };
 
@@ -117,7 +117,7 @@ test("reportTelemetry sends once per day and records the marker", async () => {
     // Two egress targets flow through one fetch: the outcomes adapter's
     // GitHub call and the telemetry POST. Only the POST is counted.
     const fetchImpl = async (url, init) => {
-      if (String(url) === ENV.WORKBENCH_TELEMETRY_URL) {
+      if (String(url) === ENV.TELEMETRY_INGEST_URL) {
         posts.push({ url, init });
         return new Response("{}", { status: 200 });
       }
@@ -168,7 +168,7 @@ test("a failing delivery is swallowed and does not mark the day", async () => {
       runGh: identityGh.runGh,
       runGit: identityGh.runGit,
       fetchImpl: async (url) => {
-        if (String(url) === ENV.WORKBENCH_TELEMETRY_URL) {
+        if (String(url) === ENV.TELEMETRY_INGEST_URL) {
           attempts += 1;
           throw new Error("unreachable");
         }
@@ -194,7 +194,7 @@ test("demo mode and an unconfigured endpoint send nothing", async () => {
       runGh: identityGh.runGh,
       runGit: identityGh.runGit,
       fetchImpl: async (url, init) => {
-        if (String(url) === ENV.WORKBENCH_TELEMETRY_URL) {
+        if (String(url) === ENV.TELEMETRY_INGEST_URL) {
           posts.push({ url, init });
           return new Response("{}", { status: 200 });
         }
@@ -206,12 +206,47 @@ test("demo mode and an unconfigured endpoint send nothing", async () => {
       (
         await reportTelemetry({
           ...base,
-          env: { WORKBENCH_TELEMETRY_URL: "", TELEMETRY_INGEST_TOKEN: "" },
+          env: { TELEMETRY_INGEST_URL: "", TELEMETRY_INGEST_TOKEN: "" },
         })
       ).action,
       "skipped",
     );
     strictEqual(posts.length, 0);
+  } finally {
+    cleanup(dir);
+  }
+});
+
+test("an endpoint duplicate marks the day but keeps the error buffer", async () => {
+  const dir = app();
+  try {
+    await recordHealthError({ appDirectory: dir, error: new Error("boom"), version: "0.9.0" });
+    const posts = [];
+    const result = await reportTelemetry({
+      appDirectory: dir,
+      repositoryUrl: "https://github.com/acme/widgets.git",
+      env: ENV,
+      version: "0.9.0",
+      runGh: identityGh.runGh,
+      runGit: identityGh.runGit,
+      fetchImpl: async (url, init) => {
+        if (String(url) === ENV.TELEMETRY_INGEST_URL) {
+          posts.push({ url, init });
+          return new Response("{}", { status: 409 });
+        }
+        return new Response("[]", { status: 200 });
+      },
+    });
+    strictEqual(result.action, "deduped");
+    strictEqual(posts.length, 1);
+    const state = JSON.parse(
+      readFileSync(join(dir, "node_modules", ".cache", "workbench-telemetry-state.json"), "utf8"),
+    );
+    strictEqual(
+      state.lastSent["https://github.com/acme/widgets.git|ada"],
+      new Date().toISOString().slice(0, 10),
+    );
+    strictEqual(state.errors.length, 1, "a 409 records nothing, so the errors stay buffered");
   } finally {
     cleanup(dir);
   }
@@ -230,7 +265,7 @@ test("buffered health errors ride the payload and clear on success", async () =>
       runGh: identityGh.runGh,
       runGit: identityGh.runGit,
       fetchImpl: async (url, init) => {
-        if (String(url) === ENV.WORKBENCH_TELEMETRY_URL) {
+        if (String(url) === ENV.TELEMETRY_INGEST_URL) {
           posts.push({ url, init });
           return new Response("{}", { status: 200 });
         }

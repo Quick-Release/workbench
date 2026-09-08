@@ -3,6 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { HighlightsPage } from "./HighlightsPage";
 import type { CommitCandidate } from "../types";
+import type { SubmissionOutcome } from "../lib/submissions";
 
 const candidate = (n: number): CommitCandidate => ({
   sha: `sha-${n}`,
@@ -13,8 +14,13 @@ const candidate = (n: number): CommitCandidate => ({
   ticketRef: `#${n}`,
 });
 
-const renderPage = (highlights: readonly CommitCandidate[]) =>
-  renderToString(<HighlightsPage highlights={highlights} />);
+const renderPage = (
+  highlights: readonly CommitCandidate[],
+  options: {
+    onSubmit?: (candidate: CommitCandidate) => Promise<SubmissionOutcome>;
+    outcomes?: ReadonlyMap<string, SubmissionOutcome>;
+  } = {},
+) => renderToString(<HighlightsPage highlights={highlights} {...options} />);
 
 describe("HighlightsPage", () => {
   it("renders the explainer card on every state of the page", () => {
@@ -39,27 +45,33 @@ describe("HighlightsPage", () => {
   });
 
   it("renders a Submit action per candidate that names its commit", () => {
-    const submitted = new Set<string>();
-    const html = renderToString(
-      <HighlightsPage
-        highlights={[candidate(11)]}
-        onSubmit={async () => ({ status: "submitted", message: "ok" })}
-        submitted={submitted}
-      />,
-    );
+    const html = renderPage([candidate(11)], {
+      onSubmit: async () => ({ status: "submitted", message: "ok" }),
+    });
     expect(html).toContain("Submit");
     expect(html).toContain('data-sha="sha-11"');
   });
 
   it("marks a submitted candidate instead of offering its button again", () => {
-    const html = renderToString(
-      <HighlightsPage
-        highlights={[candidate(11)]}
-        onSubmit={async () => ({ status: "submitted", message: "ok" })}
-        submitted={new Set(["sha-11"])}
-      />,
-    );
+    const html = renderPage([candidate(11)], {
+      onSubmit: async () => ({ status: "submitted", message: "ok" }),
+      outcomes: new Map([["sha-11", { status: "submitted", message: "ok" }]]),
+    });
     expect(html).toContain("Submitted");
     expect(html).not.toContain(">Submit<");
+  });
+
+  it("shows the failure or duplicate message on the candidate", () => {
+    const html = renderPage([candidate(11)], {
+      onSubmit: async () => ({
+        status: "duplicate",
+        message: "This commit message was already submitted.",
+      }),
+      outcomes: new Map([
+        ["sha-11", { status: "duplicate", message: "This commit message was already submitted." }],
+      ]),
+    });
+    expect(html).toContain("This commit message was already submitted.");
+    expect(html).toContain("Submit");
   });
 });

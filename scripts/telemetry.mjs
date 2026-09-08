@@ -126,7 +126,7 @@ export function recordHealthError({ appDirectory, error, version }) {
 // local development). An unconfigured endpoint sends nothing: the values
 // are provisioned at the company install, not guessed.
 function endpointConfig(env) {
-  const url = env.WORKBENCH_TELEMETRY_URL ?? "";
+  const url = env.TELEMETRY_INGEST_URL ?? "";
   const token = env.TELEMETRY_INGEST_TOKEN ?? "";
   return { url, token };
 }
@@ -182,6 +182,13 @@ export async function reportTelemetry({
       headers: { Authorization: `Bearer ${token}`, "content-type": "application/json" },
       body: JSON.stringify(payload),
     });
+    if (response.status === 409) {
+      // The endpoint already holds this day's payload (state file lost or
+      // another install sent it): mark the day so sync stops re-sending,
+      // but keep the error buffer — a 409 records nothing new.
+      writeState(appDirectory, { ...state, lastSent: { ...state.lastSent, [key]: day } });
+      return { action: "deduped", reason: "endpoint" };
+    }
     if (!response.ok) throw new Error(`telemetry endpoint answered ${response.status}`);
 
     writeState(appDirectory, {

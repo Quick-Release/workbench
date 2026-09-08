@@ -1,5 +1,6 @@
-import { gateRejection } from "./request-gate.mjs";
+import { parseSubmissionRequest } from "../src/schema.ts";
 import { methodMismatch, readBody } from "./api-shared.mjs";
+import { gateRejection } from "./request-gate.mjs";
 
 // The Submission seam (ticket #12): the Highlights page's Submit action
 // POSTs here, and this dev-server endpoint attaches the host repo remote
@@ -24,9 +25,6 @@ export const submissionsWorkerClient = (env) => {
     });
 };
 
-const requiredField = (payload, name) =>
-  typeof payload[name] === "string" && payload[name].length > 0 ? null : name;
-
 export const handleSubmissionsApi = async ({
   method,
   pathname,
@@ -35,6 +33,7 @@ export const handleSubmissionsApi = async ({
   origin,
   repoRemote,
   workerFetch,
+  resolveIdentity,
 }) => {
   if (!isSubmissionsApiRoute(pathname)) return null;
 
@@ -62,25 +61,28 @@ export const handleSubmissionsApi = async ({
       json: { error: "malformed_request", message: "request body is not valid JSON" },
     };
   }
-  for (const field of ["sha", "subject", "body", "author"]) {
-    const missing = requiredField(candidate, field);
-    if (missing)
-      return {
-        status: 400,
-        json: {
-          error: "malformed_request",
-          message: `a submission needs a non-empty \`${missing}\``,
-        },
-      };
+
+  let parsed;
+  try {
+    parsed = parseSubmissionRequest(candidate);
+  } catch (error) {
+    return {
+      status: 400,
+      json: { error: "malformed_request", message: String(error?.message ?? error) },
+    };
   }
 
+  // Attribution (story 19): the Developer identity rides the Submission —
+  // resolved server-side, so the browser still never holds a credential.
+  const developer = resolveIdentity ? await resolveIdentity() : undefined;
   const payload = {
     repoRemote,
-    commitSha: candidate.sha,
-    subject: candidate.subject,
-    body: candidate.body,
-    author: candidate.author,
-    ticketRef: candidate.ticketRef,
+    commitSha: parsed.sha,
+    subject: parsed.subject,
+    body: parsed.body,
+    author: parsed.author,
+    ticketRef: parsed.ticketRef,
+    developer: developer ?? undefined,
     submittedAt: new Date().toISOString(),
   };
   try {
@@ -99,7 +101,7 @@ export const handleSubmissionsApi = async ({
   }
 };
 
-export const submissionsApiPlugin = ({ repoRemote } = {}) => ({
+export const submissionsApiPlugin = ({ repoRemote, resolveIdentity } = {}) => ({
   name: "workbench-submissions-api",
   configureServer(server) {
     server.middlewares.use(async (request, response, next) => {
@@ -113,6 +115,7 @@ export const submissionsApiPlugin = ({ repoRemote } = {}) => ({
         host: request.headers.host,
         origin: request.headers.origin,
         repoRemote: repoRemote ?? process.env.WORKBENCH_REPOSITORY_URL ?? "",
+        resolveIdentity,
         workerFetch: submissionsWorkerClient(process.env),
       });
       if (!handled) return next();

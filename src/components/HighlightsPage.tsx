@@ -14,11 +14,11 @@ import type { SubmissionOutcome } from "../lib/submissions";
 interface HighlightsPageProps {
   highlights: readonly CommitCandidate[];
   onSubmit?: (candidate: CommitCandidate) => Promise<SubmissionOutcome>;
-  submitted?: ReadonlySet<string>;
+  outcomes?: ReadonlyMap<string, SubmissionOutcome>;
 }
 
-export function HighlightsPage({ highlights, onSubmit, submitted }: HighlightsPageProps) {
-  const submittedShas = submitted ?? new Set<string>();
+export function HighlightsPage({ highlights, onSubmit, outcomes }: HighlightsPageProps) {
+  const pageOutcomes = outcomes ?? new Map<string, SubmissionOutcome>();
   return (
     <div className="flex flex-1 flex-col gap-4 p-4 lg:gap-6 lg:p-6">
       <div>
@@ -63,7 +63,7 @@ export function HighlightsPage({ highlights, onSubmit, submitted }: HighlightsPa
                       {candidate.author} ·{" "}
                       <time dateTime={candidate.date}>{candidate.date.slice(0, 10)}</time>
                     </p>
-                    {submittedShas.has(candidate.sha) ? (
+                    {pageOutcomes.get(candidate.sha)?.status === "submitted" ? (
                       <Badge variant="outline">Submitted</Badge>
                     ) : (
                       <Button
@@ -77,6 +77,12 @@ export function HighlightsPage({ highlights, onSubmit, submitted }: HighlightsPa
                       </Button>
                     )}
                   </div>
+                  {pageOutcomes.get(candidate.sha) &&
+                    pageOutcomes.get(candidate.sha)?.status !== "submitted" && (
+                      <p className="text-xs text-muted-foreground">
+                        {pageOutcomes.get(candidate.sha)?.message}
+                      </p>
+                    )}
                 </CardContent>
               </Card>
             </li>

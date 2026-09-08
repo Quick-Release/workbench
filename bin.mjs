@@ -82,6 +82,15 @@ const runPipeline = async () => {
   process.env.WORKBENCH_SOURCE_ROOT = sourceRoot;
   const devStatus = run(vp, ["dev", "--port", port, "--strictPort"], appDirectory);
   if (devStatus !== 0) {
+    // Health (#15): a dev server that cannot start (port busy, build
+    // failure) is a captured startup error, not a silent exit.
+    const { recordHealthError } = await import("./scripts/telemetry.mjs");
+    const version = JSON.parse(readFileSync(join(appDirectory, "package.json"), "utf8")).version;
+    recordHealthError({
+      appDirectory,
+      error: new Error(`dev server exited with status ${devStatus}`),
+      version,
+    });
     process.exitCode = devStatus;
     return;
   }
