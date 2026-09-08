@@ -101,6 +101,17 @@ Environment variables (service tokens, the telemetry deploy token, the
 scripts through [dotenvx](https://dotenvx.com). First run copies
 `.env.example` to `.env` for you; values already set in the shell always win.
 
+### Commits run the CI gate locally
+
+Every commit runs the checks CI would run — `pnpm check` and `pnpm test` —
+through the `.githooks/pre-commit` hook, wired up by the package `prepare`
+script when you run `pnpm install`. A failing check blocks the commit until
+it is fixed; the hook also refuses commits with a stale
+`src/data.generated.ts` (run `pnpm sync` and stage the result). Bypass with
+`git commit --no-verify` only in a genuine emergency. Merges to `main` are
+additionally gated on review: pull requests are required, and CodeRabbit
+reviews every PR automatically.
+
 ## Configuration
 
 Copy `workbench.config.example.json` to `workbench.config.json` in the host

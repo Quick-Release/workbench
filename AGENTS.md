@@ -113,6 +113,8 @@ During work:
 - Do not modify unrelated files.
 - Do not rewrite existing commits.
 - Do not force-push.
+- Every commit runs the local CI gate (`.githooks/pre-commit`): `pnpm check`
+  and `pnpm test` must pass or the commit is blocked.
 
 Before finishing:
 
@@ -132,6 +134,12 @@ When requested to publish work:
 5. Include known limitations or follow-up work.
 
 Agents must not merge their own pull requests unless explicitly instructed.
+
+`main` is protected: merges happen only through reviewed pull requests.
+CodeRabbit reviews PRs automatically and its approval gates the merge; resolve
+its comments before requesting merge. Automatic incremental reviews are off,
+so batch pushes and run `@coderabbitai review` when ready; Draft PRs, PRs with
+WIP/Draft/DO NOT MERGE titles, and bot-authored PRs are never auto-reviewed.
 
 ## Worktree cleanup
 

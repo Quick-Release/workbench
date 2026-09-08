@@ -1,0 +1,88 @@
+# CodeRabbit configuration.
+# Reference: https://docs.coderabbit.ai/reference/configuration
+language: "en-US"
+early_access: false
+
+reviews:
+  # Reviews target correctness and intent; skips low-severity styling and
+  # preference nitpicks, which `vp lint` / `vp fmt` already enforce.
+  profile: "chill"
+  # CodeRabbit submits "Request Changes" while issues remain and approves once
+  # they are addressed; the approval satisfies the required review that
+  # protects main.
+  request_changes_workflow: true
+  high_level_summary: true
+  poem: false
+  review_status: true
+
+  auto_review:
+    enabled: true
+    # Draft PRs stay unreviewed; the review fires when the PR is marked ready.
+    drafts: false
+    # Do not re-review on every intermediate push; trigger manually with
+    # `@coderabbitai review` when a full pass is wanted.
+    auto_incremental_review: false
+    ignore_title_keywords:
+      - "WIP"
+      - "Draft"
+      - "DO NOT MERGE"
+    # Automated PRs carry no review-worthy signal.
+    ignore_usernames:
+      - "github-actions[bot]" # changesets "Version Packages" release PRs
+      - "renovate[bot]" # dependency bumps (renovate.json)
+
+  # Exclusions tuned to this repository; anything not matched is reviewed.
+  path_filters:
+    # Lockfiles.
+    - "!**/pnpm-lock.yaml"
+    - "!**/package-lock.json"
+    - "!**/yarn.lock"
+    - "!**/bun.lockb"
+    - "!**/skills-lock.json"
+    # Generated code (`pnpm sync` output and TanStack Router route tree).
+    - "!**/data.generated.ts"
+    - "!**/routeTree.gen.ts"
+    - "!**/*.gen.ts"
+    - "!**/*.generated.ts"
+    # Vendored / third-party code.
+    - "!**/vendor/**"
+    - "!**/third_party/**"
+    - "!**/node_modules/**"
+    # Build outputs and compiled assets (dist/ and .vite/ are gitignored;
+    # kept here defensively).
+    - "!**/dist/**"
+    - "!**/build/**"
+    - "!**/out/**"
+    - "!**/.vite/**"
+    - "!**/*.min.js"
+    - "!**/*.min.css"
+    - "!**/*.map"
+    # Test coverage artifacts.
+    - "!**/coverage/**"
+    - "!**/.nyc_output/**"
+    # Plain documentation (README, AGENTS, CONTEXT, docs/, skill corpora,
+    # CHANGELOG).
+    - "!**/*.md"
+    - "!**/LICENSE"
+    # Changesets release metadata.
+    - "!**/.changeset/**"
+
+  # Where review attention should concentrate.
+  path_instructions:
+    - path: "worker/**"
+      instructions: >-
+        Public Cloudflare Worker boundary. Scrutinize auth, input validation,
+        secrets handling, and backwards compatibility of migrations and stored
+        data.
+    - path: "src/lib/**"
+      instructions: >-
+        Core domain logic. Check edge cases and whether the adjacent *.test.ts
+        files still cover the changed behavior.
+    - path: "scripts/**"
+      instructions: >-
+        Node tooling and agent-facing services. Watch for path traversal,
+        shell injection, and unhandled promise rejections.
+
+chat:
+  # Only respond to explicit @coderabbitai mentions and commands.
+  auto_reply: false
