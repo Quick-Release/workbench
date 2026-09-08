@@ -71,7 +71,7 @@ describe("the pull-requests page", () => {
       <PullRequestsPage
         pullRequests={[pr(82)]}
         aiConfigured={null}
-        reviewHealth={[
+        engineHealth={[
           { engine: "coderabbit", state: "ready", version: "coderabbit 1.2.3" },
           {
             engine: "zcode",

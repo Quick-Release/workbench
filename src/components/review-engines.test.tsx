@@ -21,9 +21,9 @@ const unconfigured: ReviewEngineHealth = {
 };
 
 const renderPanel = (
-  engines: readonly ReviewEngineHealth[] | null,
+  health: readonly ReviewEngineHealth[] | null,
   onStart?: (engine: ReviewEngineHealth["engine"]) => void,
-) => renderToString(<ReviewEngines engines={engines} onStart={onStart} />);
+) => renderToString(<ReviewEngines health={health} onStart={onStart} />);
 
 describe("the review-engines health panel", () => {
   it("renders a ready engine with its version and a start affordance", () => {

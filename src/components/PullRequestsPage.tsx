@@ -82,14 +82,14 @@ function PullRequestRow({
 export function PullRequestsPage({
   pullRequests,
   aiConfigured,
-  reviewHealth = null,
+  engineHealth = null,
 }: {
   pullRequests: readonly PullRequestRecord[];
   aiConfigured: boolean | null;
   // The review runner's health verdict (ticket #24): the route probes
   // /api/review/health on load and hands the per-engine states down as data;
   // null is "unknown yet" and renders the probing hint.
-  reviewHealth?: readonly ReviewEngineHealth[] | null;
+  engineHealth?: readonly ReviewEngineHealth[] | null;
 }) {
   const [board, setBoard] = useState<DraftBoard>(emptyBoard);
   // The live session: the abort handle for the in-flight request plus the
@@ -131,7 +131,7 @@ export function PullRequestsPage({
         sends only the PR number to the local dev server, which assembles the prompt from its own
         records — the draft lands here for you to copy, edit, or discard.
       </p>
-      <ReviewEngines engines={reviewHealth} />
+      <ReviewEngines health={engineHealth} />
       {aiConfigured === false && (
         <p data-slot="ai-unconfigured" className="text-sm text-muted-foreground">
           <UnconfiguredHint />

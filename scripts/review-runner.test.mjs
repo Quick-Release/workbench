@@ -161,6 +161,37 @@ test("a present but broken binary reports probe_error with the CLI's own complai
   }
 });
 
+test("a spawn-level failure (not a CLI exit) reports probe_error with the spawn's complaint", async () => {
+  const { spawn } = cli({
+    coderabbit: () => ({
+      status: null,
+      stdout: "",
+      stderr: "",
+      error: Object.assign(new Error("spawn EACCES"), { code: "EACCES" }),
+    }),
+  });
+  const health = reviewHealth({ spawn, homedir: () => "/home/dev" });
+  const coderabbit = health.engines.find((e) => e.engine === "coderabbit");
+  strictEqual(coderabbit.state, "probe_error");
+  strictEqual(coderabbit.message, "spawn EACCES");
+});
+
+test("a binary that vanishes between the version and auth probes still reads binary_missing", async () => {
+  const { spawn } = cli({
+    coderabbit: (arg) =>
+      arg === "--version" ? { status: 0, stdout: "coderabbit 1.2.3\n", stderr: "" } : enoent(),
+  });
+  const health = reviewHealth({ spawn, homedir: () => "/home/dev" });
+  deepStrictEqual(
+    health.engines.find((e) => e.engine === "coderabbit"),
+    {
+      engine: "coderabbit",
+      state: "binary_missing",
+      remediation: "install the CodeRabbit CLI: brew install coderabbit",
+    },
+  );
+});
+
 test("health answers for both engines in a fixed order", async () => {
   const { spawn } = cli({
     coderabbit: () => enoent(),

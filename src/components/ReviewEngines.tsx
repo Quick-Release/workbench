@@ -63,10 +63,10 @@ function EngineRow({
 }
 
 export function ReviewEngines({
-  engines,
+  health,
   onStart,
 }: {
-  engines: readonly ReviewEngineHealth[] | null;
+  health: readonly ReviewEngineHealth[] | null;
   onStart?: (engine: ReviewEngine) => void;
 }) {
   return (
@@ -75,14 +75,14 @@ export function ReviewEngines({
         <CardTitle>Review engines</CardTitle>
       </CardHeader>
       <CardContent>
-        {engines === null ? (
+        {health === null ? (
           <p data-slot="review-engines-unknown" className="text-sm text-muted-foreground">
             Probing the review engines…
           </p>
         ) : (
           <ul className="flex flex-col">
-            {engines.map((health) => (
-              <EngineRow key={health.engine} health={health} onStart={onStart} />
+            {health.map((engineHealth) => (
+              <EngineRow key={engineHealth.engine} health={engineHealth} onStart={onStart} />
             ))}
           </ul>
         )}
