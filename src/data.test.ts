@@ -7,6 +7,7 @@ import { frontier, frontierItemFromWorkItem, openBlockers } from "./lib/frontier
 import {
   parseArtifactRecord,
   parseBlockerEdgeRecord,
+  parseCommitCandidate,
   parseDecisionRecord,
   parseEdgeAddRequest,
   parseEdgeRemoveRequest,
@@ -214,6 +215,42 @@ describe("overview data boundary", () => {
       pullRequests: [pullRequest],
     };
     expectRejected(drifted, /isDraft/);
+  });
+
+  it("rejects data missing the highlights key entirely", () => {
+    const { highlights: _omitted, ...withoutHighlights } = generatedData;
+    expectRejected(withoutHighlights, /highlights/);
+  });
+
+  it("carries highlight candidates from the generated snapshot", () => {
+    expect(Array.isArray(generatedData.highlights)).toBe(true);
+    for (const record of generatedData.highlights)
+      expect(parseCommitCandidate(record)).toBeTruthy();
+  });
+
+  it("rejects a highlight candidate with an excess property", () => {
+    const candidate = {
+      sha: "e5a7f30c0e40a5d9b6b1c2f9a4d3e2b1a0c9d8e7",
+      subject: "feat: dedupe table chrome",
+      body: "Extracts the shared table header. Refs: #11",
+      author: "Ada Lovelace",
+      date: "2026-09-03T10:00:00.000Z",
+      ticketRef: "#11",
+    };
+    const drifted: unknown = { ...generatedData, highlights: [{ ...candidate, merged: true }] };
+    expectRejected(drifted, /merged/);
+  });
+
+  it("rejects a highlight candidate missing its ticket reference", () => {
+    const candidate = {
+      sha: "e5a7f30c0e40a5d9b6b1c2f9a4d3e2b1a0c9d8e7",
+      subject: "feat: dedupe table chrome",
+      body: "Extracts the shared table header.",
+      author: "Ada Lovelace",
+      date: "2026-09-03T10:00:00.000Z",
+    };
+    const drifted: unknown = { ...generatedData, highlights: [candidate] };
+    expectRejected(drifted, /ticketRef/);
   });
 
   it("carries pull requests from the generated snapshot", () => {

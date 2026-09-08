@@ -13,6 +13,7 @@ import { Route as IndexRouteImport } from './routes/index'
 import { Route as BlockersRouteImport } from './routes/blockers'
 import { Route as DecisionsRouteImport } from './routes/decisions'
 import { Route as FlowRouteImport } from './routes/flow'
+import { Route as HighlightsRouteImport } from './routes/highlights'
 import { Route as InFlightRouteImport } from './routes/in-flight'
 import { Route as PullRequestsRouteImport } from './routes/pull-requests'
 import { Route as SessionsRouteImport } from './routes/sessions'
@@ -38,6 +39,11 @@ const DecisionsRoute = DecisionsRouteImport.update({
 const FlowRoute = FlowRouteImport.update({
   id: '/flow',
   path: '/flow',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const HighlightsRoute = HighlightsRouteImport.update({
+  id: '/highlights',
+  path: '/highlights',
   getParentRoute: () => rootRouteImport,
 } as any)
 const InFlightRoute = InFlightRouteImport.update({
@@ -76,6 +82,7 @@ export interface FileRoutesByFullPath {
   '/blockers': typeof BlockersRoute
   '/decisions': typeof DecisionsRoute
   '/flow': typeof FlowRoute
+  '/highlights': typeof HighlightsRoute
   '/in-flight': typeof InFlightRoute
   '/pull-requests': typeof PullRequestsRoute
   '/sessions': typeof SessionsRoute
@@ -88,6 +95,7 @@ export interface FileRoutesByTo {
   '/blockers': typeof BlockersRoute
   '/decisions': typeof DecisionsRoute
   '/flow': typeof FlowRoute
+  '/highlights': typeof HighlightsRoute
   '/in-flight': typeof InFlightRoute
   '/pull-requests': typeof PullRequestsRoute
   '/sessions': typeof SessionsRoute
@@ -101,6 +109,7 @@ export interface FileRoutesById {
   '/blockers': typeof BlockersRoute
   '/decisions': typeof DecisionsRoute
   '/flow': typeof FlowRoute
+  '/highlights': typeof HighlightsRoute
   '/in-flight': typeof InFlightRoute
   '/pull-requests': typeof PullRequestsRoute
   '/sessions': typeof SessionsRoute
@@ -115,6 +124,7 @@ export interface FileRouteTypes {
     | '/blockers'
     | '/decisions'
     | '/flow'
+    | '/highlights'
     | '/in-flight'
     | '/pull-requests'
     | '/sessions'
@@ -127,6 +137,7 @@ export interface FileRouteTypes {
     | '/blockers'
     | '/decisions'
     | '/flow'
+    | '/highlights'
     | '/in-flight'
     | '/pull-requests'
     | '/sessions'
@@ -139,6 +150,7 @@ export interface FileRouteTypes {
     | '/blockers'
     | '/decisions'
     | '/flow'
+    | '/highlights'
     | '/in-flight'
     | '/pull-requests'
     | '/sessions'
@@ -152,6 +164,7 @@ export interface RootRouteChildren {
   BlockersRoute: typeof BlockersRoute
   DecisionsRoute: typeof DecisionsRoute
   FlowRoute: typeof FlowRoute
+  HighlightsRoute: typeof HighlightsRoute
   InFlightRoute: typeof InFlightRoute
   PullRequestsRoute: typeof PullRequestsRoute
   SessionsRoute: typeof SessionsRoute
@@ -188,6 +201,13 @@ declare module '@tanstack/react-router' {
       path: '/flow'
       fullPath: '/flow'
       preLoaderRoute: typeof FlowRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/highlights': {
+      id: '/highlights'
+      path: '/highlights'
+      fullPath: '/highlights'
+      preLoaderRoute: typeof HighlightsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/in-flight': {
@@ -240,6 +260,7 @@ const rootRouteChildren: RootRouteChildren = {
   BlockersRoute: BlockersRoute,
   DecisionsRoute: DecisionsRoute,
   FlowRoute: FlowRoute,
+  HighlightsRoute: HighlightsRoute,
   InFlightRoute: InFlightRoute,
   PullRequestsRoute: PullRequestsRoute,
   SessionsRoute: SessionsRoute,

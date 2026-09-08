@@ -8,6 +8,7 @@ import {
   ReceiptText,
   Rocket,
   ScrollText,
+  Sparkles,
   Waypoints,
   Wrench,
 } from "lucide-react";
@@ -40,6 +41,7 @@ const blockersLink = linkOptions({ to: "/blockers", search: {} });
 const inFlightLink = linkOptions({ to: "/in-flight" });
 const decisionsLink = linkOptions({ to: "/decisions" });
 const pullRequestsLink = linkOptions({ to: "/pull-requests" });
+const highlightsLink = linkOptions({ to: "/highlights" });
 const transcriptsLink = linkOptions({ to: "/transcripts" });
 
 type NavItem = { title: string; icon: typeof ReceiptText } & (
@@ -53,6 +55,7 @@ type NavItem = { title: string; icon: typeof ReceiptText } & (
   | typeof decisionsLink
   | typeof pullRequestsLink
   | typeof transcriptsLink
+  | typeof highlightsLink
 );
 
 // Spec #54's sidebar order: Overview, then the Workflow destination group,
@@ -67,6 +70,7 @@ const workflowItems: NavItem[] = [
   { title: "In flight", icon: Rocket, ...inFlightLink },
   { title: "Decisions", icon: ScrollText, ...decisionsLink },
   { title: "Pull requests", icon: GitPullRequest, ...pullRequestsLink },
+  { title: "Highlights", icon: Sparkles, ...highlightsLink },
 ];
 
 const closingItems: NavItem[] = [
