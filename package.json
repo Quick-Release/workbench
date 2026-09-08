@@ -34,7 +34,8 @@
     "format": "vp fmt --write . && vp lint --fix .",
     "check": "pnpm sync && vp fmt --check . && vp lint . && tsc --noEmit",
     "changeset": "changeset",
-    "release-publish": "changeset publish"
+    "release-publish": "changeset publish",
+    "prepare": "git config core.hooksPath .githooks"
   },
   "dependencies": {
     "@clack/prompts": "^1.7.0",

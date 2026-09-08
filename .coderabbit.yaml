@@ -7,7 +7,10 @@ reviews:
   # Reviews target correctness and intent; skips low-severity styling and
   # preference nitpicks, which `vp lint` / `vp fmt` already enforce.
   profile: "chill"
-  request_changes_workflow: false
+  # CodeRabbit submits "Request Changes" while issues remain and approves once
+  # they are addressed; the approval satisfies the required review that
+  # protects main.
+  request_changes_workflow: true
   high_level_summary: true
   poem: false
   review_status: true
