@@ -1,3 +1,4 @@
+#!/usr/bin/env sh
 # Local CI gate: every commit runs the same checks the release workflow runs
 # on main. A failing check blocks the commit.
 #
