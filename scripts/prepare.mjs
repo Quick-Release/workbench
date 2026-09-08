@@ -11,7 +11,14 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 export const ensureHooksPath = ({ directory, hooksPath = ".githooks", ci = process.env.CI }) => {
   if (ci) return { enabled: false, reason: "ci" };
-  const options = { cwd: directory, stdio: "ignore" };
+  // The probe and the config write target `directory`; a caller's git context
+  // (a pre-commit hook exports GIT_DIR and friends to everything it spawns)
+  // would redirect both, so the subprocesses run without it.
+  const env = { ...process.env };
+  for (const key of Object.keys(env)) {
+    if (key.startsWith("GIT_")) delete env[key];
+  }
+  const options = { cwd: directory, stdio: "ignore", env };
   try {
     execFileSync("git", ["rev-parse", "--git-dir"], options);
   } catch {

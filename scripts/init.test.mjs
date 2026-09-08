@@ -78,6 +78,18 @@ const submit = async (input, keys) => {
   for (const [ch, key] of keypresses(keys)) input.emit("keypress", ch, key);
 };
 
+// Fixture git calls target a scratch directory, so they must ignore whatever
+// git context the caller runs the suite under (a pre-commit hook exports
+// GIT_DIR and friends); otherwise the fixtures build inside the caller's repo.
+const execGit = (args, cwd) =>
+  new Promise((resolve, reject) => {
+    const env = { ...process.env };
+    for (const key of Object.keys(env)) {
+      if (key.startsWith("GIT_")) delete env[key];
+    }
+    execFile("git", args, { cwd, env }, (error) => (error ? reject(error) : resolve()));
+  });
+
 const assertNoConfig = async (directory) => {
   await stat(join(directory, "workbench.config.json")).then(
     () => {
@@ -138,19 +150,8 @@ test("happy path writes a config that loads through the existing loader", async 
 
 test("origin remote becomes the accepted-by-enter default for URL and GitHub repo", async () => {
   await withRoot(async (directory) => {
-    await new Promise((resolve, reject) =>
-      execFile("git", ["init", "-q"], { cwd: directory }, (error) =>
-        error ? reject(error) : resolve(),
-      ),
-    );
-    await new Promise((resolve, reject) =>
-      execFile(
-        "git",
-        ["remote", "add", "origin", "git@github.com:example/project.git"],
-        { cwd: directory },
-        (error) => (error ? reject(error) : resolve()),
-      ),
-    );
+    await execGit(["init", "-q"], directory);
+    await execGit(["remote", "add", "origin", "git@github.com:example/project.git"], directory);
 
     const { input, output } = mockStreams();
     const flow = runInit({ rootDirectory: directory, input, output, interactive: true });
@@ -171,6 +172,51 @@ test("origin remote becomes the accepted-by-enter default for URL and GitHub rep
     strictEqual(config.repositoryUrl, "https://github.com/example/project");
     strictEqual(config.services[0].repo, "example/project");
     match(config.projectName, /^workbench-init-/);
+  });
+});
+
+test("the directory's own origin wins over inherited git context (hook env)", async () => {
+  await withRoot(async (directory) => {
+    await execGit(["init", "-q"], directory);
+    await execGit(["remote", "add", "origin", "git@github.com:example/project.git"], directory);
+
+    // A foreign git context, exactly the vars a pre-commit hook exports to its
+    // suite. init probes the directory it is given, never the caller's repo.
+    const foreign = await tmpRoot();
+    await execGit(["init", "-q"], foreign);
+    const inherited = {
+      GIT_DIR: join(foreign, ".git"),
+      GIT_WORK_TREE: foreign,
+      GIT_INDEX_FILE: join(foreign, ".git", "index"),
+    };
+    const saved = new Map(Object.keys(inherited).map((key) => [key, process.env[key]]));
+    Object.assign(process.env, inherited);
+
+    try {
+      const { input, output } = mockStreams();
+      const flow = runInit({ rootDirectory: directory, input, output, interactive: true });
+
+      // projectName default (directory name) → repositoryUrl default (origin) →
+      // multiselect github → repo default (owner/name from origin) → tokenEnv → done
+      await submit(input, "\r");
+      await submit(input, "\r");
+      await submit(input, " \r");
+      await submit(input, "\r");
+      await submit(input, "GITHUB_TOKEN\r");
+      await submit(input, "\r");
+
+      const result = await flow;
+      strictEqual(result.status, "written");
+
+      const config = await loadWorkbenchConfig(directory);
+      strictEqual(config.repositoryUrl, "https://github.com/example/project");
+      strictEqual(config.services[0].repo, "example/project");
+    } finally {
+      for (const [key, value] of saved) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
   });
 });
 
