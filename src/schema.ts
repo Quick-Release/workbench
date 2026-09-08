@@ -2,6 +2,7 @@ import { Schema } from "effect";
 
 import type {
   OverviewData,
+  ReviewHealth,
   SkillClassification,
   SkillFlowEdge,
   SkillsStatus,
@@ -12,6 +13,7 @@ import {
   blockerEdgeSources,
   decisionSources,
   decisionStatuses,
+  reviewEngines,
   serviceStatuses,
   skillFlowEdgeKinds,
   skillFlowRoles,
@@ -243,6 +245,45 @@ export const AiDraftResultSchema = Schema.Struct({
 
 export const AiHealthSchema = Schema.Struct({
   configured: Schema.Boolean,
+});
+
+// The review seam's health response (epic #20, ticket #24): per-engine
+// availability as one typed state each, carrying the engine's version when
+// the binary was found and the one-step remediation command when it is not
+// ready. The auth flavors are engine-specific: CodeRabbit needs an Agentic
+// API key, zcode needs a model provider.
+export const ReviewEngineHealthSchema = Schema.Union([
+  Schema.Struct({
+    engine: Schema.Literals(reviewEngines),
+    state: Schema.Literal("ready"),
+    version: Schema.String,
+  }),
+  Schema.Struct({
+    engine: Schema.Literals(reviewEngines),
+    state: Schema.Literal("binary_missing"),
+    remediation: Schema.String,
+  }),
+  Schema.Struct({
+    engine: Schema.Literal("coderabbit"),
+    state: Schema.Literal("auth_missing"),
+    version: Schema.String,
+    remediation: Schema.String,
+  }),
+  Schema.Struct({
+    engine: Schema.Literal("zcode"),
+    state: Schema.Literal("provider_missing"),
+    version: Schema.String,
+    remediation: Schema.String,
+  }),
+  Schema.Struct({
+    engine: Schema.Literals(reviewEngines),
+    state: Schema.Literal("probe_error"),
+    message: Schema.String,
+  }),
+]);
+
+export const ReviewHealthSchema = Schema.Struct({
+  engines: Schema.Array(ReviewEngineHealthSchema),
 });
 
 // The blocker-edge actions (ticket #61): an add declares a gate with
@@ -534,6 +575,11 @@ export const parseAiDraftResult: (input: unknown) => { title: string; body: stri
 
 export const parseAiHealth: (input: unknown) => { configured: boolean } = Schema.decodeUnknownSync(
   AiHealthSchema,
+  { onExcessProperty: "error" },
+);
+
+export const parseReviewHealth: (input: unknown) => ReviewHealth = Schema.decodeUnknownSync(
+  ReviewHealthSchema,
   { onExcessProperty: "error" },
 );
 

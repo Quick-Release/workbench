@@ -412,3 +412,19 @@ export type OverviewData = {
   sessions: SessionUsage;
   highlights: readonly CommitCandidate[];
 };
+
+// The review engines (epic #20): what the review runner's health probe
+// reports per engine (ticket #24). Each engine resolves to exactly one typed
+// state; a not-ready state carries the one-step remediation command.
+export const reviewEngines = ["coderabbit", "zcode"] as const;
+
+export type ReviewEngine = (typeof reviewEngines)[number];
+
+export type ReviewEngineHealth =
+  | { engine: ReviewEngine; state: "ready"; version: string }
+  | { engine: ReviewEngine; state: "binary_missing"; remediation: string }
+  | { engine: "coderabbit"; state: "auth_missing"; version: string; remediation: string }
+  | { engine: "zcode"; state: "provider_missing"; version: string; remediation: string }
+  | { engine: ReviewEngine; state: "probe_error"; message: string };
+
+export type ReviewHealth = { engines: readonly ReviewEngineHealth[] };
