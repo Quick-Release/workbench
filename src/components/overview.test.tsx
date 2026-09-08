@@ -6,6 +6,7 @@ import { TooltipProvider } from "./ui/tooltip";
 import type { OverviewData, WorkflowStatePayload, WorkItemRecord } from "../types";
 import { OverviewPage } from "./OverviewPage";
 import { SiteHeader } from "./layout/site-header";
+import { setWorkflowState } from "../hooks/use-workflow-state";
 
 const item = (number: number, overrides: Partial<WorkItemRecord> = {}): WorkItemRecord => ({
   id: `GH-${number}`,
@@ -189,6 +190,10 @@ describe("the sync trigger", () => {
 
 describe("the header chip", () => {
   it("renders in the site header on every page", () => {
+    // The header reads the shared workflow atom rather than a prop, so the
+    // test seeds it — otherwise the chip appears only when the machine's
+    // synced snapshot happens to hold a recommendation.
+    setWorkflowState(state([item(34, { phase: "ticketed", triageState: "ready-for-agent" })]));
     const html = renderToString(
       <TooltipProvider>
         <SidebarProvider>
@@ -197,5 +202,6 @@ describe("the header chip", () => {
       </TooltipProvider>,
     );
     expect(html).toContain('data-slot="recommendation-chip"');
+    expect(html).toContain("/implement #34");
   });
 });
