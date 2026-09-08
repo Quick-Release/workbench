@@ -14,8 +14,9 @@ import { join } from "node:path";
 
 // The spawn contract: `spawn({ command, args })` runs the CLI and returns
 // `{ status, stdout, stderr, error? }` — spawnSync's natural shape. The
-// timeout keeps a hung CLI from stalling the dev server's event loop; the
-// version/auth subcommands answer in milliseconds.
+// timeout bounds how long a hung CLI can block the dev server's event loop
+// (spawnSync is synchronous by definition); the version/auth subcommands
+// answer in milliseconds.
 const nodeSpawn = ({ command, args }) =>
   spawnSync(command, args, { encoding: "utf8", timeout: 5_000 });
 
@@ -45,20 +46,29 @@ const coderabbitEngine = {
   // Docs: docs.coderabbit.ai/cli — `coderabbit auth status` checks the
   // stored Agentic API key without touching the network side of a review.
   probeHealth({ spawn }) {
+    const install = "install the CodeRabbit CLI: brew install coderabbit";
+    const login =
+      "run `coderabbit auth login --api-key <your Agentic API key>` — headless reviews need the Agentic key";
     const probe = versionProbe({ spawn, binary: "coderabbit" });
-    if (probe.kind === "binary_missing")
-      return binaryMissing("coderabbit", "install the CodeRabbit CLI: brew install coderabbit");
+    if (probe.kind === "binary_missing") return binaryMissing("coderabbit", install);
     if (probe.kind === "probe_error") return probeError("coderabbit", probe.message);
     const auth = spawn({ command: "coderabbit", args: ["auth", "status"] });
-    if (auth.error?.code === "ENOENT")
-      return binaryMissing("coderabbit", "install the CodeRabbit CLI: brew install coderabbit");
+    // The binary can vanish between the version and auth probes; anything
+    // else that fails to spawn (timeout, EACCES) is the environment, not an
+    // answer, so it surfaces as probe_error rather than a login instruction
+    // the Developer can't act on.
+    if (auth.error?.code === "ENOENT") return binaryMissing("coderabbit", install);
+    if (auth.status === null || auth.error)
+      return probeError(
+        "coderabbit",
+        auth.stderr.trim() || auth.error?.message || "coderabbit auth status failed",
+      );
     if (auth.status !== 0)
       return {
         engine: "coderabbit",
         state: "auth_missing",
         version: probe.version,
-        remediation:
-          "run `coderabbit auth login --api-key <your Agentic API key>` — headless reviews need the Agentic key",
+        remediation: login,
       };
     return { engine: "coderabbit", state: "ready", version: probe.version };
   },

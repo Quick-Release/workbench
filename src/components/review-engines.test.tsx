@@ -5,8 +5,9 @@ import { ReviewEngines } from "./ReviewEngines";
 import type { ReviewEngineHealth } from "../types";
 
 // Ticket #24's UI contract: each engine renders as ready or not-ready with
-// its specific remediation command, and a not-ready engine is never given a
-// start affordance. Health arrives as data — the route probes on load.
+// its specific remediation command, and no engine is ever given a start
+// affordance — starting a review belongs to a later epic #20 slice. Health
+// arrives as data — the route probes on load.
 
 const ready: ReviewEngineHealth = {
   engine: "coderabbit",
@@ -20,22 +21,20 @@ const unconfigured: ReviewEngineHealth = {
   remediation: "run `zcode login` to configure a model provider",
 };
 
-const renderPanel = (
-  health: readonly ReviewEngineHealth[] | null,
-  onStart?: (engine: ReviewEngineHealth["engine"]) => void,
-) => renderToString(<ReviewEngines health={health} onStart={onStart} />);
+const renderPanel = (health: readonly ReviewEngineHealth[] | null) =>
+  renderToString(<ReviewEngines health={health} />);
 
 describe("the review-engines health panel", () => {
-  it("renders a ready engine with its version and a start affordance", () => {
-    const html = renderPanel([ready], () => {});
+  it("renders a ready engine with its version and no start affordance", () => {
+    const html = renderPanel([ready]);
     expect(html).toContain('data-engine="coderabbit"');
     expect(html).toContain('data-engine-state="ready"');
     expect(html).toContain("coderabbit 1.2.3");
-    expect(html).toContain("Run review");
+    expect(html).not.toContain("Run review");
   });
 
   it("renders a not-ready engine with its exact remediation command and no start affordance", () => {
-    const html = renderPanel([unconfigured], () => {});
+    const html = renderPanel([unconfigured]);
     expect(html).toContain('data-engine="zcode"');
     expect(html).toContain('data-engine-state="provider_missing"');
     expect(html).toContain("run `zcode login` to configure a model provider");

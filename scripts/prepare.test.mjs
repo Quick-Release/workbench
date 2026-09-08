@@ -5,20 +5,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
+import { envWithoutGitContext } from "./git-context.mjs";
 import { ensureHooksPath } from "./prepare.mjs";
 
 const base = join(tmpdir(), "workbench-prepare");
-
-// Fixture git calls target scratch directories, so they must ignore whatever
-// git context the suite runs under (a pre-commit hook exports GIT_DIR and
-// friends); otherwise the fixtures build inside the caller's repo.
-const envWithoutGitContext = () => {
-  const env = { ...process.env };
-  for (const key of Object.keys(env)) {
-    if (key.startsWith("GIT_")) delete env[key];
-  }
-  return env;
-};
 
 const prepare = async (name, init = false) => {
   const directory = join(base, name);

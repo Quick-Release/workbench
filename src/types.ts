@@ -415,16 +415,17 @@ export type OverviewData = {
 
 // The review engines (epic #20): what the review runner's health probe
 // reports per engine (ticket #24). Each engine resolves to exactly one typed
-// state; a not-ready state carries the one-step remediation command.
+// state; a not-ready state carries the one-step remediation command. The
+// vocabulary lives here; the health shapes are derived from the Effect Schema
+// union in ./schema.ts so the compile-time and wire shapes cannot drift. The
+// schema import is type-only — no runtime cycle, no schema code in the bundle.
+import type { Schema } from "effect";
+import type { ReviewEngineHealthSchema, ReviewHealthSchema } from "./schema.ts";
+
 export const reviewEngines = ["coderabbit", "zcode"] as const;
 
 export type ReviewEngine = (typeof reviewEngines)[number];
 
-export type ReviewEngineHealth =
-  | { engine: ReviewEngine; state: "ready"; version: string }
-  | { engine: ReviewEngine; state: "binary_missing"; remediation: string }
-  | { engine: "coderabbit"; state: "auth_missing"; version: string; remediation: string }
-  | { engine: "zcode"; state: "provider_missing"; version: string; remediation: string }
-  | { engine: ReviewEngine; state: "probe_error"; message: string };
+export type ReviewEngineHealth = Schema.Schema.Type<typeof ReviewEngineHealthSchema>;
 
-export type ReviewHealth = { engines: readonly ReviewEngineHealth[] };
+export type ReviewHealth = Schema.Schema.Type<typeof ReviewHealthSchema>;

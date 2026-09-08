@@ -7,6 +7,7 @@ import { z } from "zod";
 import * as p from "@clack/prompts";
 
 import { loadWorkbenchConfig } from "./config.mjs";
+import { envWithoutGitContext } from "./git-context.mjs";
 
 const execFileAsync = promisify(execFile);
 
@@ -102,26 +103,13 @@ const TOKEN_ENV_PLACEHOLDER = {
 };
 
 // git remote get-url origin, translated to the http(s) form the config wants.
-// The probe targets rootDirectory, so a caller's git context — pre-commit
-// hooks export GIT_DIR and friends to everything they spawn, tests included —
-// must be stripped from the subprocess or it redirects (or deadlocks) the probe.
-const GIT_CONTEXT_KEYS = [
-  "GIT_DIR",
-  "GIT_WORK_TREE",
-  "GIT_INDEX_FILE",
-  "GIT_PREFIX",
-  "GIT_COMMON_DIR",
-  "GIT_OBJECT_DIRECTORY",
-  "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-];
-
+// The probe targets rootDirectory, so the caller's git context is stripped
+// from the subprocess (scripts/git-context.mjs) or it redirects the probe.
 const inferOriginUrl = async (rootDirectory) => {
-  const env = { ...process.env };
-  for (const key of GIT_CONTEXT_KEYS) delete env[key];
   try {
     const { stdout } = await execFileAsync("git", ["remote", "get-url", "origin"], {
       cwd: rootDirectory,
-      env,
+      env: envWithoutGitContext(),
     });
     const url = stdout.trim();
     const ssh = url.match(/^git@([^:]+):(.+?)(?:\.git)?$/);

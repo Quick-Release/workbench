@@ -7,6 +7,7 @@ import test from "node:test";
 import { Readable, Writable } from "node:stream";
 
 import { loadWorkbenchConfig } from "./config.mjs";
+import { envWithoutGitContext } from "./git-context.mjs";
 import { runInit } from "./init.mjs";
 
 const tmpRoot = async () => mkdtemp(join(tmpdir(), "workbench-init-"));
@@ -78,16 +79,14 @@ const submit = async (input, keys) => {
   for (const [ch, key] of keypresses(keys)) input.emit("keypress", ch, key);
 };
 
-// Fixture git calls target a scratch directory, so they must ignore whatever
-// git context the caller runs the suite under (a pre-commit hook exports
-// GIT_DIR and friends); otherwise the fixtures build inside the caller's repo.
+// Fixture git calls target a scratch directory, so they too must ignore the
+// caller's git context (scripts/git-context.mjs) or the fixtures build
+// inside the caller's repo.
 const execGit = (args, cwd) =>
   new Promise((resolve, reject) => {
-    const env = { ...process.env };
-    for (const key of Object.keys(env)) {
-      if (key.startsWith("GIT_")) delete env[key];
-    }
-    execFile("git", args, { cwd, env }, (error) => (error ? reject(error) : resolve()));
+    execFile("git", args, { cwd, env: envWithoutGitContext() }, (error) =>
+      error ? reject(error) : resolve(),
+    );
   });
 
 const assertNoConfig = async (directory) => {

@@ -1,4 +1,4 @@
-import { deepStrictEqual, strictEqual } from "node:assert";
+import { deepStrictEqual, match, strictEqual } from "node:assert";
 import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -82,6 +82,27 @@ test("an unauthenticated coderabbit CLI reports auth_missing with the login comm
         "run `coderabbit auth login --api-key <your Agentic API key>` — headless reviews need the Agentic key",
     },
   );
+});
+
+test("a spawn-level failure of the auth probe reports probe_error, not auth_missing", async () => {
+  // A timeout or unspawnable `auth status` is not the CLI answering "not
+  // logged in"; telling the Developer to run the login command would be the
+  // opaque misdirection this ticket exists to prevent.
+  const { spawn } = cli({
+    coderabbit: (arg) =>
+      arg === "--version"
+        ? { status: 0, stdout: "coderabbit 1.2.3\n", stderr: "" }
+        : {
+            status: null,
+            stdout: "",
+            stderr: "",
+            error: Object.assign(new Error("spawn coderabbit EACCES"), { code: "EACCES" }),
+          },
+  });
+  const health = reviewHealth({ spawn, homedir: () => "/home/dev" });
+  const coderabbit = health.engines.find((e) => e.engine === "coderabbit");
+  strictEqual(coderabbit.state, "probe_error");
+  match(coderabbit.message, /EACCES/);
 });
 
 const zcodeCli = () =>
