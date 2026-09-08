@@ -1,4 +1,4 @@
-import { deepStrictEqual, strictEqual } from "node:assert";
+import { strictEqual } from "node:assert";
 import test from "node:test";
 
 import { fetchOutcomes, isGitHubRemote } from "./outcomes.mjs";
