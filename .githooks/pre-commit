@@ -1,0 +1,33 @@
+#!/usr/bin/env sh
+# Local CI gate: every commit runs the same checks the release workflow runs
+# on main. A failing check blocks the commit.
+#
+# Emergency bypass: git commit --no-verify
+set -eu
+
+cd "$(git rev-parse --show-toplevel)"
+
+if ! command -v pnpm >/dev/null 2>&1; then
+  echo "pre-commit: pnpm is required but was not found in PATH." >&2
+  echo "pre-commit: install pnpm (https://pnpm.io) or bypass with --no-verify (avoid)." >&2
+  exit 1
+fi
+
+# Fresh clones have no dependencies yet; install before checking.
+if [ ! -d node_modules ]; then
+  echo "pre-commit: node_modules missing, running pnpm install --frozen-lockfile"
+  pnpm install --frozen-lockfile
+fi
+
+echo "pre-commit: pnpm check"
+pnpm check
+
+# The check above regenerates the snapshot; a tracked, unstaged change means
+# the commit would land stale data.
+if ! git diff --quiet -- src/data.generated.ts; then
+  echo "pre-commit: src/data.generated.ts is stale. Run 'pnpm sync' and stage it." >&2
+  exit 1
+fi
+
+echo "pre-commit: pnpm test"
+pnpm test
