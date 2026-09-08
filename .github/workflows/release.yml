@@ -34,3 +34,11 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NPM_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # The changesets action silently skips the tag push and the GitHub
+      # release (its --follow-tags push misses changesets v3's lightweight
+      # tags) — this step finishes the release the repo's way (#77), and
+      # no-ops when the tag and release already exist.
+      - name: Tag and release the published version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/tagged-release.mjs
