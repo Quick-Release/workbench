@@ -249,8 +249,9 @@ export const AiHealthSchema = Schema.Struct({
 
 // The review seam's health response (epic #20, ticket #24): per-engine
 // availability as one typed state each, carrying the engine's version when
-// the binary was found and the one-step remediation command when it is not
-// ready. The auth flavors are engine-specific: CodeRabbit needs an Agentic
+// the binary was found. Not-ready states carry the one-step remediation
+// command, except probe_error, which carries the probe's own message. The
+// auth flavors are engine-specific: CodeRabbit needs an Agentic
 // API key, zcode needs a model provider.
 export const ReviewEngineHealthSchema = Schema.Union([
   Schema.Struct({

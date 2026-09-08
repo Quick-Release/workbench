@@ -37,11 +37,9 @@ test("a found coderabbit binary with working auth reports the engine ready", asy
       version: "coderabbit 1.2.3",
     },
   );
-  strictEqual(
-    calls.some((argv) => argv.includes("review")),
-    false,
-    "health never runs a review",
-  );
+  // The exact probed argv, in order — this is what makes "health never runs
+  // a review" hold: only version and auth subcommands are ever spawned.
+  deepStrictEqual(calls, ["coderabbit --version", "coderabbit auth status", "zcode --version"]);
 });
 
 const enoent = () => ({
@@ -87,15 +85,16 @@ test("an unauthenticated coderabbit CLI reports auth_missing with the login comm
 test("a spawn-level failure of the auth probe reports probe_error, not auth_missing", async () => {
   // A timeout or unspawnable `auth status` is not the CLI answering "not
   // logged in"; telling the Developer to run the login command would be the
-  // opaque misdirection this ticket exists to prevent.
+  // opaque misdirection this ticket exists to prevent. The fake answers with
+  // spawnSync's real failure shape: status null and stdout/stderr null.
   const { spawn } = cli({
     coderabbit: (arg) =>
       arg === "--version"
         ? { status: 0, stdout: "coderabbit 1.2.3\n", stderr: "" }
         : {
             status: null,
-            stdout: "",
-            stderr: "",
+            stdout: null,
+            stderr: null,
             error: Object.assign(new Error("spawn coderabbit EACCES"), { code: "EACCES" }),
           },
   });

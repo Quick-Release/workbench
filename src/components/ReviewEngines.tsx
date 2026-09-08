@@ -6,8 +6,8 @@ import type { ReviewEngineHealth } from "@/types";
 // renders from the review runner's health probe. The probe result travels in
 // as data — the route fetches it on load — so this component only renders
 // states. No start affordance exists anywhere by design until the run-review
-// slice of epic #20 lands; a not-ready engine is shown with its one-step
-// remediation command instead of ever failing opaquely mid-run.
+// slice of epic #20 lands; a not-ready engine shows its one-step remediation
+// command, and a probe_error engine shows the probe's own message.
 
 const stateLabels: Record<ReviewEngineHealth["state"], string> = {
   ready: "Ready",

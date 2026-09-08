@@ -6,8 +6,9 @@ import { join } from "node:path";
 // The review runner seam (epic #20): the one component that knows how to
 // execute a review and probe the review engines' health. This is the seam's
 // health half (ticket #24): per-engine availability — CLI binary found (with
-// its version), authentication / provider status — as typed states with a
-// one-step remediation message. Probes only ever invoke version and auth
+// its version), authentication / provider status — as typed states: not-ready
+// states carry a one-step remediation command, except probe_error, which
+// carries the probe's own message. Probes only ever invoke version and auth
 // subcommands, never a review, and are safe to call repeatedly. The child-
 // process spawn function is injected so tests substitute a fake CLI binary;
 // the endpoint and the UI are thin layers over this module.
@@ -23,7 +24,8 @@ const nodeSpawn = ({ command, args }) =>
 // Classifies a version probe: the binary is either found (with its version
 // string), missing (ENOENT — also when it vanishes between probes), or
 // present but failing (a CLI exit carries stderr; a spawn-level failure
-// carries the spawn error's own message).
+// carries the spawn error's own message). A failed spawn returns stdout and
+// stderr as null, not empty strings, so both reads are null-safe.
 const versionProbe = ({ spawn, binary }) => {
   const result = spawn({ command: binary, args: ["--version"] });
   if (result.error?.code === "ENOENT") return { kind: "binary_missing" };
@@ -31,11 +33,11 @@ const versionProbe = ({ spawn, binary }) => {
     return {
       kind: "probe_error",
       message:
-        result.stderr.trim() ||
+        (result.stderr ?? "").trim() ||
         result.error?.message ||
         `${binary} --version exited with status ${result.status}`,
     };
-  return { kind: "found", version: result.stdout.trim() };
+  return { kind: "found", version: (result.stdout ?? "").trim() };
 };
 
 const binaryMissing = (engine, remediation) => ({ engine, state: "binary_missing", remediation });
@@ -61,7 +63,7 @@ const coderabbitEngine = {
     if (auth.status === null || auth.error)
       return probeError(
         "coderabbit",
-        auth.stderr.trim() || auth.error?.message || "coderabbit auth status failed",
+        (auth.stderr ?? "").trim() || auth.error?.message || "coderabbit auth status failed",
       );
     if (auth.status !== 0)
       return {

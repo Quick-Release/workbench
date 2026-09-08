@@ -76,5 +76,8 @@
     "fallow": "^3.22.0",
     "happy-dom": "^20.14.0"
   },
+  "engines": {
+    "node": ">=22.18.0"
+  },
   "packageManager": "pnpm@12.3.1"
 }

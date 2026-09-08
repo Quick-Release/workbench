@@ -36,19 +36,26 @@ export const reviewApiPlugin = ({ probeHealth = () => reviewHealth() } = {}) => 
   name: "workbench-review-api",
   configureServer(server) {
     server.middlewares.use(async (request, response, next) => {
-      const url = new URL(request.url ?? "/", "http://localhost");
-      if (!isReviewApiRoute(url.pathname)) return next();
-      const handled = await handleReviewApi({
-        method: request.method,
-        pathname: url.pathname,
-        host: request.headers.host,
-        origin: request.headers.origin,
-        probeHealth,
-      });
-      if (!handled) return next();
-      response.statusCode = handled.status;
-      response.setHeader("content-type", "application/json");
-      response.end(JSON.stringify(handled.json));
+      // Connect does not consume this async middleware's promise, so an
+      // exception here (a malformed request URL failing `new URL`, say)
+      // would hang the request as an unhandled rejection — forward it.
+      try {
+        const url = new URL(request.url ?? "/", "http://localhost");
+        if (!isReviewApiRoute(url.pathname)) return next();
+        const handled = await handleReviewApi({
+          method: request.method,
+          pathname: url.pathname,
+          host: request.headers.host,
+          origin: request.headers.origin,
+          probeHealth,
+        });
+        if (!handled) return next();
+        response.statusCode = handled.status;
+        response.setHeader("content-type", "application/json");
+        response.end(JSON.stringify(handled.json));
+      } catch (error) {
+        next(error);
+      }
     });
   },
 });

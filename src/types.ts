@@ -415,7 +415,8 @@ export type OverviewData = {
 
 // The review engines (epic #20): what the review runner's health probe
 // reports per engine (ticket #24). Each engine resolves to exactly one typed
-// state; a not-ready state carries the one-step remediation command. The
+// state; not-ready states carry the one-step remediation command, except
+// probe_error, which carries the probe's own message. The
 // vocabulary lives here; the health shapes are derived from the Effect Schema
 // union in ./schema.ts so the compile-time and wire shapes cannot drift. The
 // schema import is type-only — no runtime cycle, no schema code in the bundle.
