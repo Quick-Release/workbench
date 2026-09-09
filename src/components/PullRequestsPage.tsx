@@ -171,6 +171,13 @@ export function PullRequestsPage({
         for await (const event of streamReviewRun({ engine, pr, signal: controller.signal })) {
           setReviewRun((current) => (current.token === token ? runEvent(current, event) : current));
         }
+        // A stream that ends without an exit — server crash, dropped
+        // connection — must not leave the run running forever.
+        setReviewRun((current) =>
+          current.token === token && current.phase === "running"
+            ? runFailed(current, "the review stream ended before the run finished")
+            : current,
+        );
       } catch (error) {
         if (controller.signal.aborted) return;
         if (error instanceof ReviewRunHttpError && error.status === 409 && error.payload?.message) {
