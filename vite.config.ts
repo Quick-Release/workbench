@@ -12,6 +12,7 @@ import { aiApiPlugin } from "./scripts/ai-api.mjs";
 import { llmApiPlugin } from "./scripts/llm-api.mjs";
 import { submissionsApiPlugin } from "./scripts/submissions-api.mjs";
 import { reviewApiPlugin } from "./scripts/review-api.mjs";
+import { reviewCommentApiPlugin } from "./scripts/review-comment-api.mjs";
 
 // Shared by the dev/build pipeline and the dashboard test project: vitest
 // projects don't inherit the root config's plugins or resolve (ticket #29).
@@ -28,6 +29,7 @@ const dashboardPlugins = [
   llmApiPlugin(),
   submissionsApiPlugin(),
   reviewApiPlugin(),
+  reviewCommentApiPlugin(),
 ];
 const dashboardAlias = {
   "@": fileURLToPath(new URL("./src", import.meta.url)),

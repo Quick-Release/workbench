@@ -2,6 +2,8 @@ import { Schema } from "effect";
 
 import type {
   OverviewData,
+  ReviewCommentRequest,
+  ReviewCommentResult,
   ReviewHealth,
   SkillClassification,
   SkillFlowEdge,
@@ -285,6 +287,23 @@ export const ReviewEngineHealthSchema = Schema.Union([
 
 export const ReviewHealthSchema = Schema.Struct({
   engines: Schema.Array(ReviewEngineHealthSchema),
+});
+
+// The review findings' post-as-comment action (ticket #25): the page sends
+// the enumerated target and the findings it already holds — no command text
+// ever crosses the seam; the comment body is composed server-side with the
+// engine and PR attribution.
+export const ReviewCommentRequestSchema = Schema.Struct({
+  engine: Schema.Literals(reviewEngines),
+  pr: Schema.Number,
+  findings: Schema.String,
+});
+
+export const ReviewCommentResultSchema = Schema.Struct({
+  message: Schema.String,
+  engine: Schema.Literals(reviewEngines),
+  pr: Schema.Number,
+  commentUrl: Schema.String,
 });
 
 // The blocker-edge actions (ticket #61): an add declares a gate with
@@ -649,6 +668,12 @@ export const parseReviewRunEvent: (input: unknown) => ReviewRunEvent = Schema.de
   ReviewRunEventSchema,
   { onExcessProperty: "error" },
 );
+
+export const parseReviewCommentRequest: (input: unknown) => ReviewCommentRequest =
+  Schema.decodeUnknownSync(ReviewCommentRequestSchema, { onExcessProperty: "error" });
+
+export const parseReviewCommentResult: (input: unknown) => ReviewCommentResult =
+  Schema.decodeUnknownSync(ReviewCommentResultSchema, { onExcessProperty: "error" });
 
 export const LlmTurnSchema = Schema.Struct({
   request_id: Schema.String,

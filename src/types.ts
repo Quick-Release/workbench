@@ -421,7 +421,12 @@ export type OverviewData = {
 // union in ./schema.ts so the compile-time and wire shapes cannot drift. The
 // schema import is type-only — no runtime cycle, no schema code in the bundle.
 import type { Schema } from "effect";
-import type { ReviewEngineHealthSchema, ReviewHealthSchema } from "./schema.ts";
+import type {
+  ReviewCommentRequestSchema,
+  ReviewCommentResultSchema,
+  ReviewEngineHealthSchema,
+  ReviewHealthSchema,
+} from "./schema.ts";
 
 export const reviewEngines = ["coderabbit", "zcode"] as const;
 
@@ -430,3 +435,7 @@ export type ReviewEngine = (typeof reviewEngines)[number];
 export type ReviewEngineHealth = Schema.Schema.Type<typeof ReviewEngineHealthSchema>;
 
 export type ReviewHealth = Schema.Schema.Type<typeof ReviewHealthSchema>;
+
+export type ReviewCommentRequest = Schema.Schema.Type<typeof ReviewCommentRequestSchema>;
+
+export type ReviewCommentResult = Schema.Schema.Type<typeof ReviewCommentResultSchema>;
