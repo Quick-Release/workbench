@@ -184,6 +184,32 @@ timestamps, and session titles ever enter the (git-ignored) snapshot; prompts
 and responses are never read. The feature requires a Node build with the
 built-in `node:sqlite` module (Node ≥ 22.13).
 
+### Local engines: reviews and the issue agent
+
+The dashboard starts local CLIs: the review engines (CodeRabbit, zcode) on a
+pull request, and the issue agent — [opencode](https://opencode.ai) on a local
+[Ollama](https://ollama.com) model — on an issue. The review-engines health
+probe on the pull-requests page reports what is missing and the one-step fix.
+For the issue agent:
+
+```sh
+brew install opencode            # flags verified against the opencode docs
+                                 # on 2026-09-09 (opencode-ai 1.18.30);
+                                 # re-verify `opencode run` flags on upgrade
+ollama pull qwen3-coder:30b      # the default model; needs tool calling
+export OLLAMA_CONTEXT_LENGTH=32768   # before `ollama serve` — the 4096
+                                     # default silently truncates long runs
+```
+
+An agent run is unattended but fenced: it executes in a fresh git worktree
+under a workbench-provided permission config that denies everything outside
+the worktree and denies publishing outright (`git push`, `gh pr create`); the
+run ends in a draft pull request, which is the human gate. A failed run keeps
+its worktree for inspection; a successful one cleans it up. Environment
+overrides: `WORKBENCH_OPENCODE_BIN` (pin the CLI binary),
+`WORKBENCH_OPENCODE_MODEL` (default model), `WORKBENCH_OPENCODE_TIMEOUT_MS`
+(the agent step's time bound), and `OLLAMA_HOST` (where Ollama listens).
+
 ## Sources
 
 `scripts/sync-data.mjs` collects the host repo's planning state and produces
