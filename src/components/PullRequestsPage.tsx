@@ -190,7 +190,14 @@ export function PullRequestsPage({
 
   const cancelReview = (engine: ReviewEngine) => {
     const token = reviewRun.token;
-    cancelReviewRun()(engine).catch(() => {
+    cancelReviewRun()(engine).catch((error) => {
+      // A no_run refusal is benign: the run was still claiming its engine
+      // (nothing to kill yet — its own events will arrive) or already ended.
+      const benign =
+        error instanceof ReviewRunHttpError &&
+        error.status === 404 &&
+        error.payload?.error === "no_run";
+      if (benign) return;
       // Scoped to the run that was cancelled: a rejection arriving after a
       // newer run started must not mark that newer run as failed.
       setReviewRun((current) =>

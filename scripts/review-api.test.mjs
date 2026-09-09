@@ -313,6 +313,24 @@ test("a concurrent start while the first resolves its target is a busy rejection
   strictEqual(started.length, 1);
 });
 
+test("a start whose runner throws releases the engine's claim", async () => {
+  const registry = createRunRegistry();
+  const failing = await startHarness({
+    registry,
+    overrides: {
+      startRun: () => {
+        throw new Error("spawn setup exploded");
+      },
+    },
+  });
+  strictEqual(failing.handled.status, 500);
+  strictEqual(failing.handled.json.error, "run_start_failed");
+
+  // The engine must not read busy forever after a start that never ran.
+  const retry = await startHarness({ registry });
+  strictEqual(retry.handled.status, 200);
+});
+
 test("wrong methods on the run routes are named 405s", async () => {
   const drive = async (url) => {
     let captured;

@@ -115,7 +115,18 @@ export const handleReviewRunStart = async ({
     };
   }
 
-  const run = startRun({ ...request, ...target });
+  let run;
+  try {
+    run = startRun({ ...request, ...target });
+  } catch (error) {
+    // The claim must not outlive a start that never produced a run: nothing
+    // else would release it, and the engine would read busy forever.
+    registry.release(request.engine);
+    return {
+      status: 500,
+      json: { error: "run_start_failed", message: String(error?.message ?? error) },
+    };
+  }
   registry.bind(request.engine, run);
 
   return {
