@@ -1,0 +1,344 @@
+import { spawnSync } from "node:child_process";
+import { accessSync, constants as fsConstants, rmSync } from "node:fs";
+import { randomBytes } from "node:crypto";
+import { join } from "node:path";
+import { tmpdir as osTmpdir } from "node:os";
+
+// The opencode issue-agent engine (issue #40): the first engine that acts on
+// a host-repo issue instead of reviewing a pull request. It returns the same
+// plan shape the runner executes — ordered argv steps, a best-effort cleanup,
+// and an output inspector for the agent's JSON-event stream — and probes its
+// own setup health: the opencode CLI, the local Ollama server, the default
+// model's pull state, and the small-default-context warning. Publishing is
+// the plan's job, never the agent's: the prompt forbids it and the permission
+// fence denies `git push` / `gh pr create` outright. Every executable string
+// in the plan is fixed here; only the issue number, the model id, and the
+// resolved binary ride into argv.
+
+export const defaultModel = "ollama/qwen3-coder:30b";
+
+const installRemediation = "install the opencode CLI: brew install opencode";
+
+// The plan's one long step is the unattended agent run: tens of minutes on a
+// local model, so the bound is generous and env-overridable. The git/gh steps
+// are quick and keep the runner's own step default.
+const agentStepTimeoutMs = (env) => {
+  const parsed = Number(env.WORKBENCH_OPENCODE_TIMEOUT_MS);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : 30 * 60_000;
+};
+
+// Binary resolution mirrors the other engines' posture: an env pin wins
+// outright (pinning a version is a deliberate act), otherwise PATH decides.
+// Nothing found means no plan — a doomed plan must not create a worktree.
+// Binary resolution mirrors the other engines' posture: an env pin wins
+// outright (pinning a version is a deliberate act), otherwise PATH decides.
+// Nothing found means no plan — a doomed plan must not create a worktree.
+export const resolveBinary = (env, which = (name) => whichPath(name, env)) => {
+  const pinned = env.WORKBENCH_OPENCODE_BIN;
+  if (pinned) return pinned;
+  return which("opencode");
+};
+
+const canExecute = (path) => {
+  try {
+    accessSync(path, fsConstants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+// A minimal PATH scan (the engine runs on the Developer's machine, where
+// PATH is colon-separated and executables carry no extension).
+const whichPath = (binary, env) => {
+  for (const dir of (env.PATH ?? "").split(":")) {
+    if (!dir) continue;
+    const candidate = join(dir, binary);
+    if (canExecute(candidate)) return candidate;
+  }
+  return null;
+};
+
+// The fixed instruction template: the only interpolated value is the issue
+// number, so the dashboard can never be turned into arbitrary prompting.
+const agentPrompt = (issue) =>
+  [
+    `Workbench prepared this fresh git worktree for issue #${issue} of the host repository.`,
+    ``,
+    `- Read issue #${issue} first, including its comments: \`gh issue view ${issue} --comments\`.`,
+    `- Implement the issue. Follow the repository's own instructions for agents and its coding standards.`,
+    `- Include tests for the change, and run the repository's checks.`,
+    `- Leave a written summary of what you changed and why in AGENT-SUMMARY.md.`,
+    `- Never push, never open or merge pull requests, and never change git remotes — publishing is handled for you.`,
+  ].join("\n");
+
+// The unattended-but-fenced posture: `--auto` approves everything the config
+// does not deny, so the fence is the denies. Last matching rule wins (the
+// opencode docs' own ordering), so the catch-all lands first. The worktree is
+// the only writable area and publishing is denied at the tool layer.
+const fenceConfig = JSON.stringify({
+  $schema: "https://opencode.ai/config.json",
+  permission: {
+    "*": "allow",
+    external_directory: "deny",
+    bash: {
+      "*": "allow",
+      "git push*": "deny",
+      "git remote*": "deny",
+      "gh pr create*": "deny",
+      "gh pr merge*": "deny",
+    },
+  },
+});
+
+// The agent streams raw JSON events in --format json mode; the runner inspects
+// each complete line through this hook so interesting states surface as
+// notices instead of an opaque wall of JSON. The event vocabulary churns, so
+// the match is deliberately heuristic: anything permission- or
+// confirmation-shaped becomes a notice; everything else streams as-is.
+export const inspectAgentLine = (line) => {
+  let event;
+  try {
+    event = JSON.parse(line);
+  } catch {
+    return null;
+  }
+  const type = typeof event?.type === "string" ? event.type : "";
+  if (/permission|denied/i.test(type))
+    return `agent permission event: ${type}${event?.pattern ? ` (${event.pattern})` : ""}`;
+  if (/question|confirm|waiting|approval/i.test(type)) return `agent needs attention: ${type}`;
+  return null;
+};
+
+const prTitle = ({ issue, model }) => `Issue #${issue} draft (opencode · ${model})`;
+
+const prBody = ({ issue, model }) =>
+  [
+    `Draft generated by workbench's issue agent: opencode running \`${model}\` in a fresh worktree off the default branch.`,
+    ``,
+    `Fixes #${issue}`,
+    ``,
+    `The agent was instructed to read the issue (including comments), implement a fix with tests, and leave a summary in AGENT-SUMMARY.md.`,
+    `Please review carefully — an unattended local model produced this change.`,
+  ].join("\n");
+
+// Cleanup is best-effort and outcome-aware: the runner always calls it, and
+// it removes the worktree only for a successful run — a failed run keeps its
+// worktree so the Developer can inspect what the agent actually did. The
+// directory backstop catches a git remove that gave up (both failures are
+// swallowed; cleanup must never break the run's ending).
+const worktreeCleanup = ({ worktreePath, hostRepoRoot, cleanupSpawn }) => {
+  if (cleanupSpawn) {
+    cleanupSpawn({
+      command: "git",
+      args: ["worktree", "remove", "--force", worktreePath],
+      cwd: hostRepoRoot,
+    });
+    return;
+  }
+  try {
+    spawnSync("git", ["worktree", "remove", "--force", worktreePath], {
+      cwd: hostRepoRoot,
+      encoding: "utf8",
+      timeout: 30_000,
+    });
+  } catch {
+    // best-effort
+  }
+  try {
+    rmSync(worktreePath, { recursive: true, force: true });
+  } catch {
+    // best-effort
+  }
+};
+
+export const plan = (request, deps = {}) => {
+  const { issue, model, hostRepoRoot, baseBranch } = request;
+  const { env = process.env, tmpdir = osTmpdir, which, worktreePath, cleanupSpawn } = deps;
+  const binary = resolveBinary(env, which);
+  if (!binary) return null;
+
+  const path =
+    worktreePath ??
+    join(
+      tmpdir(),
+      `workbench-issue-${issue}-${Date.now().toString(36)}-${randomBytes(4).toString("hex")}`,
+    );
+  const branch = `agent/issue-${issue}`;
+  const inWorktree = { cwd: path };
+
+  return {
+    steps: [
+      {
+        name: "worktree",
+        command: "git",
+        args: ["worktree", "add", path, "-b", branch, baseBranch],
+        cwd: hostRepoRoot,
+      },
+      {
+        name: "agent",
+        command: binary,
+        args: ["run", agentPrompt(issue), "--model", model, "--format", "json", "--auto"],
+        ...inWorktree,
+        env: { OPENCODE_CONFIG_CONTENT: fenceConfig },
+        timeoutMs: agentStepTimeoutMs(env),
+        inspectLine: inspectAgentLine,
+      },
+      {
+        name: "stage",
+        command: "git",
+        args: ["add", "-A"],
+        ...inWorktree,
+      },
+      {
+        name: "commit",
+        command: "git",
+        args: [
+          "commit",
+          "-m",
+          `fix: address issue #${issue}`,
+          "-m",
+          `Generated by opencode (${model}) via workbench issue-agent.`,
+        ],
+        ...inWorktree,
+      },
+      {
+        name: "push",
+        command: "git",
+        args: ["push", "-u", "origin", branch],
+        ...inWorktree,
+      },
+      {
+        name: "pull-request",
+        command: "gh",
+        args: [
+          "pr",
+          "create",
+          "--draft",
+          "--head",
+          branch,
+          "--title",
+          prTitle({ issue, model }),
+          "--body",
+          prBody({ issue, model }),
+        ],
+        ...inWorktree,
+      },
+    ],
+    cleanup: ({ ok }) => {
+      if (!ok) return;
+      worktreeCleanup({ worktreePath: path, hostRepoRoot, cleanupSpawn });
+    },
+  };
+};
+
+// --- The health half: is a one-click run actually possible right now? ---
+
+// The local model server is probed over its own HTTP API — the same machine,
+// the documented OLLAMA_HOST binding. Reachability and the pulled-model list
+// are one /api/tags call; a failure to answer is "not reachable", whatever
+// the underlying socket complaint.
+export const ollamaTagsLoader = ({ env = process.env, fetchImpl = fetch } = {}) => {
+  const raw = env.OLLAMA_HOST ?? "127.0.0.1:11434";
+  const base = /^https?:\/\//.test(raw) ? raw : `http://${raw}`;
+  return async () => {
+    const response = await fetchImpl(`${base}/api/tags`, { signal: AbortSignal.timeout(3_000) });
+    if (!response.ok) throw new Error(`ollama answered ${response.status}`);
+    const payload = await response.json();
+    return (Array.isArray(payload?.models) ? payload.models : [])
+      .map((model) => model.name)
+      .filter((name) => typeof name === "string");
+  };
+};
+
+const versionProbe = (spawn, binary) => {
+  const result = spawn({ command: binary, args: ["--version"] });
+  if (result.error?.code === "ENOENT") return { kind: "binary_missing" };
+  if (result.status !== 0)
+    return {
+      kind: "probe_error",
+      message:
+        (result.stderr ?? "").trim() ||
+        result.error?.message ||
+        `${binary} --version exited with status ${result.status}`,
+    };
+  return { kind: "found", version: (result.stdout ?? "").trim() };
+};
+
+// The documented failure mode that reads as "the agent is dumb": the server
+// is silently truncating at Ollama's small default context. Workbench can
+// only see its own environment, so the warning fires when the raising env
+// var is unset here — the same shell the server is started from.
+const contextWarning = (env) =>
+  env.OLLAMA_CONTEXT_LENGTH
+    ? null
+    : `Ollama is using its small default context (4096 tokens). Set OLLAMA_CONTEXT_LENGTH (e.g. 32768) and restart the server so long issue runs are not silently truncated.`;
+
+export const probeHealth = async ({ spawn, ollama, env = process.env, which }) => {
+  // The same resolution the plan uses: health reports on the binary a run
+  // would actually execute, pin included. An unresolvable binary is the
+  // binary_missing state — no spawn is attempted at all.
+  const binary = resolveBinary(env, which ?? ((name) => whichPath(name, env)));
+  if (!binary)
+    return { engine: "opencode", state: "binary_missing", remediation: installRemediation };
+  const model = env.WORKBENCH_OPENCODE_MODEL ?? defaultModel;
+  const probe = versionProbe(spawn, binary);
+  if (probe.kind === "binary_missing")
+    return { engine: "opencode", state: "binary_missing", remediation: installRemediation };
+  if (probe.kind === "probe_error")
+    return { engine: "opencode", state: "probe_error", message: probe.message };
+  const version = probe.version;
+
+  let models;
+  try {
+    models = await ollama.tags();
+  } catch {
+    return {
+      engine: "opencode",
+      state: "ollama_unreachable",
+      version,
+      remediation:
+        "start the Ollama server (`ollama serve`) — the issue agent runs local models only",
+    };
+  }
+
+  const bareModel = model.replace(/^ollama\//, "");
+  if (!models.includes(bareModel)) {
+    return {
+      engine: "opencode",
+      state: "model_missing",
+      version,
+      model,
+      models,
+      remediation: `run \`ollama pull ${bareModel}\`, or pick a pulled model in the panel`,
+    };
+  }
+
+  const warning = contextWarning(env);
+  return {
+    engine: "opencode",
+    state: "ready",
+    version,
+    models,
+    defaultModel: model,
+    ...(warning ? { warning } : {}),
+  };
+};
+
+export const opencodeEngine = { name: "opencode", probeHealth, plan };
+
+// The entry the runner's engine registry holds: the runner hands it the
+// enumerated request, and the entry fills the engine-owned defaults (binary
+// resolution, the env-configurable model) before building the plan. A null
+// return is the not-found path — the runner answers with a typed error
+// instead of executing a doomed plan.
+export const opencodeRunCommand = ({ issue, model, hostRepoRoot, baseBranch }, env = process.env) =>
+  plan(
+    {
+      issue,
+      model: model ?? env.WORKBENCH_OPENCODE_MODEL ?? defaultModel,
+      hostRepoRoot,
+      baseBranch,
+    },
+    { env },
+  );
