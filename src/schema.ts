@@ -594,10 +594,17 @@ export const ReviewRunRequestSchema = Schema.Struct({
 
 export type ReviewRunRequest = Schema.Schema.Type<typeof ReviewRunRequestSchema>;
 
-export const parseReviewRunRequest: (input: unknown) => ReviewRunRequest = Schema.decodeUnknownSync(
-  ReviewRunRequestSchema,
-  { onExcessProperty: "error" },
-);
+export const parseReviewRunRequest: (input: unknown) => ReviewRunRequest = (input) => {
+  const request = Schema.decodeUnknownSync(ReviewRunRequestSchema, {
+    onExcessProperty: "error",
+  })(input);
+  // Only a real pull-request number may travel: a float or negative would
+  // ride the enumerated command and surface as a confusing unknown PR.
+  if (!Number.isInteger(request.pr) || request.pr <= 0) {
+    throw new Error("pr must be a positive integer");
+  }
+  return request;
+};
 
 export const ReviewCancelRequestSchema = Schema.Struct({
   engine: Schema.Literals(reviewEngines),

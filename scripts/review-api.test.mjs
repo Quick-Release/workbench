@@ -201,6 +201,11 @@ test("an invalid run request is a named 400 before anything spawns", async () =>
   const unknownEngine = await startHarness({ body: { engine: "magic-ai", pr: 42 } });
   strictEqual(unknownEngine.handled.json.error, "invalid_request");
   strictEqual(unknownEngine.started.length, 0);
+  const floatPr = await startHarness({ body: { engine: "coderabbit", pr: 1.5 } });
+  strictEqual(floatPr.handled.status, 400);
+  const negativePr = await startHarness({ body: { engine: "coderabbit", pr: -3 } });
+  strictEqual(negativePr.handled.status, 400);
+  strictEqual(negativePr.started.length, 0);
 });
 
 test("a PR the snapshot does not know is a named 404", async () => {
