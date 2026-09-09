@@ -77,6 +77,11 @@ export function ReviewRunPanel({
           Output was longer than the cap and was cut off.
         </p>
       )}
+      {run.error && run.phase === "running" && (
+        <p data-slot="review-run-error" className="mt-2 text-sm text-destructive">
+          {run.error.message}
+        </p>
+      )}
       {run.phase === "done" && (
         <p data-slot="review-run-verdict" className="mt-2 text-sm">
           {exitVerdict(run)}

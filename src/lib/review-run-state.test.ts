@@ -44,15 +44,18 @@ describe("the review-run board", () => {
     strictEqual(state.truncated, true);
   });
 
-  it("finishes with the timeout error's message", () => {
+  it("keeps the run un-restartable while the timeout error waits for its exit", () => {
     let state = runStarted("zcode", 7, 2);
     state = runEvent(state, {
       type: "error",
       reason: "timeout",
       message: "the zcode review exceeded 900s and was stopped",
     });
-    strictEqual(state.phase, "done");
+    strictEqual(state.phase, "running", "still stopping — not restartable yet");
     strictEqual(state.error?.reason, "timeout");
+    state = runEvent(state, { type: "exit", code: null, signal: "SIGKILL", cancelled: false });
+    strictEqual(state.phase, "done");
+    strictEqual(state.error?.reason, "timeout", "the error survives the exit");
   });
 
   it("renders a busy rejection as a message, dropping the dead run", () => {

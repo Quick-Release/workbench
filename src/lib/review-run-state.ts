@@ -63,7 +63,9 @@ export const runEvent = (state: ReviewRunState, event: ReviewRunEvent): ReviewRu
       return { ...state, phase: "done", exit: { code, signal, cancelled } };
     }
     case "error":
-      return { ...state, phase: "done", error: { reason: event.reason, message: event.message } };
+      // The error precedes the exit while the CLI is being stopped: the run
+      // stays running (and un-restartable) until the exit actually lands.
+      return { ...state, error: { reason: event.reason, message: event.message } };
   }
 };
 
