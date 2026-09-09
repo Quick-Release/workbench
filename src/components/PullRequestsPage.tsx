@@ -1,8 +1,9 @@
 import { useRef, useState } from "react";
-import { GitPullRequest } from "lucide-react";
+import { GitPullRequest, Square } from "lucide-react";
 
 import { DraftPanel, UnconfiguredHint } from "@/components/DraftPanel";
 import { ReviewEngines } from "@/components/ReviewEngines";
+import { ReviewRunPanel } from "@/components/ReviewRunPanel";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -17,7 +18,16 @@ import {
   type DraftBoard,
   type DraftState,
 } from "@/lib/draft-state";
-import type { PullRequestRecord, ReviewEngineHealth } from "@/types";
+import {
+  emptyReviewRun,
+  runBusy,
+  runEvent,
+  runFailed,
+  runStarted,
+  type ReviewRunState,
+} from "@/lib/review-run-state";
+import { ReviewRunHttpError, cancelReviewRun, startReviewRun } from "@/lib/review-runs";
+import type { PullRequestRecord, ReviewEngine, ReviewEngineHealth } from "@/types";
 
 // The pull-requests page (ticket #38): the open pull requests of the host
 // repo, synced into the snapshot, each with a one-shot "Draft description"
@@ -34,11 +44,19 @@ function PullRequestRow({
   state,
   aiConfigured,
   onStart,
+  engineReady,
+  reviewRun,
+  onReview,
+  onCancelReview,
 }: {
   record: PullRequestRecord;
   state: DraftState;
   aiConfigured: boolean | null;
   onStart: (pr: number) => void;
+  engineReady: Record<ReviewEngine, boolean>;
+  reviewRun: ReviewRunState;
+  onReview: (pr: number, engine: ReviewEngine) => void;
+  onCancelReview: (engine: ReviewEngine) => void;
 }) {
   const unconfigured = aiConfigured === false;
   return (
@@ -62,19 +80,39 @@ function PullRequestRow({
           {record.head} → {record.base}
         </span>
         <span className="text-xs text-muted-foreground">{record.author}</span>
-        <Button
-          type="button"
-          variant="outline"
-          size="xs"
-          className="ml-auto"
-          disabled={unconfigured}
-          onClick={() => onStart(record.number)}
-        >
-          <GitPullRequest aria-hidden />
-          Draft description
-        </Button>
+        <div className="ml-auto flex items-center gap-1">
+          {(Object.keys(engineReady) as ReviewEngine[]).map((engine) => (
+            <Button
+              key={engine}
+              type="button"
+              variant="outline"
+              size="xs"
+              // Reviews ride their own engine's health, not the AI
+              // provider key the draft action needs.
+              disabled={!engineReady[engine]}
+              title={engineReady[engine] ? undefined : `${engine} is not ready to run a review`}
+              onClick={() => onReview(record.number, engine)}
+            >
+              <Square aria-hidden />
+              Review · {engine}
+            </Button>
+          ))}
+          <Button
+            type="button"
+            variant="outline"
+            size="xs"
+            disabled={unconfigured}
+            onClick={() => onStart(record.number)}
+          >
+            <GitPullRequest aria-hidden />
+            Draft description
+          </Button>
+        </div>
       </div>
       {state.phase !== "idle" && <DraftPanel state={state} />}
+      {reviewRun.pr === record.number && reviewRun.phase !== "idle" && (
+        <ReviewRunPanel run={reviewRun} onCancel={onCancelReview} />
+      )}
     </li>
   );
 }
@@ -92,10 +130,48 @@ export function PullRequestsPage({
   engineHealth?: readonly ReviewEngineHealth[] | null;
 }) {
   const [board, setBoard] = useState<DraftBoard>(emptyBoard);
+  // The review-run board (ticket #26): the page holds one run at a time and
+  // renders it inside the row of the PR it reviews.
+  const [reviewRun, setReviewRun] = useState<ReviewRunState>(emptyReviewRun);
   // The live session: the abort handle for the in-flight request plus the
   // token the board handed it, so its resolution can be identified. Refs,
   // not state — they update synchronously across rapid clicks.
   const sessionRef = useRef<{ controller: AbortController; token: number } | null>(null);
+
+  const runReview = (pr: number, engine: ReviewEngine) => {
+    setReviewRun(runStarted(engine, pr));
+    void (async () => {
+      try {
+        for await (const event of startReviewRun({ engine, pr })) {
+          setReviewRun((current) => runEvent(current, event));
+        }
+      } catch (error) {
+        if (error instanceof ReviewRunHttpError && error.status === 409 && error.payload?.message) {
+          setReviewRun((current) => runBusy(current, error.payload?.message ?? "review busy"));
+        } else if (error instanceof ReviewRunHttpError && error.status === 404) {
+          setReviewRun((current) =>
+            runFailed(current, "that pull request is not known to the server"),
+          );
+        } else {
+          setReviewRun((current) => runFailed(current, "the review endpoint is unreachable"));
+        }
+      }
+    })();
+  };
+
+  const cancelReview = (engine: ReviewEngine) => {
+    void cancelReviewRun()(engine);
+  };
+
+  // A review action is live only when that engine's health probe said ready
+  // (ticket #24: not-ready engines cannot be started); while the probe is
+  // unknown every review action stays off rather than guessing.
+  const engineReady = Object.fromEntries(
+    (["coderabbit", "zcode"] as ReviewEngine[]).map((engine) => [
+      engine,
+      engineHealth?.some((health) => health.engine === engine && health.state === "ready") ?? false,
+    ]),
+  ) as Record<ReviewEngine, boolean>;
 
   const runDraft = (pr: number) => {
     sessionRef.current?.controller.abort();
@@ -157,6 +233,10 @@ export function PullRequestsPage({
                   state={boardState(board, record.number)}
                   aiConfigured={aiConfigured}
                   onStart={runDraft}
+                  engineReady={engineReady}
+                  reviewRun={reviewRun}
+                  onReview={runReview}
+                  onCancelReview={cancelReview}
                 />
               ))}
             </ul>

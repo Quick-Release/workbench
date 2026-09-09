@@ -120,11 +120,21 @@ describe("the pull-requests page", () => {
     expect(row).toContain('disabled=""');
   });
 
-  it("keeps the actions enabled while the health probe is unknown or configured", () => {
+  it("keeps the draft action enabled while the health probe is unknown or configured", () => {
     for (const aiConfigured of [null, true]) {
       const html = renderPage([pr(82)], aiConfigured);
       expect(html).not.toContain('data-slot="ai-unconfigured"');
-      expect(html).not.toContain('disabled=""');
+      const row = html.slice(html.indexOf('data-pr="82"'));
+      const draftButton = row.slice(row.indexOf("Draft description") - 400);
+      expect(draftButton).not.toContain('disabled=""');
     }
+  });
+
+  it("holds the review actions off until each engine's health verdict says ready", () => {
+    // Ticket #24's invariant, from the other side: with no verdict yet, a
+    // review cannot be started at all — the buttons wait for the probe.
+    const html = renderPage([pr(82)], null);
+    expect(html).toContain('title="coderabbit is not ready to run a review"');
+    expect(html).toContain('title="zcode is not ready to run a review"');
   });
 });
