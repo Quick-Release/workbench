@@ -108,10 +108,10 @@ test("bounds the schema alone cannot express are named 400s", async () => {
   strictEqual(emptyFindings.status, 400);
 
   const oversizedFindings = await postRequest({
-    body: JSON.stringify({ engine: "coderabbit", pr: 25, findings: "x".repeat(20_001) }),
+    body: JSON.stringify({ engine: "coderabbit", pr: 25, findings: "x".repeat(60_001) }),
   }).response;
   strictEqual(oversizedFindings.status, 400);
-  match(oversizedFindings.json.message, /20/);
+  match(oversizedFindings.json.message, /60000/);
 });
 
 test("the runner's typed failures pass through with their status, error, and remediation", async () => {

@@ -19,8 +19,9 @@ const COMMENT_ROUTE = /^\/api\/review\/comment\/?$/;
 export const isReviewCommentApiRoute = (pathname) => COMMENT_ROUTE.test(pathname);
 
 // One GitHub comment is the delivery vehicle, so the findings must fit in
-// one — the same bound a Developer would hit posting by hand.
-const MAX_FINDINGS_LENGTH = 20_000;
+// one: a comment tops out at 65,536 characters, and the cap leaves room for
+// the attribution footer.
+const MAX_FINDINGS_LENGTH = 60_000;
 
 const rejection = (status, json) => ({ status, json });
 
@@ -84,10 +85,7 @@ export const handleReviewCommentApi = async ({
   return { status: 200, json: parseReviewCommentResult(outcome.result) };
 };
 
-const defaultPost = ({ engine, pr, findings, cwd }) =>
-  postReviewComment({ engine, pr, findings, cwd });
-
-export const reviewCommentApiPlugin = ({ postComment = defaultPost } = {}) => ({
+export const reviewCommentApiPlugin = ({ postComment = postReviewComment } = {}) => ({
   name: "workbench-review-comment-api",
   configureServer(server) {
     server.middlewares.use(async (request, response, next) => {

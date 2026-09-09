@@ -8,10 +8,13 @@ const execFileAsync = promisify(execFile);
 // comment. The consent lives entirely in the UI's explicit per-run
 // confirmation — this module is the write itself, never the decision. It
 // shells the Developer's local `gh`, whose own token resolution (env var
-// first, `gh auth token` fallback) is the same approach the sync uses, and
-// runs against the host repo so `gh` reviews the right repository. The
-// spawn function is injected so tests substitute a fake CLI; the endpoint
-// and the UI are thin layers over this module.
+// first, `gh auth token` fallback) is the same approach the sync uses — so
+// the write, not a pre-flight probe, is the ground truth for authentication:
+// a Developer posting purely on an environment token is never told to run
+// `gh auth login` when the post would succeed. Runs against the host repo so
+// `gh` comments on the right repository. The spawn function is injected so
+// tests substitute a fake CLI; the endpoint and the UI are thin layers over
+// this module.
 
 // The spawn contract: `spawn({ command, args, cwd, timeout })` runs the CLI
 // and returns `{ status, stdout, stderr, error? }` — never throws. The
@@ -38,8 +41,14 @@ const nodeSpawn = async ({ command, args, cwd, timeout }) => {
 const commentBody = ({ findings, engine, pr }) =>
   `${findings.trim()}\n\n---\n\nPosted from the workbench dashboard — ${engine} review of PR #${pr}.`;
 
+// A hung or slow `gh` must not hold the endpoint forever; one network
+// round-trip plus CLI startup is seconds, not minutes.
+const POST_TIMEOUT_MS = 30_000;
+
 // Not having `gh` at all is fixable in one step, so it is a named state
-// with the install command rather than a crash or a silent no-op.
+// with the install command rather than a crash or a silent no-op. The same
+// goes for a missing or rejected login: gh's own complaint on a failed post
+// carries it.
 const GH_INSTALL = "install the GitHub CLI: brew install gh";
 const GH_LOGIN = "run `gh auth login` to authenticate the GitHub CLI";
 
@@ -57,34 +66,35 @@ const ghAuthMissing = () => ({
   remediation: GH_LOGIN,
 });
 
+// gh names authentication failures variously across versions and token
+// sources ("run: gh auth login", "unauthorized", "bad credentials", HTTP
+// 401); the write's stderr is classified rather than trusted to one string.
+const authShaped = (text) =>
+  /auth(?:entication)|login|token|credential|unauthorized|401/i.test(text ?? "");
+
 export const postReviewComment = async ({ spawn = nodeSpawn, engine, pr, findings, cwd }) => {
-  // The probe is the consent gate's counterpart on the environment: a
-  // missing login is caught here, before anything is sent, as a named
-  // state with its one-step fix — never as an opaque failure mid-post.
-  const probe = await spawn({ command: "gh", args: ["auth", "status"], cwd });
-  if (probe.error?.code === "ENOENT") return ghMissing();
-  if (probe.status !== 0) return ghAuthMissing();
   const posted = await spawn({
     command: "gh",
     args: ["pr", "comment", String(pr), "--body", commentBody({ findings, engine, pr })],
     cwd,
+    timeout: POST_TIMEOUT_MS,
   });
-  // gh answered the auth probe fine but the write itself failed: surface
-  // gh's own complaint — it is what the Developer can act on. The binary
-  // can also vanish between the probe and the write; that reads as
-  // gh_missing, the same one-step fix. A success answer that names no
-  // comment url is gh misbehaving, not a posted comment with an empty link.
+  // The exact probed argv is the seam's safety invariant: posting is the
+  // one comment command, nothing else, ever.
   if (posted.error?.code === "ENOENT") return ghMissing();
-  if (posted.status !== 0)
+  if (posted.status !== 0) {
+    const complaint =
+      (posted.stderr ?? "").trim() ||
+      posted.error?.message ||
+      `gh pr comment exited with status ${posted.status}`;
+    if (authShaped(complaint)) return ghAuthMissing();
     return {
       ok: false,
       status: 502,
       error: "post_failed",
-      message:
-        (posted.stderr ?? "").trim() ||
-        posted.error?.message ||
-        `gh pr comment exited with status ${posted.status}`,
+      message: complaint,
     };
+  }
   const commentUrl = (posted.stdout ?? "").trim();
   if (!commentUrl)
     return {
