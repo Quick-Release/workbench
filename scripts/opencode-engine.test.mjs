@@ -38,12 +38,20 @@ const builtPlan = (requestOverrides = {}, depOverrides = {}) => {
 
 const stepByName = (plan, name) => plan.steps.find((step) => step.name === name);
 
-test("the plan choreographs worktree, agent, staging, commit, push, and draft PR in order", () => {
+test("the plan choreographs clearing, worktree, agent, staging, commit, push, and draft PR", () => {
   const { plan } = builtPlan();
   deepStrictEqual(
     plan.steps.map((step) => step.name),
-    ["worktree", "agent", "stage", "commit", "push", "pull-request"],
+    ["clear", "worktree", "agent", "stage", "commit", "push", "pull-request"],
   );
+});
+
+test("the clearing step is best-effort so a first run and a retry both proceed", () => {
+  const { plan } = builtPlan();
+  const step = stepByName(plan, "clear");
+  strictEqual(step.bestEffort, true, "a missing leftover must not fail the run");
+  deepStrictEqual(step.args, ["worktree", "remove", "--force", "/tmp/workbench-issue-40-fixed"]);
+  deepStrictEqual(step.cwd, "/host/repo");
 });
 
 test("the worktree step forks the default branch on an agent/issue-<n> branch", () => {
@@ -54,7 +62,7 @@ test("the worktree step forks the default branch on an agent/issue-<n> branch", 
     "worktree",
     "add",
     "/tmp/workbench-issue-40-fixed",
-    "-b",
+    "-B",
     "agent/issue-40",
     "origin/main",
   ]);
@@ -143,7 +151,7 @@ test("the pull-request step opens a draft PR whose body fixes the issue and name
   match(body, /review/i, "the PR asks for human review");
 });
 
-test("a successful run's cleanup removes the worktree; a failed run's does not", () => {
+test("a successful run's cleanup removes the worktree and the local branch; a failed run's does not", () => {
   const { plan, cleanupCalls } = builtPlan();
   plan.cleanup({ ok: true });
   deepStrictEqual(
@@ -154,8 +162,13 @@ test("a successful run's cleanup removes the worktree; a failed run's does not",
         args: ["worktree", "remove", "--force", "/tmp/workbench-issue-40-fixed"],
         cwd: "/host/repo",
       },
+      {
+        command: "git",
+        args: ["branch", "-D", "agent/issue-40"],
+        cwd: "/host/repo",
+      },
     ],
-    "the worktree is removed from the host repo on success",
+    "the pushed branch's local twin is dropped, the PR keeps the remote one",
   );
 
   const { plan: failing, cleanupCalls: failingCalls } = builtPlan();
@@ -204,7 +217,7 @@ test("the env override pins the binary without consulting PATH", () => {
   deepStrictEqual(whichCalls, [], "an explicit pin never falls back to PATH");
 });
 
-test("the default worktree path is a fresh temp directory named for the issue", () => {
+test("the default worktree path is deterministic per issue, so retries start clean", () => {
   const plan = opencodeEngine.plan(planRequest({ issue: 7 }), {
     env: {},
     which: () => "opencode",
@@ -212,8 +225,9 @@ test("the default worktree path is a fresh temp directory named for the issue", 
     cleanupSpawn: () => ({ status: 0 }),
   });
   const worktreeCwd = stepByName(plan, "agent").cwd;
-  match(worktreeCwd, /^\/var\/folders\/tmp\/workbench-issue-7-/);
+  strictEqual(worktreeCwd, "/var/folders/tmp/workbench-issue-7");
   strictEqual(worktreeCwd, stepByName(plan, "worktree").args[2]);
+  strictEqual(stepByName(plan, "clear").args[3], worktreeCwd);
 });
 
 test("the agent step's timeout is generous by default and env-overridable", () => {

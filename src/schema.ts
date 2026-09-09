@@ -262,7 +262,7 @@ export const AiHealthSchema = Schema.Struct({
 // warning that keeps a silent truncation from reading as a dumb model.
 export const ReviewEngineHealthSchema = Schema.Union([
   Schema.Struct({
-    engine: Schema.Literals(engines),
+    engine: Schema.Literals(reviewEngines),
     state: Schema.Literal("ready"),
     version: Schema.String,
   }),
@@ -757,7 +757,8 @@ export const ReviewHistoryEntrySchema = Schema.Struct({
   id: Schema.Number,
   engine: Schema.Literals(engines),
   // The run's target: a PR for the review engines, an issue for the agent —
-  // an entry always carries exactly one, and the panel labels it from these.
+  // the seam's exactly-one-of rule is enforced where the request is parsed,
+  // and the panel labels an entry by whichever target it carries.
   pr: Schema.NullOr(Schema.Number),
   issue: Schema.optional(Schema.Number),
   outcome: ReviewRunOutcomeSchema,

@@ -1,6 +1,5 @@
 import { spawnSync } from "node:child_process";
 import { accessSync, constants as fsConstants, rmSync } from "node:fs";
-import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 import { tmpdir as osTmpdir } from "node:os";
 
@@ -27,9 +26,6 @@ const agentStepTimeoutMs = (env) => {
   return Number.isInteger(parsed) && parsed > 0 ? parsed : 30 * 60_000;
 };
 
-// Binary resolution mirrors the other engines' posture: an env pin wins
-// outright (pinning a version is a deliberate act), otherwise PATH decides.
-// Nothing found means no plan — a doomed plan must not create a worktree.
 // Binary resolution mirrors the other engines' posture: an env pin wins
 // outright (pinning a version is a deliberate act), otherwise PATH decides.
 // Nothing found means no plan — a doomed plan must not create a worktree.
@@ -127,29 +123,29 @@ const prBody = ({ issue, model }) =>
 // worktree so the Developer can inspect what the agent actually did. The
 // directory backstop catches a git remove that gave up (both failures are
 // swallowed; cleanup must never break the run's ending).
-const worktreeCleanup = ({ worktreePath, hostRepoRoot, cleanupSpawn }) => {
-  if (cleanupSpawn) {
-    cleanupSpawn({
-      command: "git",
-      args: ["worktree", "remove", "--force", worktreePath],
-      cwd: hostRepoRoot,
-    });
-    return;
+const worktreeCleanup = ({ worktreePath, branch, hostRepoRoot, cleanupSpawn }) => {
+  const remove = ({ command, args }) => {
+    if (cleanupSpawn) {
+      cleanupSpawn({ command, args, cwd: hostRepoRoot });
+      return;
+    }
+    try {
+      spawnSync(command, args, { cwd: hostRepoRoot, encoding: "utf8", timeout: 30_000 });
+    } catch {
+      // best-effort
+    }
+  };
+  remove({ command: "git", args: ["worktree", "remove", "--force", worktreePath] });
+  if (!cleanupSpawn) {
+    try {
+      rmSync(worktreePath, { recursive: true, force: true });
+    } catch {
+      // best-effort
+    }
   }
-  try {
-    spawnSync("git", ["worktree", "remove", "--force", worktreePath], {
-      cwd: hostRepoRoot,
-      encoding: "utf8",
-      timeout: 30_000,
-    });
-  } catch {
-    // best-effort
-  }
-  try {
-    rmSync(worktreePath, { recursive: true, force: true });
-  } catch {
-    // best-effort
-  }
+  // The pushed branch lives on the remote for the draft PR; the local twin
+  // has served its purpose and would block a future retry's branch reset.
+  remove({ command: "git", args: ["branch", "-D", branch] });
 };
 
 export const plan = (request, deps = {}) => {
@@ -158,21 +154,29 @@ export const plan = (request, deps = {}) => {
   const binary = resolveBinary(env, which);
   if (!binary) return null;
 
-  const path =
-    worktreePath ??
-    join(
-      tmpdir(),
-      `workbench-issue-${issue}-${Date.now().toString(36)}-${randomBytes(4).toString("hex")}`,
-    );
+  const path = worktreePath ?? join(tmpdir(), `workbench-issue-${issue}`);
   const branch = `agent/issue-${issue}`;
   const inWorktree = { cwd: path };
 
   return {
     steps: [
       {
+        // A retry must start from a clean worktree (issue #40, story 15).
+        // This step clears a previous FAILED run's kept worktree — the only
+        // thing that could block the re-add — and does nothing on a first
+        // run; its expected failure is why it is best-effort.
+        name: "clear",
+        command: "git",
+        args: ["worktree", "remove", "--force", path],
+        cwd: hostRepoRoot,
+        bestEffort: true,
+      },
+      {
+        // -B resets a branch left behind by an earlier attempt instead of
+        // failing on it; the pushed remote branch is untouched until push.
         name: "worktree",
         command: "git",
-        args: ["worktree", "add", path, "-b", branch, baseBranch],
+        args: ["worktree", "add", path, "-B", branch, baseBranch],
         cwd: hostRepoRoot,
       },
       {
@@ -227,7 +231,7 @@ export const plan = (request, deps = {}) => {
     ],
     cleanup: ({ ok }) => {
       if (!ok) return;
-      worktreeCleanup({ worktreePath: path, hostRepoRoot, cleanupSpawn });
+      worktreeCleanup({ worktreePath: path, branch, hostRepoRoot, cleanupSpawn });
     },
   };
 };

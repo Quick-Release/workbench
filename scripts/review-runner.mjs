@@ -385,7 +385,12 @@ export const startReviewRun = ({
         const exit = await child.exited;
         clearTimeout(timeoutTimer);
         currentChild = null;
-        lastExit = exit;
+        if (!step.bestEffort) lastExit = exit;
+
+        // A best-effort step expects to fail sometimes (the issue agent's
+        // clearing step has nothing to clear on a first run): its failure is
+        // not the plan's, and the next step still runs.
+        if (step.bestEffort && !cancelled && !timedOut) continue;
 
         if (exit.error) {
           failed = {

@@ -71,8 +71,13 @@ export function IssueAgentPanel({
             const issue = Number(field.value);
             if (!Number.isInteger(issue) || issue <= 0) return;
             const picker = event.currentTarget.elements.namedItem("model");
+            // The picker lists the server's pulled models in Ollama's own
+            // (bare) naming; the seam validates provider-qualified ids, so
+            // the panel qualifies before anything travels.
             const model =
-              picker instanceof HTMLSelectElement && picker.value ? picker.value : undefined;
+              picker instanceof HTMLSelectElement && picker.value
+                ? `ollama/${picker.value}`
+                : undefined;
             onStart(issue, model);
           }}
         >

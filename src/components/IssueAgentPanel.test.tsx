@@ -1,5 +1,9 @@
+// @vitest-environment happy-dom
+import { strictEqual } from "node:assert";
 import { renderToString } from "react-dom/server";
-import { describe, expect, it } from "vite-plus/test";
+import { act } from "react";
+import { createRoot } from "react-dom/client";
+import { describe, expect, it, vi } from "vite-plus/test";
 
 import { IssueAgentPanel } from "./IssueAgentPanel";
 import { emptyReviewRun, runBusy, runEvent, runFailed, runStarted } from "@/lib/review-run-state";
@@ -93,5 +97,51 @@ describe("the issue-agent panel", () => {
     const html = renderPanel({ run });
     expect(html).toContain('data-slot="issue-agent-verdict"');
     expect(html).toContain("Draft pull request");
+  });
+});
+
+describe("the issue-agent panel's start request (issue #40)", () => {
+  it("sends an ollama-qualified model id, the form the seam validates", async () => {
+    (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+    const onStart = vi.fn();
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    await act(async () => {
+      root.render(
+        <IssueAgentPanel
+          health={ready}
+          run={emptyReviewRun}
+          onStart={onStart}
+          onCancel={() => {}}
+        />,
+      );
+    });
+
+    const input = container.querySelector<HTMLInputElement>('input[data-slot="issue-agent-input"]');
+    const picker = container.querySelector<HTMLSelectElement>(
+      'select[data-slot="issue-agent-model"]',
+    );
+    expect(input).toBeTruthy();
+    expect(picker).toBeTruthy();
+    if (input) input.value = "40";
+    if (picker) picker.value = "llama3.2:latest";
+    const form = container.querySelector("form");
+    expect(form).toBeTruthy();
+    await act(async () => {
+      form?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    });
+
+    strictEqual(onStart.mock.calls.length, 1);
+    strictEqual(onStart.mock.calls[0][0], 40);
+    strictEqual(
+      onStart.mock.calls[0][1],
+      "ollama/llama3.2:latest",
+      "the bare /api/tags name is qualified for the seam",
+    );
+    await act(async () => {
+      root.unmount();
+    });
+    container.remove();
   });
 });
