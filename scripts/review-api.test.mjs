@@ -125,6 +125,7 @@ const stubRun = ({ events, pr }) => {
 
 const startHarness = async ({
   registry = createRunRegistry(),
+  history = createRunHistory(),
   events = [],
   pullRequests = [{ number: 42, base: "main" }],
   body = { engine: "coderabbit", pr: 42 },
@@ -142,13 +143,14 @@ const startHarness = async ({
     origin: undefined,
     startRun,
     registry,
+    history,
     resolveTarget: ({ pr }) =>
       pullRequests.find((record) => record.number === pr)
         ? { baseBranch: "main", hostRepoRoot: "/host/repo" }
         : null,
     ...overrides,
   });
-  return { handled, started, registry };
+  return { handled, started, registry, history };
 };
 
 const drain = async (handled) => {
@@ -208,6 +210,153 @@ test("an invalid run request is a named 400 before anything spawns", async () =>
   const negativePr = await startHarness({ body: { engine: "coderabbit", pr: -3 } });
   strictEqual(negativePr.handled.status, 400);
   strictEqual(negativePr.started.length, 0);
+});
+
+// --- The session history (ticket #27): finished runs stay listable ---
+
+import { createRunHistory, handleReviewHistory } from "./review-api.mjs";
+
+const historyRequest = (overrides = {}) =>
+  handleReviewHistory({
+    method: "GET",
+    pathname: "/api/review/history",
+    ...loopback,
+    history: createRunHistory(),
+    ...overrides,
+  });
+
+test("a fresh dev-server session answers a history with no runs", async () => {
+  deepStrictEqual(await historyRequest(), { status: 200, json: { runs: [] } });
+});
+
+test("the history route is gate-checked and GET-only like its siblings", async () => {
+  const foreign = await historyRequest({ host: "lan-box.example:4051" });
+  strictEqual(foreign.status, 403);
+  const wrongMethod = await historyRequest({ method: "POST" });
+  strictEqual(wrongMethod.status, 405);
+  strictEqual(wrongMethod.json.error, "method_not_allowed");
+  strictEqual(
+    await handleReviewHistory({
+      method: "GET",
+      pathname: "/api/tools",
+      ...loopback,
+      history: createRunHistory(),
+    }),
+    null,
+  );
+});
+
+test("a completed run is recorded with engine, pr, outcome, duration, and output", async () => {
+  const history = createRunHistory();
+  const { handled } = await startHarness({
+    events: [
+      { type: "started", engine: "coderabbit", pr: 42 },
+      { type: "output", stream: "stdout", text: "finding one\n" },
+      { type: "output", stream: "stderr", text: "note\n" },
+      { type: "exit", code: 0, signal: null, cancelled: false },
+    ],
+    history,
+  });
+  await drain(handled);
+
+  const response = await historyRequest({ history });
+  strictEqual(response.status, 200);
+  const [run] = response.json.runs;
+  strictEqual(run.engine, "coderabbit");
+  strictEqual(run.pr, 42);
+  strictEqual(run.outcome, "completed");
+  strictEqual(run.output, "finding one\nnote\n");
+  strictEqual(run.truncated, false);
+  strictEqual(run.message, null);
+  strictEqual(Number.isInteger(run.id), true);
+  strictEqual(typeof run.durationMs === "number" && run.durationMs >= 0, true);
+});
+
+test("every ending records its own outcome", async () => {
+  const cases = [
+    {
+      events: [{ type: "exit", code: 0, signal: null, cancelled: false }],
+      outcome: "completed",
+    },
+    {
+      events: [{ type: "exit", code: 1, signal: null, cancelled: false }],
+      outcome: "failed",
+    },
+    {
+      events: [{ type: "exit", code: null, signal: "SIGTERM", cancelled: true }],
+      outcome: "cancelled",
+    },
+    {
+      events: [
+        {
+          type: "error",
+          reason: "timeout",
+          message: "the coderabbit review exceeded 900s and was stopped",
+        },
+        { type: "exit", code: null, signal: "SIGKILL", cancelled: false },
+      ],
+      outcome: "timed_out",
+      message: "the coderabbit review exceeded 900s and was stopped",
+    },
+  ];
+  for (const { events, outcome, message } of cases) {
+    const history = createRunHistory();
+    const { handled } = await startHarness({ events, history });
+    await drain(handled);
+    const response = await historyRequest({ history });
+    strictEqual(response.json.runs[0].outcome, outcome, JSON.stringify(events));
+    strictEqual(response.json.runs[0].message, message ?? null);
+  }
+});
+
+test("a re-run starts a fresh run and the history answers newest first", async () => {
+  const history = createRunHistory();
+  const registry = createRunRegistry();
+  const first = await startHarness({
+    registry,
+    history,
+    events: [{ type: "exit", code: 0, signal: null, cancelled: false }],
+  });
+  await drain(first.handled);
+
+  // The re-run is just the normal start again — the engine's slot was
+  // released with the finished run — under the same lifecycle rules.
+  const rerun = await startHarness({
+    registry,
+    history,
+    events: [
+      { type: "output", stream: "stdout", text: "second pass\n" },
+      { type: "exit", code: 0, signal: null, cancelled: false },
+    ],
+  });
+  await drain(rerun.handled);
+
+  const response = await historyRequest({ history });
+  strictEqual(response.json.runs.length, 2);
+  strictEqual(response.json.runs[0].output, "second pass\n", "newest first");
+  strictEqual(response.json.runs[1].output, "");
+  strictEqual(response.json.runs[0].id > response.json.runs[1].id, true);
+  strictEqual(
+    response.json.runs.every((run) => run.outcome === "completed"),
+    true,
+  );
+});
+
+test("the history route answers through the middleware on a fresh dev server", async () => {
+  const next = middleware();
+  const written = [];
+  await next(
+    { url: "/api/review/history", method: "GET", headers: { host: "localhost:4051" } },
+    {
+      statusCode: 0,
+      setHeader() {},
+      end(chunk) {
+        written.push(chunk);
+      },
+    },
+    () => {},
+  );
+  deepStrictEqual(JSON.parse(written[0]), { runs: [] });
 });
 
 test("a PR the snapshot does not know is a named 404", async () => {

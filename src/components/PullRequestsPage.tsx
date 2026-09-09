@@ -3,6 +3,7 @@ import { GitPullRequest, Square } from "lucide-react";
 
 import { DraftPanel, UnconfiguredHint } from "@/components/DraftPanel";
 import { ReviewEngines } from "@/components/ReviewEngines";
+import { ReviewHistoryPanel } from "@/components/ReviewHistoryPanel";
 import { ReviewRunPanel } from "@/components/ReviewRunPanel";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -28,11 +29,13 @@ import {
   type ReviewRunState,
 } from "@/lib/review-run-state";
 import { ReviewRunHttpError, cancelReviewRun, streamReviewRun } from "@/lib/review-runs";
+import { parseReviewHistory } from "@/schema";
 import {
   reviewEngines,
   type PullRequestRecord,
   type ReviewEngine,
   type ReviewEngineHealth,
+  type ReviewHistoryEntry,
 } from "@/types";
 
 // The pull-requests page (ticket #38): the open pull requests of the host
@@ -166,6 +169,24 @@ export function PullRequestsPage({
   // benign no_run answer. Keyed by the run's token, so it can only ever
   // fire for the run it was asked of.
   const pendingCancelRef = useRef<{ token: number; engine: ReviewEngine } | null>(null);
+  // The session run history (ticket #27): what the dev server remembers
+  // about already-finished runs. The page fetches it on load and refetches
+  // whenever a run ends; the server owns the record, so a dev-server
+  // restart resets it. null is "not fetched yet" — the panel stays hidden
+  // rather than guessing.
+  const [runHistory, setRunHistory] = useState<readonly ReviewHistoryEntry[] | null>(null);
+  const refreshHistory = async () => {
+    try {
+      const response = await fetch("/api/review/history");
+      if (!response.ok) return;
+      setRunHistory(parseReviewHistory(await response.json()).runs);
+    } catch {
+      // Unreachable server: the last known list stays on screen.
+    }
+  };
+  useEffect(() => {
+    void refreshHistory();
+  }, []);
 
   const cancelOnce = (engine: ReviewEngine, token: number) => {
     cancelReviewRun()(engine).catch((error) => {
@@ -242,6 +263,10 @@ export function PullRequestsPage({
             current.token === token ? runFailed(current, failure) : current,
           );
         }
+      } finally {
+        // The run is over one way or another: the session history now has
+        // its verdict, whatever the panel shows.
+        void refreshHistory();
       }
     })();
   };
@@ -333,6 +358,7 @@ export function PullRequestsPage({
           </CardContent>
         </Card>
       )}
+      <ReviewHistoryPanel history={runHistory} onRerun={runReview} />
     </div>
   );
 }
