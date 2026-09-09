@@ -1,4 +1,4 @@
-import { deepStrictEqual, strictEqual } from "node:assert";
+import { strictEqual } from "node:assert";
 import test from "node:test";
 
 import { guardedApi, sendJson } from "./api-shared.mjs";
