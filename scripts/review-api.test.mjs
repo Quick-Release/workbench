@@ -203,6 +203,7 @@ test("an invalid run request is a named 400 before anything spawns", async () =>
   strictEqual(unknownEngine.started.length, 0);
   const floatPr = await startHarness({ body: { engine: "coderabbit", pr: 1.5 } });
   strictEqual(floatPr.handled.status, 400);
+  strictEqual(floatPr.handled.json.message, "pr must be a positive integer");
   strictEqual(floatPr.started.length, 0, "a fractional PR never invokes the runner");
   const negativePr = await startHarness({ body: { engine: "coderabbit", pr: -3 } });
   strictEqual(negativePr.handled.status, 400);

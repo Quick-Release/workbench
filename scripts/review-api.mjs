@@ -85,10 +85,19 @@ export const handleReviewRunStart = async ({
   let request;
   try {
     request = parseReviewRunRequest(body);
-  } catch {
+  } catch (error) {
+    // Missing fields get the friendly summary; a present-but-invalid PR
+    // (fractional, negative) keeps the schema's specific reason — "engine
+    // and pr are required" would misdescribe what actually failed.
+    const reason = String(error?.message ?? error);
     return {
       status: 400,
-      json: { error: "invalid_request", message: "engine and pr are required" },
+      json: {
+        error: "invalid_request",
+        message: reason.includes("pr must be a positive integer")
+          ? reason
+          : "engine and pr are required",
+      },
     };
   }
 
