@@ -16,7 +16,9 @@ import { reviewApiPlugin } from "./scripts/review-api.mjs";
 // Shared by the dev/build pipeline and the dashboard test project: vitest
 // projects don't inherit the root config's plugins or resolve (ticket #29).
 const dashboardPlugins = [
-  tanstackRouter({ target: "react" }),
+  // Route tests live beside their routes; the router must not treat them as
+  // route files when it generates the route tree.
+  tanstackRouter({ target: "react", routeFileIgnorePattern: "\\.test\\.(ts|tsx)$" }),
   react(),
   tailwindcss(),
   toolsApiPlugin(),

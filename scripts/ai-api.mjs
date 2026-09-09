@@ -3,7 +3,7 @@ import { resolve } from "node:path";
 import { parseAiDraftRequest, parseAiDraftResult, parseAiHealth } from "../src/schema.ts";
 import { createDraftModelCall, providerConfigured } from "./ai-model.mjs";
 import { ghPullRequestLoader, gitCommitSubjectLister } from "./ai-sources.mjs";
-import { methodMismatch, readBody } from "./api-shared.mjs";
+import { guardedApi, methodMismatch, readBody, sendJson } from "./api-shared.mjs";
 import { gateRejection } from "./request-gate.mjs";
 
 // The AI middleware (ticket #37): a one-shot draft endpoint and a health
@@ -106,26 +106,25 @@ export const handleAiApi = async ({
 export const aiApiPlugin = () => ({
   name: "workbench-ai-api",
   configureServer(server) {
-    server.middlewares.use(async (request, response, next) => {
-      const url = new URL(request.url ?? "/", "http://localhost");
-      if (!isAiRoute(url.pathname)) return next();
-      const hostRoot = resolve(process.env.WORKBENCH_SOURCE_ROOT || server.config.root);
-      const body = request.method === "POST" ? await readBody(request) : undefined;
-      const handled = await handleAiApi({
-        method: request.method,
-        pathname: url.pathname,
-        body,
-        host: request.headers.host,
-        origin: request.headers.origin,
-        modelCall: createDraftModelCall(process.env),
-        loadPullRequest: ghPullRequestLoader(),
-        listCommitSubjects: gitCommitSubjectLister({ cwd: hostRoot }),
-        providerKeyConfigured: providerConfigured(process.env),
-      });
-      if (!handled) return next();
-      response.statusCode = handled.status;
-      response.setHeader("content-type", "application/json");
-      response.end(JSON.stringify(handled.json));
-    });
+    server.middlewares.use(
+      guardedApi(async (request, response, next, url) => {
+        if (!isAiRoute(url.pathname)) return next();
+        const hostRoot = resolve(process.env.WORKBENCH_SOURCE_ROOT || server.config.root);
+        const body = request.method === "POST" ? await readBody(request) : undefined;
+        const handled = await handleAiApi({
+          method: request.method,
+          pathname: url.pathname,
+          body,
+          host: request.headers.host,
+          origin: request.headers.origin,
+          modelCall: createDraftModelCall(process.env),
+          loadPullRequest: ghPullRequestLoader(),
+          listCommitSubjects: gitCommitSubjectLister({ cwd: hostRoot }),
+          providerKeyConfigured: providerConfigured(process.env),
+        });
+        if (!handled) return next();
+        sendJson(response, handled.status, handled.json);
+      }),
+    );
   },
 });
