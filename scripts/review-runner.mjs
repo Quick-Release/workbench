@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawnSync, spawn as spawnChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
 import { homedir as osHomedir } from "node:os";
 import { join } from "node:path";
@@ -105,3 +105,195 @@ const engines = [coderabbitEngine, zcodeEngine];
 export const reviewHealth = ({ spawn = nodeSpawn, homedir = osHomedir } = {}) => ({
   engines: engines.map((engine) => engine.probeHealth({ spawn, homedir })),
 });
+
+// --- The run half (ticket #26): cancel, single-run, timeout, output caps ---
+
+// The enumerated review commands (epic #20): engine + PR number in, a fixed
+// argv out — no shell, and no string ever accepted from the page. The
+// coderabbit run still lacks its temporary worktree staging of the PR head
+// (the run tickets, #22/#23); until then both engines execute with the host
+// repo as their working directory.
+const zcodeReviewPrompt = (pr) =>
+  `Review pull request #${pr} in read-only planning mode: report findings, never modify files.`;
+
+const runCommand = {
+  coderabbit: ({ baseBranch }) => ({
+    command: "coderabbit",
+    args: ["review", "--agent", "--base", baseBranch],
+  }),
+  zcode: ({ pr, hostRepoRoot }) => ({
+    command: "zcode",
+    args: ["--prompt", zcodeReviewPrompt(pr), "--mode", "plan", "--cwd", hostRepoRoot, "--json"],
+  }),
+};
+
+// Production spawn adapter: node's spawn with a detached process group, so
+// kills reach the whole CLI process tree and not just the direct child; the
+// child is surfaced in the runner's contract shape (async-iterable stdio and
+// an `exited` promise, since the run consumes the process by subscription).
+const nodeRunSpawn = ({ command, args, cwd }) => {
+  const child = spawnChildProcess(command, args, {
+    cwd,
+    detached: true,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  const exited = new Promise((resolveExit) => {
+    child.once("close", (code, signal) => resolveExit({ code, signal }));
+    child.once("error", (error) => resolveExit({ code: null, signal: null, error }));
+  });
+  return {
+    pid: child.pid,
+    stdout: child.stdout,
+    stderr: child.stderr,
+    // The negative pid signals the process group — that is the tree kill.
+    kill: (signal) => {
+      try {
+        return process.kill(-child.pid, signal);
+      } catch {
+        return child.kill(signal);
+      }
+    },
+    exited,
+  };
+};
+
+// One ordered event channel between the run's concurrent sources (two
+// output streams, the exit, the timers) and the single consumer.
+const eventChannel = () => {
+  const items = [];
+  let wakeup = null;
+  let closed = false;
+  return {
+    push(event) {
+      if (closed) return;
+      items.push(event);
+      wakeup?.();
+      wakeup = null;
+    },
+    close() {
+      closed = true;
+      wakeup?.();
+      wakeup = null;
+    },
+    async *stream() {
+      while (true) {
+        while (items.length > 0) yield items.shift();
+        if (closed) return;
+        await new Promise((resolve) => (wakeup = resolve));
+      }
+    },
+  };
+};
+
+export const startReviewRun = ({
+  engine,
+  pr,
+  baseBranch,
+  hostRepoRoot,
+  spawn = nodeRunSpawn,
+  timeoutMs = 15 * 60_000,
+  outputCapBytes = 1_000_000,
+  terminateGraceMs = 5_000,
+}) => {
+  const { command, args } = runCommand[engine]({ pr, baseBranch, hostRepoRoot });
+  const child = spawn({ command, args, cwd: hostRepoRoot });
+
+  const channel = eventChannel();
+  channel.push({ type: "started", engine, pr });
+  let cancelled = false;
+  let ended = false;
+  let timeoutTimer = null;
+  let graceTimer = null;
+
+  const finish = () => {
+    if (ended) return;
+    ended = true;
+    clearTimeout(timeoutTimer);
+    clearTimeout(graceTimer);
+  };
+
+  // Cancellation escalates: SIGTERM asks the CLI to stop, and a CLI that
+  // ignores it is killed outright once the grace period passes.
+  const signalTree = (signal) => {
+    try {
+      child.kill(signal);
+    } catch {
+      // The child already exited between checks; nothing left to kill.
+    }
+  };
+  const cancel = () => {
+    if (ended || cancelled) return;
+    cancelled = true;
+    signalTree("SIGTERM");
+    graceTimer = setTimeout(() => signalTree("SIGKILL"), terminateGraceMs);
+  };
+
+  timeoutTimer = setTimeout(() => {
+    if (ended) return;
+    channel.push({
+      type: "error",
+      reason: "timeout",
+      message: `the ${engine} review exceeded ${Math.round(timeoutMs / 1000)}s and was stopped`,
+    });
+    signalTree("SIGTERM");
+    graceTimer = setTimeout(() => signalTree("SIGKILL"), terminateGraceMs);
+  }, timeoutMs);
+
+  const readStream = async (stream, name) => {
+    let bytes = 0;
+    let truncated = false;
+    for await (const chunk of stream) {
+      const text = chunk.toString("utf8");
+      bytes += Buffer.byteLength(text);
+      if (bytes > outputCapBytes) {
+        if (!truncated) {
+          truncated = true;
+          channel.push({ type: "truncated" });
+        }
+        continue;
+      }
+      channel.push({ type: "output", stream: name, text });
+    }
+  };
+
+  void readStream(child.stdout, "stdout");
+  void readStream(child.stderr, "stderr");
+
+  void child.exited.then((exit) => {
+    finish();
+    if (exit.error) {
+      channel.push({
+        type: "error",
+        reason: "spawn_failed",
+        message: String(exit.error?.message ?? exit.error),
+      });
+    }
+    channel.push({ type: "exit", code: exit.code, signal: exit.signal, cancelled });
+    channel.close();
+  });
+
+  return {
+    engine,
+    events: channel.stream(),
+    cancel,
+  };
+};
+
+// The endpoint's in-memory registry (ticket #26): one active run per engine,
+// so a second start attempt is a typed busy rejection, never a silent queue.
+export const createRunRegistry = () => {
+  const active = new Map();
+  return {
+    claim(engine, run) {
+      if (active.has(engine)) return null;
+      active.set(engine, run);
+      return run;
+    },
+    release(engine, run) {
+      if (active.get(engine) === run) active.delete(engine);
+    },
+    active(engine) {
+      return active.get(engine) ?? null;
+    },
+  };
+};
