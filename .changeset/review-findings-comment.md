@@ -1,0 +1,5 @@
+---
+"@quick-release/workbench": minor
+---
+
+Opt-in posting of review findings as a PR comment (issue 25, epic 20). New `scripts/review-comment.mjs` runner operation: a completed review's findings post as one comment on the reviewed PR through the Developer's local `gh` (env-var-first token resolution via gh itself), behind an auth probe so a missing login is a named, one-step-fixable state (`brew install gh`, `gh auth login`) instead of an opaque failure. The dev server answers `POST /api/review/comment` behind the shared request gate — the request is enumerated (`engine`, `pr`, `findings`; the comment body is composed server-side with the engine and PR attribution) and validated at the Effect Schema boundary in both directions. The dashboard's `ReviewCommentAction` renders the explicit confirmation beat: nothing is ever sent without it, cancelling sends nothing, and success and failure both surface (the posted comment's link, or the remediation). Mounting the action under a completed review run lands with the run-lifecycle slice (#26).
