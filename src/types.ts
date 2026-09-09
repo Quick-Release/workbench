@@ -428,7 +428,6 @@ import type {
   ReviewHealthSchema,
   ReviewHistoryEntrySchema,
   ReviewHistorySchema,
-  ReviewRunOutcomeSchema,
 } from "./schema.ts";
 
 export const reviewEngines = ["coderabbit", "zcode"] as const;
@@ -442,8 +441,6 @@ export type ReviewHealth = Schema.Schema.Type<typeof ReviewHealthSchema>;
 export type ReviewCommentRequest = Schema.Schema.Type<typeof ReviewCommentRequestSchema>;
 
 export type ReviewCommentResult = Schema.Schema.Type<typeof ReviewCommentResultSchema>;
-
-export type ReviewRunOutcome = Schema.Schema.Type<typeof ReviewRunOutcomeSchema>;
 
 export type ReviewHistoryEntry = Schema.Schema.Type<typeof ReviewHistoryEntrySchema>;
 

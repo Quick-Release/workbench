@@ -265,7 +265,7 @@ export function PullRequestsPage({
         }
       } finally {
         // The run is over one way or another: the session history now has
-        // its verdict, whatever the panel shows.
+        // its outcome, whatever the panel shows.
         void refreshHistory();
       }
     })();

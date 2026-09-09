@@ -10,6 +10,14 @@ import { guardedApi, methodMismatch, readBody, sendJson } from "./api-shared.mjs
 import { ghPullRequestLoader } from "./ai-sources.mjs";
 import { gateRejection } from "./request-gate.mjs";
 import { createRunRegistry, reviewHealth, startReviewRun } from "./review-runner.mjs";
+import { reviewRunOutcome } from "../src/lib/review-run-state.ts";
+
+// The review API middleware (epic #20): the localhost seam the dashboard's
+// PR page drives — the engines' health (ticket #24), the review runs
+// (ticket #26), and the session history of finished runs (ticket #27). The
+// handlers are pure — request parts in, a response part out, the answers
+// through the Effect Schema — and the runner is injected, so tests stub it
+// and no live CLI is ever touched.
 
 const HEALTH_ROUTE = /^\/api\/review\/health\/?$/;
 const RUN_ROUTE = /^\/api\/review\/?$/;
@@ -151,6 +159,9 @@ export const handleReviewRunStart = async ({
     };
   }
 
+  // The duration starts here: a run is "how long the review took", so the
+  // clock includes the spawn, not just the streaming of its output.
+  const startedAt = Date.now();
   let run;
   try {
     run = startRun({ ...request, ...target });
@@ -172,7 +183,6 @@ export const handleReviewRunStart = async ({
       // The stream is the record: what it carries is exactly what the
       // history entry keeps (ticket #27), so a run can be re-opened after
       // the fact without re-running it.
-      const startedAt = Date.now();
       let output = "";
       let truncated = false;
       let timeoutMessage = null;
@@ -188,19 +198,10 @@ export const handleReviewRunStart = async ({
         }
       } finally {
         registry.release(request.engine);
-        // A timeout's SIGKILL exit reads as timed_out — the failure-ish exit
-        // code is the timeout's consequence, not a separate verdict.
-        const outcome = timeoutMessage
-          ? "timed_out"
-          : exit?.cancelled
-            ? "cancelled"
-            : exit && exit.code === 0
-              ? "completed"
-              : "failed";
         history.record({
           engine: request.engine,
           pr: request.pr,
-          outcome,
+          outcome: reviewRunOutcome(exit, timeoutMessage !== null),
           durationMs: Date.now() - startedAt,
           output,
           truncated,
