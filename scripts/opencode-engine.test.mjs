@@ -168,7 +168,7 @@ test("cleanup that fails is best-effort: it throws nothing and still tries the b
   const { plan } = builtPlan(
     {},
     {
-      cleanupSpawn: ({ command, args }) => {
+      cleanupSpawn: ({ args }) => {
         calls.push(args.join(" "));
         return { status: 1, stderr: "contains modified or untracked files" };
       },
@@ -252,7 +252,7 @@ const readyCli = () => ({
       : { status: 0, stdout: "", stderr: "" },
 });
 
-const healthCli = (script, binary = "/usr/local/bin/opencode") => {
+const healthCli = (script) => {
   const calls = [];
   const spawn = ({ command, args }) => {
     calls.push([command, ...args].join(" "));
@@ -271,7 +271,7 @@ const probed = ({
   which = () => binary,
 } = {}) =>
   opencodeEngine.probeHealth({
-    spawn: healthCli(script, binary).spawn,
+    spawn: healthCli(script).spawn,
     ollama: { tags },
     env,
     which,

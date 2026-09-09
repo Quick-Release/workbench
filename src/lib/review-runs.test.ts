@@ -97,3 +97,25 @@ describe("cancelReviewRun", () => {
 function fetchMockCalls(fetchImpl: unknown): [string, RequestInit][] {
   return (fetchImpl as { mock: { calls: [string, RequestInit][] } }).mock.calls;
 }
+
+describe("the issue-agent client (issue #40)", () => {
+  it("sends the issue and model, never a command, on an agent run", async () => {
+    const fetchImpl = vi.fn(async () =>
+      sseResponse([{ type: "exit", code: 0, signal: null, cancelled: false }]),
+    ) as unknown as typeof fetch;
+    for await (const _event of streamReviewRun({
+      engine: "opencode",
+      issue: 40,
+      model: "ollama/qwen3-coder:30b",
+      fetchImpl,
+    })) {
+      // drain
+    }
+    const [, init] = fetchMockCalls(fetchImpl)[0] as [string, RequestInit];
+    deepStrictEqual(JSON.parse(String(init.body)), {
+      engine: "opencode",
+      issue: 40,
+      model: "ollama/qwen3-coder:30b",
+    });
+  });
+});

@@ -1,4 +1,4 @@
-import { deepStrictEqual, strictEqual } from "node:assert";
+import { deepStrictEqual, match, strictEqual } from "node:assert";
 import { EventEmitter } from "node:events";
 import test from "node:test";
 
@@ -702,4 +702,161 @@ test("a request body completing is not a hang-up; the response closing is", asyn
 
   for (const cb of listeners.close ?? []) cb();
   strictEqual(run.cancelled, true, "the response closing cancels the run");
+});
+
+// --- The issue-agent surface (issue #40): pr | issue on the same seam ---
+
+import { ghIssueTarget } from "./review-api.mjs";
+
+const startIssueHarness = async ({
+  registry = createRunRegistry(),
+  history = createRunHistory(),
+  events = [],
+  body = { engine: "opencode", issue: 40, model: "ollama/qwen3-coder:30b" },
+  overrides = {},
+} = {}) => {
+  const started = [];
+  const startRun = (request) => {
+    const run = stubRun({ events, issue: request.issue });
+    started.push(request);
+    return run;
+  };
+  const handled = await handleReviewRunStart({
+    body,
+    host: "localhost:4051",
+    origin: undefined,
+    startRun,
+    registry,
+    history,
+    resolveTarget: async () => ({ hostRepoRoot: "/host/repo", baseBranch: "origin/main" }),
+    ...overrides,
+  });
+  return { handled, started, registry, history };
+};
+
+test("an issue run starts the agent engine and echoes the issue in the stream", async () => {
+  const { handled, started } = await startIssueHarness({
+    events: [
+      {
+        type: "started",
+        engine: "opencode",
+        issue: 40,
+        model: "ollama/qwen3-coder:30b",
+      },
+      { type: "exit", code: 0, signal: null, cancelled: false },
+    ],
+  });
+  strictEqual(handled.status, 200);
+  strictEqual(handled.contentType, "text/event-stream");
+  deepStrictEqual(started[0], {
+    engine: "opencode",
+    issue: 40,
+    model: "ollama/qwen3-coder:30b",
+    baseBranch: "origin/main",
+    hostRepoRoot: "/host/repo",
+  });
+  const frames = await drain(handled);
+  strictEqual(
+    frames[0],
+    'data: {"type":"started","engine":"opencode","issue":40,"model":"ollama/qwen3-coder:30b"}\n\n',
+  );
+});
+
+test("exactly one of pr and issue is required", async () => {
+  const both = await startIssueHarness({
+    body: { engine: "opencode", pr: 42, issue: 40 },
+  });
+  strictEqual(both.handled.status, 400);
+  match(both.handled.json.message, /exactly one of pr or issue/i);
+  const neither = await startIssueHarness({ body: { engine: "opencode" } });
+  strictEqual(neither.handled.status, 400);
+  match(neither.handled.json.message, /exactly one of pr or issue/i);
+});
+
+test("a fractional or negative issue keeps the schema's specific reason", async () => {
+  const fractional = await startIssueHarness({ body: { engine: "opencode", issue: 1.5 } });
+  strictEqual(fractional.handled.status, 400);
+  strictEqual(fractional.handled.json.message, "issue must be a positive integer");
+  const negative = await startIssueHarness({ body: { engine: "opencode", issue: -1 } });
+  strictEqual(negative.handled.json.message, "issue must be a positive integer");
+});
+
+test("a model that is not ollama-qualified is rejected with its own reason", async () => {
+  const response = await startIssueHarness({
+    body: { engine: "opencode", issue: 40, model: "qwen3-coder:30b" },
+  });
+  strictEqual(response.handled.status, 400);
+  match(response.handled.json.message, /ollama-qualified/);
+});
+
+test("a baseBranch that is not a safe git ref is rejected", async () => {
+  const injected = await startIssueHarness({
+    body: { engine: "opencode", issue: 40, baseBranch: "--upload-pack=evil" },
+  });
+  strictEqual(injected.handled.status, 400);
+  match(injected.handled.json.message, /branch/);
+});
+
+test("an issue run sits behind the same request gate", async () => {
+  const foreign = await startIssueHarness({
+    overrides: { host: "lan-box.example:4051" },
+  });
+  strictEqual(foreign.handled.status, 403);
+  strictEqual(foreign.started.length, 0);
+});
+
+test("an issue run's history entry carries the issue, not a PR", async () => {
+  const history = createRunHistory();
+  const { handled } = await startIssueHarness({
+    history,
+    events: [{ type: "exit", code: 0, signal: null, cancelled: false }],
+  });
+  await drain(handled);
+  const response = await historyRequest({ history });
+  strictEqual(response.status, 200);
+  const [entry] = response.json.runs;
+  strictEqual(entry.engine, "opencode");
+  strictEqual(entry.issue, 40);
+  strictEqual(entry.pr, null);
+  strictEqual(entry.outcome, "completed");
+});
+
+test("the issue target resolves the default branch from git, or trusts an explicit one", async () => {
+  const gitCalls = [];
+  const resolver = ghIssueTarget({
+    hostRoot: "/host/repo",
+    runGit: (args, cwd) => {
+      gitCalls.push([args.join(" "), cwd]);
+      return { status: 0, stdout: "origin/main\n", stderr: "" };
+    },
+  });
+  deepStrictEqual(await resolver({ issue: 40 }), {
+    hostRepoRoot: "/host/repo",
+    baseBranch: "origin/main",
+  });
+  deepStrictEqual(gitCalls, [["symbolic-ref --short refs/remotes/origin/HEAD", "/host/repo"]]);
+
+  gitCalls.length = 0;
+  deepStrictEqual(await resolver({ issue: 40, baseBranch: "main" }), {
+    hostRepoRoot: "/host/repo",
+    baseBranch: "main",
+  });
+  deepStrictEqual(gitCalls, [], "an explicit base branch skips the git call");
+});
+
+test("a git failure while resolving the default branch is a named 500", async () => {
+  const registry = createRunRegistry();
+  const { handled } = await startIssueHarness({
+    registry,
+    overrides: {
+      resolveTarget: ghIssueTarget({
+        hostRoot: "/host/repo",
+        runGit: () => ({ status: 128, stdout: "", stderr: "fatal: no such ref" }),
+      }),
+    },
+  });
+  strictEqual(handled.status, 500);
+  strictEqual(handled.json.error, "target_failed");
+  match(handled.json.message, /no such ref/);
+  strictEqual(registry.active("opencode"), null, "the failed start freed the engine");
 });

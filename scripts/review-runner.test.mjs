@@ -520,7 +520,7 @@ test("the enumerated run commands never accept arbitrary strings from the page",
 
 // --- The plan half (issue #40): multi-step engines run through the same seam ---
 
-import { inspectAgentLine, opencodeEngine, opencodeRunCommand } from "./opencode-engine.mjs";
+import { inspectAgentLine, opencodeRunCommand } from "./opencode-engine.mjs";
 
 // Unlike the single-command reviews above, a plan spawns several children in
 // sequence: each spawn request gets its own fake child, and every request is
@@ -711,7 +711,6 @@ test("the plan's output inspector turns agent JSON events into notices", async (
 });
 
 test("an unavailable engine (null plan) ends with a typed error and never spawns", async () => {
-  const cleanupCalls = [];
   const { spawn, calls } = spawnEach([fakeChild()]);
   const run = startReviewRun({
     engine: "opencode",

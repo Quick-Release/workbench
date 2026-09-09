@@ -1,10 +1,11 @@
 import { parseReviewRunEvent, type ReviewRunEvent } from "@/schema";
-import type { ReviewEngine } from "@/types";
+import type { Engine } from "@/types";
 
-// The review-run client (ticket #26): the browser half of the execution
+// The run client (ticket #26; issue #40): the browser half of the execution
 // seam. A run starts as a POST whose response body is the runner's event
 // stream (server-sent events), parsed frame by frame; a cancel is a plain
-// POST. Only engine + pr ever travel — the server assembles everything else.
+// POST. Only the enumerated request ever travels — engine, target number,
+// and for the agent an optional model — the server assembles everything else.
 
 export class ReviewRunHttpError extends Error {
   status: number;
@@ -20,18 +21,27 @@ export class ReviewRunHttpError extends Error {
 export const streamReviewRun = async function* ({
   engine,
   pr,
+  issue,
+  model,
   signal,
   fetchImpl = fetch,
 }: {
-  engine: ReviewEngine;
-  pr: number;
+  engine: Engine;
+  pr?: number;
+  issue?: number;
+  model?: string;
   signal?: AbortSignal;
   fetchImpl?: typeof fetch;
 }): AsyncGenerator<ReviewRunEvent> {
   const response = await fetchImpl("/api/review", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ engine, pr }),
+    body: JSON.stringify({
+      engine,
+      ...(pr !== undefined ? { pr } : {}),
+      ...(issue !== undefined ? { issue } : {}),
+      ...(model !== undefined ? { model } : {}),
+    }),
     signal,
   });
   if (!response.ok) {
@@ -79,7 +89,7 @@ export const streamReviewRun = async function* ({
 
 export const cancelReviewRun =
   (fetchImpl: typeof fetch = fetch) =>
-  async (engine: ReviewEngine): Promise<void> => {
+  async (engine: Engine): Promise<void> => {
     const response = await fetchImpl("/api/review/cancel", {
       method: "POST",
       headers: { "content-type": "application/json" },

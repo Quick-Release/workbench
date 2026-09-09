@@ -27,7 +27,7 @@ const entry = (overrides: Partial<ReviewHistoryEntry> = {}): ReviewHistoryEntry 
 
 const renderPanel = (
   history: readonly ReviewHistoryEntry[] | null,
-  onRerun: (pr: number, engine: ReviewHistoryEntry["engine"]) => void = () => {},
+  onRerun: (entry: ReviewHistoryEntry) => void = () => {},
 ) => renderToString(<ReviewHistoryPanel history={history} onRerun={onRerun} />);
 
 describe("the session run history panel", () => {
@@ -110,7 +110,49 @@ describe("the session run history panel", () => {
       rerun?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
     });
 
-    expect(onRerun).toHaveBeenCalledWith(43, "zcode");
+    expect(onRerun).toHaveBeenCalledWith(expect.objectContaining({ pr: 43, engine: "zcode" }));
+    await act(async () => {
+      root.unmount();
+    });
+    container.remove();
+  });
+});
+
+describe("issue runs in the history (issue #40)", () => {
+  it("labels an issue entry by its issue, not a PR number", () => {
+    const html = renderPanel([
+      entry({
+        id: 9,
+        engine: "opencode",
+        pr: null,
+        issue: 40,
+        output: "reading the issue\n",
+      }),
+    ]).replaceAll("<!-- -->", "");
+    expect(html).toContain('data-history-entry="9"');
+    expect(html).toContain("opencode");
+    expect(html).toContain("#40");
+    expect(html).not.toContain("#null");
+  });
+
+  it("re-runs an issue entry with the whole entry, issue included", async () => {
+    (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+    const onRerun = vi.fn();
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    const issueEntry = entry({ id: 11, engine: "opencode", pr: null, issue: 40 });
+    await act(async () => {
+      root.render(<ReviewHistoryPanel history={[issueEntry]} onRerun={onRerun} />);
+    });
+
+    const rerun = container.querySelector<HTMLButtonElement>('button[data-history-rerun="11"]');
+    expect(rerun).toBeTruthy();
+    await act(async () => {
+      rerun?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    });
+
+    expect(onRerun).toHaveBeenCalledWith(expect.objectContaining({ issue: 40, pr: null }));
     await act(async () => {
       root.unmount();
     });

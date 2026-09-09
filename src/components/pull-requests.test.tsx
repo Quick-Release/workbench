@@ -125,7 +125,11 @@ describe("the pull-requests page", () => {
       const html = renderPage([pr(82)], aiConfigured);
       expect(html).not.toContain('data-slot="ai-unconfigured"');
       const row = html.slice(html.indexOf('data-pr="82"'));
-      const draftButton = row.slice(row.indexOf("Draft description") - 400);
+      const draftStart = row.indexOf("Draft description");
+      // The draft button alone — the slice stops at its own closing tag so
+      // nothing rendered after the rows (the issue agent's gated start
+      // button) leaks into the assertion.
+      const draftButton = row.slice(draftStart - 400, row.indexOf("</button>", draftStart));
       expect(draftButton).not.toContain('disabled=""');
     }
   });

@@ -75,3 +75,51 @@ describe("the review-engines health panel", () => {
     expect(html).toContain("ZCode desktop app");
   });
 });
+
+describe("the issue-agent engine's health states (issue #40)", () => {
+  const readyAgent: ReviewEngineHealth = {
+    engine: "opencode",
+    state: "ready",
+    version: "opencode 1.0.197",
+    models: ["qwen3-coder:30b"],
+    defaultModel: "ollama/qwen3-coder:30b",
+  };
+
+  it("renders the agent's unreachable-server state with its start command", () => {
+    const html = renderPanel([
+      {
+        engine: "opencode",
+        state: "ollama_unreachable",
+        version: "opencode 1.0.197",
+        remediation:
+          "start the Ollama server (`ollama serve`) — the issue agent runs local models only",
+      },
+    ]);
+    expect(html).toContain('data-engine-state="ollama_unreachable"');
+    expect(html).toContain("start the Ollama server");
+  });
+
+  it("renders the unpulled-model state with the pull command", () => {
+    const html = renderPanel([
+      {
+        engine: "opencode",
+        state: "model_missing",
+        version: "opencode 1.0.197",
+        model: "ollama/qwen3-coder:30b",
+        models: ["llama3.2:latest"],
+        remediation: "run `ollama pull qwen3-coder:30b`, or pick a pulled model in the panel",
+      },
+    ]);
+    expect(html).toContain('data-engine-state="model_missing"');
+    expect(html).toContain("ollama pull qwen3-coder:30b");
+  });
+
+  it("renders the ready agent with its model inventory and warning", () => {
+    const html = renderPanel([
+      { ...readyAgent, warning: "Ollama is using its small default context (4096 tokens)." },
+    ]);
+    expect(html).toContain('data-engine-state="ready"');
+    expect(html).toContain("qwen3-coder:30b");
+    expect(html).toContain("4096 tokens");
+  });
+});

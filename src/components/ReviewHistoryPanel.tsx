@@ -1,7 +1,7 @@
 import { useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
-import type { ReviewEngine, ReviewHistoryEntry } from "@/types";
+import type { ReviewHistoryEntry } from "@/types";
 
 // The session run history (ticket #27): every run this dev-server session
 // finished, newest first — engine, PR, outcome, duration — with the run's
@@ -24,7 +24,9 @@ export function ReviewHistoryPanel({
   onRerun,
 }: {
   history: readonly ReviewHistoryEntry[] | null;
-  onRerun: (pr: number, engine: ReviewEngine) => void;
+  // The entry is handed back whole: a review entry re-runs by its PR, an
+  // agent entry by its issue (issue #40).
+  onRerun: (entry: ReviewHistoryEntry) => void;
 }) {
   // A re-opened entry stays open until clicked again; the set survives the
   // list refetching because entries keep their session id.
@@ -62,7 +64,7 @@ export function ReviewHistoryPanel({
                   onClick={() => toggle(entry.id)}
                 >
                   <span className="font-mono text-xs">{entry.engine}</span>
-                  <span className="text-xs">#{entry.pr}</span>
+                  <span className="text-xs">#{entry.pr ?? entry.issue}</span>
                   <Badge variant={entry.outcome === "completed" ? "default" : "outline"}>
                     {outcomeLabels[entry.outcome]}
                   </Badge>
@@ -77,7 +79,7 @@ export function ReviewHistoryPanel({
                   type="button"
                   data-history-rerun={entry.id}
                   className="ml-auto text-xs text-muted-foreground underline underline-offset-2"
-                  onClick={() => onRerun(entry.pr, entry.engine)}
+                  onClick={() => onRerun(entry)}
                 >
                   Re-run
                 </button>

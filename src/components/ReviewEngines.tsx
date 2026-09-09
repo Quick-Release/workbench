@@ -14,6 +14,8 @@ const stateLabels: Record<ReviewEngineHealth["state"], string> = {
   binary_missing: "Not installed",
   auth_missing: "Not authenticated",
   provider_missing: "No model provider",
+  ollama_unreachable: "Ollama unreachable",
+  model_missing: "Model not pulled",
   probe_error: "Probe failed",
 };
 
@@ -39,6 +41,12 @@ function EngineRow({ health }: { health: ReviewEngineHealth }) {
         health.state !== "ready" && (
           <p className="mt-1 text-xs text-muted-foreground">{health.remediation}</p>
         )
+      )}
+      {health.state === "ready" && "models" in health && health.models.length > 0 && (
+        <p className="mt-1 font-mono text-xs text-muted-foreground">{health.models.join(" · ")}</p>
+      )}
+      {health.state === "ready" && "warning" in health && health.warning && (
+        <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">{health.warning}</p>
       )}
     </li>
   );
