@@ -43,32 +43,45 @@ export const streamReviewRun = async function* ({
   }
 
   // Server-sent events, read frame by frame: each frame is one line of
-  // `data: <json>` followed by a blank line.
+  // `data: <json>` followed by a blank line. An early exit — the consumer
+  // stopping, or a malformed event — releases the reader, so the connection
+  // is not left open behind a generator nobody is draining.
   const reader = response.body?.getReader();
   if (!reader) throw new ReviewRunHttpError(response.status ?? 0, null);
   const decoder = new TextDecoder();
   let buffer = "";
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    let boundary = buffer.indexOf("\n\n");
-    while (boundary !== -1) {
-      const frame = buffer.slice(0, boundary);
-      buffer = buffer.slice(boundary + 2);
-      const line = frame.split("\n").find((candidate) => candidate.startsWith("data: "));
-      if (line) yield parseReviewRunEvent(JSON.parse(line.slice("data: ".length)));
-      boundary = buffer.indexOf("\n\n");
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let boundary = buffer.indexOf("\n\n");
+      while (boundary !== -1) {
+        const frame = buffer.slice(0, boundary);
+        buffer = buffer.slice(boundary + 2);
+        const line = frame.split("\n").find((candidate) => candidate.startsWith("data: "));
+        if (line) yield parseReviewRunEvent(JSON.parse(line.slice("data: ".length)));
+        boundary = buffer.indexOf("\n\n");
+      }
     }
+  } finally {
+    reader.cancel().catch(() => {});
   }
 };
 
 export const cancelReviewRun =
   (fetchImpl: typeof fetch = fetch) =>
   async (engine: ReviewEngine): Promise<void> => {
-    await fetchImpl("/api/review/cancel", {
+    const response = await fetchImpl("/api/review/cancel", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ engine }),
     });
+    if (!response.ok) {
+      const payload = (await response.json().catch(() => null)) as {
+        error?: string;
+        message?: string;
+      } | null;
+      throw new ReviewRunHttpError(response.status, payload);
+    }
   };

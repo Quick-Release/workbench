@@ -192,6 +192,12 @@ describe("the pull-requests route's review flow", () => {
     const html = page.container.innerHTML;
     expect(html).toContain('data-slot="review-run"');
     expect(html).toContain("finding one");
+    // One run at a time: with the stream still open, further review starts
+    // are held off so the running panel and its cancel affordance survive.
+    const reviewWhileRunning = [...(row?.querySelectorAll("button") ?? [])].find((button) =>
+      button.textContent?.includes("Review · zcode"),
+    );
+    expect(reviewWhileRunning?.disabled).toBe(true);
 
     await click(page.container, '[data-slot="review-run"] button');
     const cancelCall = page.calls.find((call) => call.url === "/api/review/cancel");

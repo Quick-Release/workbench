@@ -413,6 +413,33 @@ test("output beyond the cap truncates once with a distinct marker", async () => 
   deepStrictEqual(events.at(-1), { type: "exit", code: 0, signal: null, cancelled: false });
 });
 
+test("the output cap is aggregate across both streams", async () => {
+  // stdout and stderr each push 600 bytes against a 700-byte cap: neither
+  // stream truncates alone, but together they do — once.
+  const child = fakeChild({ stdout: ["a".repeat(600) + "\n"], stderr: ["b".repeat(600) + "\n"] });
+  const { spawn } = spawned(child);
+  const run = startReviewRun({
+    engine: "coderabbit",
+    pr: 42,
+    baseBranch: "main",
+    hostRepoRoot: "/host/repo",
+    spawn,
+    outputCapBytes: 700,
+  });
+
+  const events = await collect(run);
+  deepStrictEqual(
+    events.filter((event) => event.type === "truncated"),
+    [{ type: "truncated" }],
+    "exactly one truncation marker for the whole run",
+  );
+  const forwarded = events
+    .filter((event) => event.type === "output")
+    .reduce((total, event) => total + Buffer.byteLength(event.text), 0);
+  strictEqual(forwarded <= 700, true, "the run forwards no more than the cap in total");
+  deepStrictEqual(events.at(-1), { type: "exit", code: 0, signal: null, cancelled: false });
+});
+
 test("the enumerated run commands never accept arbitrary strings from the page", async () => {
   const child = fakeChild();
   const { spawn, calls } = spawned(child);

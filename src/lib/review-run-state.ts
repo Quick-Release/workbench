@@ -54,8 +54,10 @@ export const runEvent = (state: ReviewRunState, event: ReviewRunEvent): ReviewRu
       return { ...state, output: [...state.output, event.text] };
     case "truncated":
       return { ...state, truncated: true };
-    case "exit":
-      return { ...state, phase: "done", exit: { ...event } };
+    case "exit": {
+      const { code, signal, cancelled } = event;
+      return { ...state, phase: "done", exit: { code, signal, cancelled } };
+    }
     case "error":
       return { ...state, phase: "done", error: { reason: event.reason, message: event.message } };
   }

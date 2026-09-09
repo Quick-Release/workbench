@@ -93,9 +93,17 @@ function PullRequestRow({
               variant="outline"
               size="xs"
               // Reviews ride their own engine's health, not the AI
-              // provider key the draft action needs.
-              disabled={!engineReady[engine]}
-              title={engineReady[engine] ? undefined : `${engine} is not ready to run a review`}
+              // provider key the draft action needs; and the page holds one
+              // run at a time, so starting another would orphan the first
+              // run's panel and its cancel affordance.
+              disabled={!engineReady[engine] || reviewRun.phase === "running"}
+              title={
+                !engineReady[engine]
+                  ? `${engine} is not ready to run a review`
+                  : reviewRun.phase === "running"
+                    ? "a review is already running — cancel it first"
+                    : undefined
+              }
               onClick={() => onReview(record.number, engine)}
             >
               <Square aria-hidden />
@@ -162,8 +170,11 @@ export function PullRequestsPage({
           setReviewRun((current) =>
             current.token === token ? runBusy(current, message) : current,
           );
-        } else if (error instanceof ReviewRunHttpError && error.status === 404) {
-          const failure = "that pull request is not known to the server";
+        } else if (error instanceof ReviewRunHttpError) {
+          // The server answered with its own complaint (unknown PR, bad
+          // request, runner failure) — show it rather than guessing.
+          const failure =
+            error.payload?.message ?? `the review run failed with status ${error.status}`;
           setReviewRun((current) =>
             current.token === token ? runFailed(current, failure) : current,
           );

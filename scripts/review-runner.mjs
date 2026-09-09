@@ -241,9 +241,12 @@ export const startReviewRun = ({
     stopProcess();
   }, timeoutMs);
 
+  // The cap is the run's, not a stream's: stdout and stderr share one byte
+  // budget and one truncation marker, so a chatty pair of streams cannot
+  // double the limit or double the marker.
+  let bytes = 0;
+  let truncated = false;
   const readStream = async (stream, name) => {
-    let bytes = 0;
-    let truncated = false;
     for await (const chunk of stream) {
       const text = chunk.toString("utf8");
       bytes += Buffer.byteLength(text);
@@ -296,6 +299,11 @@ export const createRunRegistry = () => {
     },
     active(engine) {
       return active.get(engine) ?? null;
+    },
+    // The dev server shutting down is the last chance to stop the detached
+    // process groups it spawned.
+    cancelAll() {
+      for (const run of active.values()) run.cancel();
     },
   };
 };

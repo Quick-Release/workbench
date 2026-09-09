@@ -2,7 +2,7 @@ import { renderToString } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
 
 import { ReviewRunPanel } from "./ReviewRunPanel";
-import { emptyReviewRun, runEvent, runStarted, runBusy } from "@/lib/review-run-state";
+import { emptyReviewRun, runBusy, runEvent, runFailed, runStarted } from "@/lib/review-run-state";
 
 // The review-run panel's contract (ticket #26): a running run streams its
 // output with a cancel affordance, a busy rejection renders the server's
@@ -44,6 +44,14 @@ describe("the review-run panel", () => {
     expect(html).toContain('data-slot="review-run-truncated"');
     expect(html).toContain("Review finished.");
     expect(html).not.toContain("Cancel");
+  });
+
+  it("marks a failed run as failed, not done", () => {
+    const run = runFailed(runStarted("coderabbit", 42, 1), "cancel could not reach the server");
+    const html = renderToString(<ReviewRunPanel run={run} />);
+    expect(html).toContain("failed");
+    expect(html).toContain("cancel could not reach the server");
+    expect(html).not.toContain("Review finished.");
   });
 
   it("marks a cancelled run as cancelled", () => {

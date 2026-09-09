@@ -30,6 +30,11 @@ describe("the review-run board", () => {
     state = runEvent(state, { type: "exit", code: null, signal: "SIGTERM", cancelled: true });
     strictEqual(state.phase, "done");
     strictEqual(state.exit?.cancelled, true);
+    deepStrictEqual(
+      state.exit,
+      { code: null, signal: "SIGTERM", cancelled: true },
+      "the exit verdict travels without the event discriminant",
+    );
     deepStrictEqual(state.output, ["partial\n"], "the run keeps its output");
   });
 

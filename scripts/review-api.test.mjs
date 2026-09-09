@@ -210,7 +210,9 @@ test("a PR the snapshot does not know is a named 404", async () => {
   strictEqual(started.length, 0);
 });
 
-test("cancelling the active run cancels it; nothing active is a named 404", async () => {
+test("cancelling keeps the claim until the stream ends, then releases", async () => {
+  // The cancelled CLI is still dying inside its grace window; a replacement
+  // run must stay rejected until the process is actually gone.
   const first = await startHarness({ events: [{ type: "exit", code: 0 }] });
   const registry = first.registry;
 
@@ -224,14 +226,101 @@ test("cancelling the active run cancels it; nothing active is a named 404", asyn
   strictEqual(cancel.json.cancelled, true);
   strictEqual(first.started[0].cancelled, true);
 
+  // Still registered while the (stubbed) stream has not drained: a repeat
+  // cancel reports the same cancellation instead of "no run".
   const again = handleReviewRunCancel({
     body: { engine: "coderabbit" },
     host: "localhost:4051",
     origin: undefined,
     registry,
   });
-  strictEqual(again.status, 404);
-  strictEqual(again.json.error, "no_run");
+  strictEqual(again.status, 200);
+
+  // The stream's end is what releases the engine.
+  await drain(first.handled);
+  strictEqual(registry.active("coderabbit"), null);
+  const after = handleReviewRunCancel({
+    body: { engine: "coderabbit" },
+    host: "localhost:4051",
+    origin: undefined,
+    registry,
+  });
+  strictEqual(after.status, 404);
+  strictEqual(after.json.error, "no_run");
+});
+
+test("the busy answer precedes the target resolution and any spawn", async () => {
+  // gh never runs for an engine that cannot start anyway — and a failing
+  // resolver must not mask the busy rejection.
+  const registry = createRunRegistry();
+  const first = await startHarness({ registry, events: [{ type: "exit", code: 0 }] });
+  strictEqual(first.handled.status, 200);
+
+  const second = await startHarness({
+    registry,
+    overrides: {
+      resolveTarget: async () => {
+        throw new Error("gh should never be consulted");
+      },
+    },
+  });
+  strictEqual(second.handled.status, 409);
+  strictEqual(second.handled.json.error, "run_busy");
+  strictEqual(second.started.length, 0);
+});
+
+test("wrong methods on the run routes are named 405s", async () => {
+  const drive = async (url) => {
+    let captured;
+    reviewApiPlugin().configureServer({
+      middlewares: { use: (fn) => (captured = fn) },
+    });
+    const response = {
+      statusCode: 0,
+      headers: {},
+      body: undefined,
+      setHeader(name, value) {
+        response.headers[name] = value;
+      },
+      end(body) {
+        response.body = body;
+      },
+    };
+    await captured(
+      {
+        url,
+        method: "GET",
+        headers: { host: "localhost:4051" },
+        on() {},
+      },
+      response,
+      () => {
+        throw new Error("next must not run for a handled route");
+      },
+    );
+    return response;
+  };
+
+  const run = await drive("/api/review");
+  strictEqual(run.statusCode, 405);
+  strictEqual(JSON.parse(run.body).error, "method_not_allowed");
+  const cancel = await drive("/api/review/cancel");
+  strictEqual(cancel.statusCode, 405);
+});
+
+test("closing the dev server cancels every active run", async () => {
+  const registry = createRunRegistry();
+  const coderabbit = stubRun({ events: [{ type: "exit", code: 0 }], pr: 42 });
+  const zcode = stubRun({ events: [{ type: "exit", code: 0 }], pr: 43 });
+  registry.claim("coderabbit", coderabbit);
+  registry.claim("zcode", zcode);
+
+  // Detached process groups outlive the dev server unless the plugin stops
+  // them; closeServer is the last chance.
+  reviewApiPlugin({ registry, startRun: () => coderabbit }).closeServer();
+
+  strictEqual(coderabbit.cancelled, true, "the active coderabbit run is cancelled");
+  strictEqual(zcode.cancelled, true, "the active zcode run is cancelled");
 });
 
 test("run start and cancel sit behind the same request gate", async () => {

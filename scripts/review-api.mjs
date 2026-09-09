@@ -92,6 +92,11 @@ export const handleReviewRunStart = async ({
     };
   }
 
+  // Single-run per engine (ticket #26): a second start is a typed busy
+  // rejection the UI can render, never a silent queue — answered before any
+  // target resolution, with the claim re-checked below as the race backstop.
+  if (registry.active(request.engine)) return busyRejection(request.engine);
+
   let target;
   try {
     target = await resolveTarget(request);
@@ -107,11 +112,6 @@ export const handleReviewRunStart = async ({
       json: { error: "pr_unknown", message: `PR #${request.pr} is not in the snapshot` },
     };
   }
-
-  // Single-run per engine (ticket #26): a second start is a typed busy
-  // rejection the UI can render, never a silent queue — checked before
-  // anything spawns, with the claim re-checked below as the race backstop.
-  if (registry.active(request.engine)) return busyRejection(request.engine);
 
   const run = startRun({ ...request, ...target });
   const claimed = registry.claim(request.engine, run);
@@ -151,10 +151,10 @@ export const handleReviewRunCancel = ({ body, host, origin, registry }) => {
       json: { error: "no_run", message: `no active ${request.engine} review` },
     };
   }
-  // Cancelling ends the run's active life: it leaves the registry now, and
-  // the still-draining stream's own release becomes the idempotent backstop.
+  // Cancelling does not free the engine's slot: the CLI is still dying
+  // inside its grace window, and a replacement run must stay rejected until
+  // the stream's own release runs (ticket #26: one active run per engine).
   run.cancel();
-  registry.release(request.engine, run);
   return { status: 200, json: { cancelled: true, engine: request.engine } };
 };
 
@@ -165,6 +165,11 @@ export const reviewApiPlugin = ({
   hostRoot = resolve(process.env.WORKBENCH_SOURCE_ROOT || process.cwd()),
 } = {}) => ({
   name: "workbench-review-api",
+  // The spawned CLIs are detached process groups; without this hook a dev
+  // server shutdown would leave them running unowned until their timeout.
+  closeServer() {
+    registry.cancelAll();
+  },
   configureServer(server) {
     server.middlewares.use(
       guardedApi(async (request, response, next, url) => {
@@ -177,6 +182,14 @@ export const reviewApiPlugin = ({
             sendJson(response, 400, { error: "invalid_request", message: "malformed JSON body" });
             return;
           }
+        }
+        // The run and cancel routes answer POST only; anything else is a
+        // named 405 like the health route gives.
+        if (
+          request.method !== "POST" &&
+          (RUN_ROUTE.test(url.pathname) || CANCEL_ROUTE.test(url.pathname))
+        ) {
+          return sendJson(response, 405, methodMismatch("POST").json);
         }
         const handled = HEALTH_ROUTE.test(url.pathname)
           ? await handleReviewApi({
