@@ -260,7 +260,7 @@ export const reviewApiPlugin = ({
             if (clientGone) continue;
             response.write(`data: ${JSON.stringify(event)}\n\n`);
           }
-          response.end();
+          if (!clientGone) response.end();
           return;
         }
         sendJson(response, handled.status, handled.json);

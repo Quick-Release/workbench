@@ -50,7 +50,12 @@ export const streamReviewRun = async function* ({
   // stopping, or a malformed event — releases the reader, so the connection
   // is not left open behind a generator nobody is draining.
   const reader = response.body?.getReader();
-  if (!reader) throw new ReviewRunHttpError(response.status ?? 0, null);
+  if (!reader) {
+    throw new ReviewRunHttpError(response.status ?? 0, {
+      error: "empty_stream",
+      message: "the review endpoint answered with no event stream",
+    });
+  }
   const decoder = new TextDecoder();
   let buffer = "";
   try {
