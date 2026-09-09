@@ -461,6 +461,28 @@ test("the output cap is aggregate across both streams", async () => {
   deepStrictEqual(events.at(-1), { type: "exit", code: 0, signal: null, cancelled: false });
 });
 
+test("output chunks splitting a multi-byte character decode as one character", async () => {
+  // A CLI streaming JSON emits bytes, not characters: "ü" is two UTF-8
+  // bytes, and a chunk boundary between them must not become two
+  // replacement characters in the panel.
+  const line = Buffer.from("finding: ü\n", "utf8");
+  const { spawn } = spawned(fakeChild({ stdout: [line.subarray(0, 10), line.subarray(10)] }));
+  const run = startReviewRun({
+    engine: "coderabbit",
+    pr: 42,
+    baseBranch: "main",
+    hostRepoRoot: "/host/repo",
+    spawn,
+  });
+
+  const events = await collect(run);
+  const text = events
+    .filter((event) => event.type === "output")
+    .map((event) => event.text)
+    .join("");
+  strictEqual(text, "finding: ü\n");
+});
+
 test("the enumerated run commands never accept arbitrary strings from the page", async () => {
   const child = fakeChild();
   const { spawn, calls } = spawned(child);

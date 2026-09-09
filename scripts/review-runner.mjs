@@ -1,6 +1,7 @@
 import { spawnSync, spawn as spawnChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
 import { homedir as osHomedir } from "node:os";
+import { StringDecoder } from "node:string_decoder";
 import { join } from "node:path";
 
 // The review runner seam (epic #20): the one component that knows how to
@@ -266,19 +267,27 @@ export const startReviewRun = ({
   let bytes = 0;
   let truncated = false;
   const readStream = async (stream, name) => {
+    // Multi-byte UTF-8 sequences can straddle chunk boundaries, so each
+    // stream decodes through its own stateful decoder; the byte accounting
+    // stays on the raw buffer. The pending sequence of a truncated stream
+    // never completes — it is discarded with the rest of the drop.
+    const decoder = new StringDecoder("utf8");
     for await (const chunk of stream) {
       if (truncated) continue;
       const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
       const slice = buffer.subarray(0, Math.max(0, outputCapBytes - bytes));
       bytes += slice.length;
       if (slice.length > 0) {
-        channel.push({ type: "output", stream: name, text: slice.toString("utf8") });
+        const text = decoder.write(slice);
+        if (text) channel.push({ type: "output", stream: name, text });
       }
       if (slice.length < buffer.length) {
         truncated = true;
         channel.push({ type: "truncated" });
       }
     }
+    const tail = decoder.end();
+    if (tail && !truncated) channel.push({ type: "output", stream: name, text: tail });
   };
 
   // A stdio stream failure must not become an unhandled rejection; the
