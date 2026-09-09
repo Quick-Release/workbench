@@ -59,6 +59,11 @@ export function ReviewRunPanel({
           {run.busyMessage}
         </p>
       )}
+      {run.cancelError && run.phase === "running" && (
+        <p data-slot="review-run-cancel-error" className="mt-2 text-xs text-destructive">
+          {run.cancelError}
+        </p>
+      )}
       {run.output.length > 0 && (
         <pre
           data-slot="review-run-output"

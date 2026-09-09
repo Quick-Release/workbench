@@ -22,6 +22,9 @@ export type ReviewRunState = {
   error: { reason: string; message: string } | null;
   busyMessage: string | null;
   failure: string | null;
+  // A failed cancellation keeps the run running and retryable, so the panel
+  // never freezes with the Cancel affordance gone.
+  cancelError: string | null;
 };
 
 export const emptyReviewRun: ReviewRunState = {
@@ -35,6 +38,7 @@ export const emptyReviewRun: ReviewRunState = {
   error: null,
   busyMessage: null,
   failure: null,
+  cancelError: null,
 };
 
 export const runStarted = (engine: ReviewEngine, pr: number, token: number): ReviewRunState => ({
@@ -82,5 +86,9 @@ export const runFailed = (state: ReviewRunState, failure: string): ReviewRunStat
   exit: null,
   error: null,
   busyMessage: null,
+  cancelError: null,
   failure,
 });
+
+export const runCancelFailed = (state: ReviewRunState, message: string): ReviewRunState =>
+  state.phase === "running" ? { ...state, cancelError: message } : state;

@@ -21,6 +21,7 @@ import {
 import {
   emptyReviewRun,
   runBusy,
+  runCancelFailed,
   runEvent,
   runFailed,
   runStarted,
@@ -205,12 +206,14 @@ export function PullRequestsPage({
         error.status === 404 &&
         error.payload?.error === "no_run";
       if (benign) return;
-      // Scoped to the run that was cancelled: a rejection arriving after a
-      // newer run started must not mark that newer run as failed.
+      // Scoped to the run that was cancelled, and the run stays running with
+      // its Cancel button: a failed cancel is retryable, never terminal.
+      const failure =
+        error instanceof ReviewRunHttpError
+          ? (error.payload?.message ?? `cancel failed with status ${error.status}`)
+          : "cancel could not reach the server — the run may still be going";
       setReviewRun((current) =>
-        current.token === token && current.phase === "running"
-          ? runFailed(current, "cancel could not reach the server — the run may still be going")
-          : current,
+        current.token === token ? runCancelFailed(current, failure) : current,
       );
     });
   };

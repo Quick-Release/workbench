@@ -139,6 +139,9 @@ export const handleReviewRunStart = async ({
         registry.release(request.engine);
       }
     })(),
+    // The page going away is a cancellation: nothing consumes the stream,
+    // so the CLI must not keep running with the engine slot held.
+    cancel: () => run.cancel(),
   };
 };
 
@@ -235,10 +238,14 @@ export const reviewApiPlugin = ({
         if (!handled) return next();
         if (handled.stream) {
           // The run travels as server-sent events: one JSON event per frame,
-          // the stream closing with the run's exit.
+          // the stream closing with the run's exit. A client that hangs up —
+          // navigation, an aborted fetch — cancels the run instead of
+          // leaving it executing with the engine slot held.
           response.statusCode = handled.status;
           response.setHeader("content-type", handled.contentType);
+          request.on("close", () => handled.cancel?.());
           for await (const event of handled.stream) {
+            if (response.writableEnded || request.destroyed) break;
             response.write(`data: ${JSON.stringify(event)}\n\n`);
           }
           response.end();

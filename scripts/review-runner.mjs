@@ -160,7 +160,10 @@ const nodeRunSpawn = ({ command, args, cwd }) => {
 // One ordered event channel between the run's concurrent sources (two
 // output streams, the exit, the timers) and the single consumer.
 const eventChannel = () => {
+  // Drained by read index rather than shift(): a CLI can emit many small
+  // chunks, and shift-per-event turns that quadratic.
   const items = [];
+  let head = 0;
   let wakeup = null;
   let closed = false;
   return {
@@ -177,8 +180,17 @@ const eventChannel = () => {
     },
     async *stream() {
       while (true) {
-        while (items.length > 0) yield items.shift();
-        if (closed) return;
+        while (head < items.length) {
+          const event = items[head];
+          items[head] = undefined;
+          head += 1;
+          yield event;
+        }
+        if (closed) {
+          items.length = 0;
+          head = 0;
+          return;
+        }
         await new Promise((resolve) => (wakeup = resolve));
       }
     },
@@ -329,9 +341,12 @@ export const createRunRegistry = () => {
       return true;
     },
     // The dev server shutting down is the last chance to stop the detached
-    // process groups it spawned.
+    // process groups it spawned; reservations remember it for their bind.
     cancelAll() {
-      for (const entry of active.values()) if (isRun(entry)) entry.cancel();
+      for (const entry of active.values()) {
+        if (isRun(entry)) entry.cancel();
+        else entry.cancelRequested = true;
+      }
     },
   };
 };
