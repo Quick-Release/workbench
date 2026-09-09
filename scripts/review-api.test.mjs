@@ -496,3 +496,54 @@ test("timeout and truncation ride the SSE stream like any other event", async ()
     'data: {"type":"exit","code":null,"signal":"SIGKILL","cancelled":false}\n\n',
   );
 });
+
+test("a request body completing is not a hang-up; the response closing is", async () => {
+  // IncomingMessage emits `close` when its body finishes reading — a normal
+  // POST does that immediately and must not cancel the review it started.
+  // The response's own close is the hang-up signal.
+  const registry = createRunRegistry();
+  const run = stubRun({
+    events: [{ type: "exit", code: 0, signal: null, cancelled: false }],
+    pr: 42,
+  });
+  let captured;
+  reviewApiPlugin({
+    startRun: () => run,
+    registry,
+    resolveTarget: async () => ({ baseBranch: "main", hostRepoRoot: "/host/repo" }),
+  }).configureServer({
+    config: { root: "/host/repo" },
+    middlewares: { use: (fn) => (captured = fn) },
+  });
+  const listeners = {};
+  const request = {
+    url: "/api/review",
+    method: "POST",
+    headers: { host: "localhost:4051" },
+    on(event, cb) {
+      if (event === "data") cb(Buffer.from(JSON.stringify({ engine: "coderabbit", pr: 42 })));
+      if (event === "end") cb();
+    },
+  };
+  const response = {
+    statusCode: 0,
+    headers: {},
+    writableEnded: false,
+    setHeader() {},
+    write() {},
+    end() {
+      response.writableEnded = true;
+    },
+    on(event, cb) {
+      (listeners[event] ??= []).push(cb);
+    },
+  };
+
+  await captured(request, response, () => {
+    throw new Error("must not pass through");
+  });
+  strictEqual(run.cancelled, false, "a normal POST does not cancel its own review");
+
+  for (const cb of listeners.close ?? []) cb();
+  strictEqual(run.cancelled, true, "the response closing cancels the run");
+});

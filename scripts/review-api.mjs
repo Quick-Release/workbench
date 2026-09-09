@@ -111,7 +111,7 @@ export const handleReviewRunStart = async ({
     registry.release(request.engine);
     return {
       status: 404,
-      json: { error: "pr_unknown", message: `PR #${request.pr} is not in the snapshot` },
+      json: { error: "pr_unknown", message: `PR #${request.pr} is not known to this host repo` },
     };
   }
 
@@ -175,6 +175,7 @@ export const reviewApiPlugin = ({
   probeHealth = () => reviewHealth(),
   startRun = startReviewRun,
   registry = createRunRegistry(),
+  resolveTarget,
 } = {}) => ({
   name: "workbench-review-api",
   configureServer(server) {
@@ -227,7 +228,7 @@ export const reviewApiPlugin = ({
                 origin: request.headers.origin,
                 startRun,
                 registry,
-                resolveTarget: ghReviewTarget({ hostRoot }),
+                resolveTarget: resolveTarget ?? ghReviewTarget({ hostRoot }),
               })
             : CANCEL_ROUTE.test(url.pathname)
               ? handleReviewRunCancel({
@@ -247,8 +248,11 @@ export const reviewApiPlugin = ({
           // the first CLI is still dying in its grace window.
           response.statusCode = handled.status;
           response.setHeader("content-type", handled.contentType);
+          // The response's own close is the hang-up signal: the request's
+          // fires when its body finishes reading, which a normal POST does
+          // immediately — cancelling a review that just started.
           let clientGone = false;
-          request.on("close", () => {
+          response.on("close", () => {
             clientGone = true;
             handled.cancel?.();
           });
