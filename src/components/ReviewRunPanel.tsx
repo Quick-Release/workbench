@@ -39,7 +39,7 @@ export function ReviewRunPanel({
         {run.phase === "done" && (
           <Badge
             variant={
-              run.exit?.cancelled || run.failure || (run.exit && run.exit.code !== 0)
+              run.exit?.cancelled || run.failure || run.error || (run.exit && run.exit.code !== 0)
                 ? "outline"
                 : "default"
             }

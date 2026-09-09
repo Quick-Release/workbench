@@ -386,6 +386,27 @@ test("a run that exceeds the time limit ends with a timeout error", async () => 
   deepStrictEqual(events.at(-1), { type: "exit", code: null, signal: "SIGKILL", cancelled: false });
 });
 
+test("an explicit cancel during a timeout stop escalates only once", async () => {
+  const child = fakeChild({ ignoreSigterm: true, autoExit: false });
+  const { spawn } = spawned(child);
+  const run = startReviewRun({
+    engine: "coderabbit",
+    pr: 42,
+    baseBranch: "main",
+    hostRepoRoot: "/host/repo",
+    spawn,
+    timeoutMs: 20,
+    terminateGraceMs: 10,
+  });
+  // The timeout stops the run at ~20ms; a user cancel arriving before the
+  // exit must not schedule a second SIGKILL cycle.
+  setTimeout(() => run.cancel(), 22);
+  const events = await collect(run);
+
+  deepStrictEqual(child.signals, ["SIGTERM", "SIGKILL"]);
+  strictEqual(events.filter((event) => event.type === "error").length, 1);
+});
+
 test("output beyond the cap truncates once with a distinct marker", async () => {
   const child = fakeChild({ stdout: ["a".repeat(600) + "\n", "b".repeat(600) + "\n"] });
   const { spawn } = spawned(child);

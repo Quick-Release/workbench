@@ -46,6 +46,19 @@ describe("the review-run panel", () => {
     expect(html).not.toContain("Cancel");
   });
 
+  it("badges an error-ended run as failed", () => {
+    let run = runStarted("zcode", 7, 2);
+    run = runEvent(run, {
+      type: "error",
+      reason: "timeout",
+      message: "the zcode review exceeded 900s and was stopped",
+    });
+    run = runEvent(run, { type: "exit", code: null, signal: "SIGKILL", cancelled: false });
+    const html = renderToString(<ReviewRunPanel run={run} />);
+    expect(html).toContain("failed");
+    expect(html).toContain("the zcode review exceeded 900s and was stopped");
+  });
+
   it("marks a failed run as failed, not done", () => {
     const run = runFailed(runStarted("coderabbit", 42, 1), "cancel could not reach the server");
     const html = renderToString(<ReviewRunPanel run={run} />);

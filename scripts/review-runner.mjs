@@ -225,8 +225,13 @@ export const startReviewRun = ({
   };
 
   // Stopping escalates: SIGTERM asks the CLI to stop, and a CLI that
-  // ignores it is killed outright once the grace period passes.
+  // ignores it is killed outright once the grace period passes. The
+  // escalation is scheduled at most once per run — a late SIGKILL against a
+  // recycled pid is the bug it exists to prevent.
+  let stopping = false;
   const stopProcess = () => {
+    if (stopping) return;
+    stopping = true;
     const signalTree = (signal) => {
       try {
         child.kill(signal);
@@ -244,7 +249,7 @@ export const startReviewRun = ({
   };
 
   timeoutTimer = setTimeout(() => {
-    if (ended) return;
+    if (ended || stopping) return;
     channel.push({
       type: "error",
       reason: "timeout",
