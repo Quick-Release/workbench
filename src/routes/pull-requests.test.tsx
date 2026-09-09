@@ -206,6 +206,109 @@ describe("the pull-requests route's review flow", () => {
     await page.unmount();
   });
 
+  it("replays a cancellation that raced the run's registration", async () => {
+    // The cancel POST can land before the start POST has claimed its engine;
+    // the benign no_run answer must not swallow the intent — it replays the
+    // moment the run registers (its first event arrives).
+    (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+    const calls: { url: string; init?: RequestInit }[] = [];
+    let cancelCalls = 0;
+    const encoder = new TextEncoder();
+    let startController: ReadableStreamDefaultController<Uint8Array> | null = null;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        calls.push({ url, init });
+        if (url === "/api/review/health") {
+          return { ok: true, status: 200, json: async () => reviewHealthReady } as Response;
+        }
+        if (url === "/api/ai/health") {
+          return { ok: true, status: 200, json: async () => ({ configured: false }) } as Response;
+        }
+        if (url === "/api/review") {
+          return new Response(
+            new ReadableStream({
+              start(controller) {
+                startController = controller;
+                // No events yet: the run is still claiming its engine.
+              },
+            }),
+            { status: 200 },
+          );
+        }
+        if (url === "/api/review/cancel") {
+          cancelCalls += 1;
+          if (cancelCalls === 1) {
+            return {
+              ok: false,
+              status: 404,
+              json: async () => ({ error: "no_run", message: "no active coderabbit review" }),
+            } as Response;
+          }
+          return { ok: true, status: 200, json: async () => ({ cancelled: true }) } as Response;
+        }
+        return { ok: false, status: 404, json: async () => ({}) } as Response;
+      }),
+    );
+
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    await act(async () => {
+      root.render(<PullRequestsRoute />);
+    });
+    await act(async () => {});
+    const unmount = async () => {
+      await act(async () => {
+        root.unmount();
+      });
+      container.remove();
+    };
+
+    const row = container.querySelector('[data-slot="pull-request-row"]');
+    const reviewButton = [...(row?.querySelectorAll("button") ?? [])].find((button) =>
+      button.textContent?.includes("Review · coderabbit"),
+    );
+    await act(async () => {
+      reviewButton?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+
+    // The cancel fires while the run is still registering: it is refused
+    // with the benign no_run, and the intent is kept.
+    await click(container, '[data-slot="review-run"] button');
+    strictEqual(cancelCalls, 1);
+
+    // The run registers — its first event arrives — and the kept intent
+    // replays as a real cancel.
+    await act(async () => {
+      startController?.enqueue(
+        encoder.encode(
+          `data: ${JSON.stringify({ type: "started", engine: "coderabbit", pr: 82 })}\n\n`,
+        ),
+      );
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    strictEqual(cancelCalls, 2, "the kept cancellation intent replayed on registration");
+    const replay = calls.filter((call) => call.url === "/api/review/cancel").at(-1);
+    deepStrictEqual(JSON.parse(String(replay?.init?.body)), { engine: "coderabbit" });
+
+    // The replayed cancel lands: the runner's cancelled exit closes it out.
+    await act(async () => {
+      startController?.enqueue(
+        encoder.encode(
+          `data: ${JSON.stringify({ type: "exit", code: null, signal: "SIGTERM", cancelled: true })}\n\n`,
+        ),
+      );
+      startController?.close();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    expect(container.innerHTML).toContain("cancelled");
+    await unmount();
+  });
+
   it("renders a busy rejection as the server's message", async () => {
     (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
     const calls: { url: string; init?: RequestInit }[] = [];

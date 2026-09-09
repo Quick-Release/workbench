@@ -160,6 +160,38 @@ export function PullRequestsPage({
   // instead of leaving it streaming behind a page that is gone.
   const runAbortRef = useRef<AbortController | null>(null);
   useEffect(() => () => runAbortRef.current?.abort(), []);
+  // A cancellation that raced the run's registration — its POST landed
+  // before the start POST had claimed its engine — is remembered here and
+  // replayed the moment the run registers, instead of being dropped on the
+  // benign no_run answer. Keyed by the run's token, so it can only ever
+  // fire for the run it was asked of.
+  const pendingCancelRef = useRef<{ token: number; engine: ReviewEngine } | null>(null);
+
+  const cancelOnce = (engine: ReviewEngine, token: number) => {
+    cancelReviewRun()(engine).catch((error) => {
+      // A no_run refusal while the run is still claiming its engine is the
+      // registration race: keep the intent. Once the run has registered (or
+      // already ended) the same answer means there is truly nothing to
+      // cancel, and the silence is benign.
+      const benign =
+        error instanceof ReviewRunHttpError &&
+        error.status === 404 &&
+        error.payload?.error === "no_run";
+      if (benign) {
+        pendingCancelRef.current = { token, engine };
+        return;
+      }
+      // Scoped to the run that was cancelled, and the run stays running with
+      // its Cancel button: a failed cancel is retryable, never terminal.
+      const failure =
+        error instanceof ReviewRunHttpError
+          ? (error.payload?.message ?? `cancel failed with status ${error.status}`)
+          : "cancel could not reach the server — the run may still be going";
+      setReviewRun((current) =>
+        current.token === token ? runCancelFailed(current, failure) : current,
+      );
+    });
+  };
 
   const runReview = (pr: number, engine: ReviewEngine) => {
     const token = ++runToken.current;
@@ -168,7 +200,18 @@ export function PullRequestsPage({
     setReviewRun(runStarted(engine, pr, token));
     void (async () => {
       try {
+        // The first event is the proof of registration: a cancellation that
+        // raced it replays here, before any further output is streamed.
+        let registered = false;
         for await (const event of streamReviewRun({ engine, pr, signal: controller.signal })) {
+          if (!registered) {
+            registered = true;
+            if (pendingCancelRef.current?.token === token) {
+              const replay = pendingCancelRef.current;
+              pendingCancelRef.current = null;
+              cancelOnce(replay.engine, token);
+            }
+          }
           setReviewRun((current) => (current.token === token ? runEvent(current, event) : current));
         }
         // A stream that ends without an exit — server crash, dropped
@@ -207,24 +250,7 @@ export function PullRequestsPage({
     const token = reviewRun.token;
     // A retry clears the previous attempt's notice up front.
     setReviewRun((current) => (current.cancelError ? { ...current, cancelError: null } : current));
-    cancelReviewRun()(engine).catch((error) => {
-      // A no_run refusal is benign: the run was still claiming its engine
-      // (nothing to kill yet — its own events will arrive) or already ended.
-      const benign =
-        error instanceof ReviewRunHttpError &&
-        error.status === 404 &&
-        error.payload?.error === "no_run";
-      if (benign) return;
-      // Scoped to the run that was cancelled, and the run stays running with
-      // its Cancel button: a failed cancel is retryable, never terminal.
-      const failure =
-        error instanceof ReviewRunHttpError
-          ? (error.payload?.message ?? `cancel failed with status ${error.status}`)
-          : "cancel could not reach the server — the run may still be going";
-      setReviewRun((current) =>
-        current.token === token ? runCancelFailed(current, failure) : current,
-      );
-    });
+    cancelOnce(engine, token);
   };
 
   // A review action is live only when that engine's health probe said ready
