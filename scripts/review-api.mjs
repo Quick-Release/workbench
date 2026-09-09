@@ -241,13 +241,19 @@ export const reviewApiPlugin = ({
         if (handled.stream) {
           // The run travels as server-sent events: one JSON event per frame,
           // the stream closing with the run's exit. A client that hangs up —
-          // navigation, an aborted fetch — cancels the run instead of
-          // leaving it executing with the engine slot held.
+          // navigation, an aborted fetch — cancels the run, and the handler
+          // keeps draining until the process actually exits: releasing the
+          // engine slot at hang-up time would let a second run start while
+          // the first CLI is still dying in its grace window.
           response.statusCode = handled.status;
           response.setHeader("content-type", handled.contentType);
-          request.on("close", () => handled.cancel?.());
+          let clientGone = false;
+          request.on("close", () => {
+            clientGone = true;
+            handled.cancel?.();
+          });
           for await (const event of handled.stream) {
-            if (response.writableEnded || request.destroyed) break;
+            if (clientGone) continue;
             response.write(`data: ${JSON.stringify(event)}\n\n`);
           }
           response.end();

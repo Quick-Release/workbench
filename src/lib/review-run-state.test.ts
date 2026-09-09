@@ -57,17 +57,20 @@ describe("the review-run board", () => {
 
   it("renders a busy rejection as a message, dropping the dead run", () => {
     let state = runStarted("coderabbit", 42, 1);
+    state = runEvent(state, { type: "output", stream: "stdout", text: "partial\n" });
     state = runBusy(state, "a coderabbit review is already running");
     strictEqual(state.phase, "busy");
     strictEqual(state.busyMessage, "a coderabbit review is already running");
-    strictEqual(state.output, "");
+    strictEqual(state.output, "", "prior output is cleared with the dead run");
   });
 
   it("records an unreachable endpoint as a failure, not a hang", () => {
     let state = runStarted("zcode", 7, 2);
+    state = runEvent(state, { type: "output", stream: "stdout", text: "partial\n" });
     state = runFailed(state, "the review endpoint is unreachable");
     strictEqual(state.phase, "done");
     strictEqual(state.failure, "the review endpoint is unreachable");
+    strictEqual(state.output, "");
   });
 
   it("ignores events for a run that is already over", () => {
