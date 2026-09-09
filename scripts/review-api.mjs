@@ -1,7 +1,14 @@
-import { parseReviewHealth } from "../src/schema.ts";
-import { methodMismatch } from "./api-shared.mjs";
+import { resolve } from "node:path";
+
+import {
+  parseReviewCancelRequest,
+  parseReviewHealth,
+  parseReviewRunRequest,
+} from "../src/schema.ts";
+import { guardedApi, methodMismatch, readBody, sendJson } from "./api-shared.mjs";
+import { ghPullRequestLoader } from "./ai-sources.mjs";
 import { gateRejection } from "./request-gate.mjs";
-import { reviewHealth } from "./review-runner.mjs";
+import { createRunRegistry, reviewHealth, startReviewRun } from "./review-runner.mjs";
 
 // The review API middleware (epic #20, ticket #24): the health endpoint the
 // dashboard's PR page probes before offering a review action. The handler is
@@ -11,8 +18,11 @@ import { reviewHealth } from "./review-runner.mjs";
 // stay safe to call repeatedly even when the engines are broken.
 
 const HEALTH_ROUTE = /^\/api\/review\/health\/?$/;
+const RUN_ROUTE = /^\/api\/review\/?$/;
+const CANCEL_ROUTE = /^\/api\/review\/cancel\/?$/;
 
-export const isReviewApiRoute = (pathname) => HEALTH_ROUTE.test(pathname);
+export const isReviewApiRoute = (pathname) =>
+  HEALTH_ROUTE.test(pathname) || RUN_ROUTE.test(pathname) || CANCEL_ROUTE.test(pathname);
 
 export const handleReviewApi = async ({ method, pathname, host, origin, probeHealth }) => {
   if (!isReviewApiRoute(pathname)) return null;
@@ -32,30 +42,179 @@ export const handleReviewApi = async ({ method, pathname, host, origin, probeHea
   }
 };
 
-export const reviewApiPlugin = ({ probeHealth = () => reviewHealth() } = {}) => ({
+// The run target is resolved server-side with the host repo's own gh — the
+// PR's base branch comes from the same CLI a Developer would run by hand
+// (ADR 0005), and only the PR number is accepted from the page (epic #20:
+// the command surface is enumerated).
+export const ghReviewTarget =
+  ({ loadPullRequest = ghPullRequestLoader(), hostRoot } = {}) =>
+  async ({ pr }) => {
+    try {
+      const record = await loadPullRequest(pr);
+      return { baseBranch: record.base, hostRepoRoot: hostRoot };
+    } catch {
+      return null;
+    }
+  };
+
+export const handleReviewRunStart = async ({
+  body,
+  host,
+  origin,
+  startRun,
+  registry,
+  resolveTarget,
+}) => {
+  const gate = gateRejection({ host, origin });
+  if (gate) return gate;
+
+  let request;
+  try {
+    request = parseReviewRunRequest(body);
+  } catch {
+    return {
+      status: 400,
+      json: { error: "invalid_request", message: "engine and pr are required" },
+    };
+  }
+
+  // Single-run per engine (ticket #26): a second start is a typed busy
+  // rejection the UI can render, never a silent queue — checked before
+  // anything spawns, with the claim re-checked below as the race backstop.
+  if (registry.active(request.engine)) {
+    return {
+      status: 409,
+      json: {
+        error: "run_busy",
+        engine: request.engine,
+        message: `a ${request.engine} review is already running; cancel it or wait for it to finish`,
+      },
+    };
+  }
+
+  const target = await resolveTarget(request);
+  if (!target) {
+    return {
+      status: 404,
+      json: { error: "pr_unknown", message: `PR #${request.pr} is not in the snapshot` },
+    };
+  }
+
+  const run = startRun({ ...request, ...target });
+  const claimed = registry.claim(request.engine, run);
+  if (!claimed) {
+    // Single-run per engine (ticket #26): a second start is a typed busy
+    // rejection the UI can render, never a silent queue — a just-started
+    // run that lost the claim is stopped again immediately.
+    run.cancel();
+    return {
+      status: 409,
+      json: {
+        error: "run_busy",
+        engine: request.engine,
+        message: `a ${request.engine} review is already running; cancel it or wait for it to finish`,
+      },
+    };
+  }
+
+  return {
+    status: 200,
+    contentType: "text/event-stream",
+    stream: (async function* () {
+      try {
+        for await (const event of run.events) yield event;
+      } finally {
+        registry.release(request.engine, run);
+      }
+    })(),
+  };
+};
+
+export const handleReviewRunCancel = ({ body, host, origin, registry }) => {
+  const gate = gateRejection({ host, origin });
+  if (gate) return gate;
+
+  let request;
+  try {
+    request = parseReviewCancelRequest(body);
+  } catch {
+    return { status: 400, json: { error: "invalid_request", message: "engine is required" } };
+  }
+
+  const run = registry.active(request.engine);
+  if (!run) {
+    return {
+      status: 404,
+      json: { error: "no_run", message: `no active ${request.engine} review` },
+    };
+  }
+  // Cancelling ends the run's active life: it leaves the registry now, and
+  // the still-draining stream's own release becomes the idempotent backstop.
+  run.cancel();
+  registry.release(request.engine, run);
+  return { status: 200, json: { cancelled: true, engine: request.engine } };
+};
+
+export const reviewApiPlugin = ({
+  probeHealth = () => reviewHealth(),
+  startRun = startReviewRun,
+  registry = createRunRegistry(),
+  hostRoot = resolve(process.env.WORKBENCH_SOURCE_ROOT || process.cwd()),
+} = {}) => ({
   name: "workbench-review-api",
   configureServer(server) {
-    server.middlewares.use(async (request, response, next) => {
-      // Connect does not consume this async middleware's promise, so an
-      // exception here (a malformed request URL failing `new URL`, say)
-      // would hang the request as an unhandled rejection — forward it.
-      try {
-        const url = new URL(request.url ?? "/", "http://localhost");
-        if (!isReviewApiRoute(url.pathname)) return next();
-        const handled = await handleReviewApi({
-          method: request.method,
-          pathname: url.pathname,
-          host: request.headers.host,
-          origin: request.headers.origin,
-          probeHealth,
-        });
+    server.middlewares.use(
+      guardedApi(async (request, response, next, url) => {
+        let body;
+        if (request.method === "POST") {
+          const raw = await readBody(request);
+          try {
+            body = JSON.parse(raw || "{}");
+          } catch {
+            sendJson(response, 400, { error: "invalid_request", message: "malformed JSON body" });
+            return;
+          }
+        }
+        const handled =
+          request.method === "GET" && HEALTH_ROUTE.test(url.pathname)
+            ? await handleReviewApi({
+                method: request.method,
+                pathname: url.pathname,
+                host: request.headers.host,
+                origin: request.headers.origin,
+                probeHealth,
+              })
+            : RUN_ROUTE.test(url.pathname)
+              ? await handleReviewRunStart({
+                  body,
+                  host: request.headers.host,
+                  origin: request.headers.origin,
+                  startRun,
+                  registry,
+                  resolveTarget: ghReviewTarget({ hostRoot }),
+                })
+              : CANCEL_ROUTE.test(url.pathname)
+                ? handleReviewRunCancel({
+                    body,
+                    host: request.headers.host,
+                    origin: request.headers.origin,
+                    registry,
+                  })
+                : null;
         if (!handled) return next();
-        response.statusCode = handled.status;
-        response.setHeader("content-type", "application/json");
-        response.end(JSON.stringify(handled.json));
-      } catch (error) {
-        next(error);
-      }
-    });
+        if (handled.stream) {
+          // The run travels as server-sent events: one JSON event per frame,
+          // the stream closing with the run's exit.
+          response.statusCode = handled.status;
+          response.setHeader("content-type", handled.contentType);
+          for await (const event of handled.stream) {
+            response.write(`data: ${JSON.stringify(event)}\n\n`);
+          }
+          response.end();
+          return;
+        }
+        sendJson(response, handled.status, handled.json);
+      }),
+    );
   },
 });

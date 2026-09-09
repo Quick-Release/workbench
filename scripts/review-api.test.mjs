@@ -99,3 +99,151 @@ test("a malformed request URL is forwarded to next(error), never swallowed", asy
   const forwarded = await failure;
   strictEqual(forwarded instanceof Error, true);
 });
+
+// --- The run half (ticket #26): start, stream, cancel, single-run ---
+
+import { handleReviewRunCancel, handleReviewRunStart } from "./review-api.mjs";
+import { createRunRegistry } from "./review-runner.mjs";
+
+// A stub runner: the events are pre-scripted, `cancel` is observable, and
+// the captured target is what the endpoint resolved for the run.
+const stubRun = ({ events, pr }) => {
+  const run = {
+    pr,
+    cancelled: false,
+    cancel() {
+      run.cancelled = true;
+    },
+  };
+  run.events = (async function* () {
+    yield* events;
+  })();
+  return run;
+};
+
+const startHarness = async ({
+  registry = createRunRegistry(),
+  events = [],
+  pullRequests = [{ number: 42, base: "main" }],
+  body = { engine: "coderabbit", pr: 42 },
+  overrides = {},
+} = {}) => {
+  const started = [];
+  const startRun = (request) => {
+    const run = stubRun({ events, pr: request.pr });
+    started.push(run);
+    return run;
+  };
+  const handled = await handleReviewRunStart({
+    body,
+    host: "localhost:4051",
+    origin: undefined,
+    startRun,
+    registry,
+    resolveTarget: ({ pr }) =>
+      pullRequests.find((record) => record.number === pr)
+        ? { baseBranch: "main", hostRepoRoot: "/host/repo" }
+        : null,
+    ...overrides,
+  });
+  return { handled, started, registry };
+};
+
+const drain = async (handled) => {
+  const frames = [];
+  for await (const event of handled.stream) frames.push(`data: ${JSON.stringify(event)}\n\n`);
+  return frames;
+};
+
+test("a valid start answers an SSE stream of the runner's events", async () => {
+  const { handled, started } = await startHarness({
+    events: [
+      { type: "started", engine: "coderabbit", pr: 42 },
+      { type: "exit", code: 0, signal: null, cancelled: false },
+    ],
+  });
+  strictEqual(handled.status, 200);
+  strictEqual(handled.contentType, "text/event-stream");
+  deepStrictEqual(started[0].pr, 42);
+  const frames = await drain(handled);
+  deepStrictEqual(frames, [
+    'data: {"type":"started","engine":"coderabbit","pr":42}\n\n',
+    'data: {"type":"exit","code":0,"signal":null,"cancelled":false}\n\n',
+  ]);
+});
+
+test("a second start on the same engine is a typed busy rejection, not a queue", async () => {
+  // The first run is still active: its events are never drained.
+  const first = await startHarness({ events: [{ type: "exit", code: 0 }] });
+  strictEqual(first.handled.status, 200);
+
+  const second = await startHarness({ registry: first.registry });
+  strictEqual(second.handled.status, 409);
+  strictEqual(second.handled.json.error, "run_busy");
+  strictEqual(second.handled.json.engine, "coderabbit");
+  strictEqual(second.started.length, 0, "the runner is never started while busy");
+});
+
+test("the registry releases on stream end, so the engine can run again", async () => {
+  const { handled, registry } = await startHarness({
+    events: [{ type: "exit", code: 0, signal: null, cancelled: false }],
+  });
+  await drain(handled);
+  strictEqual(registry.active("coderabbit"), null);
+});
+
+test("an invalid run request is a named 400 before anything spawns", async () => {
+  const missing = await startHarness({ body: { engine: "coderabbit" } });
+  strictEqual(missing.handled.status, 400);
+  strictEqual(missing.handled.json.error, "invalid_request");
+  const unknownEngine = await startHarness({ body: { engine: "magic-ai", pr: 42 } });
+  strictEqual(unknownEngine.handled.json.error, "invalid_request");
+  strictEqual(unknownEngine.started.length, 0);
+});
+
+test("a PR the snapshot does not know is a named 404", async () => {
+  const { handled, started } = await startHarness({
+    body: { engine: "coderabbit", pr: 424242 },
+  });
+  strictEqual(handled.status, 404);
+  strictEqual(handled.json.error, "pr_unknown");
+  strictEqual(started.length, 0);
+});
+
+test("cancelling the active run cancels it; nothing active is a named 404", async () => {
+  const first = await startHarness({ events: [{ type: "exit", code: 0 }] });
+  const registry = first.registry;
+
+  const cancel = handleReviewRunCancel({
+    body: { engine: "coderabbit" },
+    host: "localhost:4051",
+    origin: undefined,
+    registry,
+  });
+  strictEqual(cancel.status, 200);
+  strictEqual(cancel.json.cancelled, true);
+  strictEqual(first.started[0].cancelled, true);
+
+  const again = handleReviewRunCancel({
+    body: { engine: "coderabbit" },
+    host: "localhost:4051",
+    origin: undefined,
+    registry,
+  });
+  strictEqual(again.status, 404);
+  strictEqual(again.json.error, "no_run");
+});
+
+test("run start and cancel sit behind the same request gate", async () => {
+  const foreign = await startHarness({
+    overrides: { host: "lan-box.example:4051" },
+  });
+  strictEqual(foreign.handled.status, 403);
+  const cancelForeign = handleReviewRunCancel({
+    body: { engine: "coderabbit" },
+    host: "lan-box.example:4051",
+    origin: undefined,
+    registry: createRunRegistry(),
+  });
+  strictEqual(cancelForeign.status, 403);
+});
