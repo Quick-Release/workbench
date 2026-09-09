@@ -186,11 +186,11 @@ const eventChannel = () => {
           head += 1;
           yield event;
         }
-        if (closed) {
-          items.length = 0;
-          head = 0;
-          return;
-        }
+        // Fully drained: compact the backing array, which would otherwise
+        // grow for the run's lifetime under many-small-chunk output.
+        items.length = 0;
+        head = 0;
+        if (closed) return;
         await new Promise((resolve) => (wakeup = resolve));
       }
     },

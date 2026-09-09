@@ -198,6 +198,8 @@ export function PullRequestsPage({
 
   const cancelReview = (engine: ReviewEngine) => {
     const token = reviewRun.token;
+    // A retry clears the previous attempt's notice up front.
+    setReviewRun((current) => (current.cancelError ? { ...current, cancelError: null } : current));
     cancelReviewRun()(engine).catch((error) => {
       // A no_run refusal is benign: the run was still claiming its engine
       // (nothing to kill yet — its own events will arrive) or already ended.
