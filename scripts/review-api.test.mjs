@@ -331,6 +331,25 @@ test("a start whose runner throws releases the engine's claim", async () => {
   strictEqual(retry.handled.status, 200);
 });
 
+test("a cancel during the claim window is remembered and applied at bind", async () => {
+  const registry = createRunRegistry();
+  registry.claim("coderabbit");
+  // The run does not exist yet (target still resolving), but the cancel is
+  // answered and remembered rather than dropped.
+  const cancel = handleReviewRunCancel({
+    body: { engine: "coderabbit" },
+    host: "localhost:4051",
+    origin: undefined,
+    registry,
+  });
+  strictEqual(cancel.status, 200);
+  strictEqual(cancel.json.cancelled, true);
+
+  const run = stubRun({ events: [{ type: "exit", code: 0 }], pr: 42 });
+  registry.bind("coderabbit", run);
+  strictEqual(run.cancelled, true, "the remembered cancel applies at bind");
+});
+
 test("wrong methods on the run routes are named 405s", async () => {
   const drive = async (url) => {
     let captured;

@@ -243,21 +243,24 @@ export const startReviewRun = ({
 
   // The cap is the run's, not a stream's: stdout and stderr share one byte
   // budget and one truncation marker, so a chatty pair of streams cannot
-  // double the limit or double the marker.
+  // double the limit or double the marker. The chunk that crosses the cap is
+  // forwarded up to the last byte that fits, and once truncated the
+  // remaining chunks are dropped without conversion.
   let bytes = 0;
   let truncated = false;
   const readStream = async (stream, name) => {
     for await (const chunk of stream) {
-      const text = chunk.toString("utf8");
-      bytes += Buffer.byteLength(text);
-      if (bytes > outputCapBytes) {
-        if (!truncated) {
-          truncated = true;
-          channel.push({ type: "truncated" });
-        }
-        continue;
+      if (truncated) continue;
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      const slice = buffer.subarray(0, Math.max(0, outputCapBytes - bytes));
+      bytes += slice.length;
+      if (slice.length > 0) {
+        channel.push({ type: "output", stream: name, text: slice.toString("utf8") });
       }
-      channel.push({ type: "output", stream: name, text });
+      if (slice.length < buffer.length) {
+        truncated = true;
+        channel.push({ type: "truncated" });
+      }
     }
   };
 
@@ -292,26 +295,43 @@ export const startReviewRun = ({
 // once one exists; the claim is released if resolution or spawn fails, and
 // by the run's stream when it ends.
 export const createRunRegistry = () => {
+  // A claimed-but-unbound engine holds a reservation: the run does not exist
+  // yet, but a cancel that arrives in that window is remembered and applied
+  // at bind time instead of being dropped.
+  const RESERVATION = () => ({ __reservation: true, cancelRequested: false });
+  const isRun = (entry) => entry !== null && entry !== undefined && !entry.__reservation;
   const active = new Map();
   return {
     claim(engine) {
       if (active.has(engine)) return false;
-      active.set(engine, null);
+      active.set(engine, RESERVATION());
       return true;
     },
     bind(engine, run) {
+      const entry = active.get(engine);
+      if (entry && !isRun(entry) && entry.cancelRequested) run.cancel();
       active.set(engine, run);
     },
     release(engine) {
       active.delete(engine);
     },
     active(engine) {
-      return active.get(engine) ?? null;
+      const entry = active.get(engine);
+      return isRun(entry) ? entry : null;
+    },
+    // A cancel for a bound run stops it; for a reservation it is applied the
+    // moment the run binds.
+    cancel(engine) {
+      const entry = active.get(engine);
+      if (entry === undefined || entry === null) return false;
+      if (isRun(entry)) entry.cancel();
+      else entry.cancelRequested = true;
+      return true;
     },
     // The dev server shutting down is the last chance to stop the detached
     // process groups it spawned.
     cancelAll() {
-      for (const run of active.values()) run?.cancel();
+      for (const entry of active.values()) if (isRun(entry)) entry.cancel();
     },
   };
 };

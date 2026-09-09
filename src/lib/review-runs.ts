@@ -20,16 +20,19 @@ export class ReviewRunHttpError extends Error {
 export const streamReviewRun = async function* ({
   engine,
   pr,
+  signal,
   fetchImpl = fetch,
 }: {
   engine: ReviewEngine;
   pr: number;
+  signal?: AbortSignal;
   fetchImpl?: typeof fetch;
 }): AsyncGenerator<ReviewRunEvent> {
   const response = await fetchImpl("/api/review", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ engine, pr }),
+    signal,
   });
   if (!response.ok) {
     // Rejection payloads (busy, unknown PR) are best-effort display strings:

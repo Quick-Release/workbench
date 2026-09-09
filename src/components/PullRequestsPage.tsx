@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { GitPullRequest, Square } from "lucide-react";
 
 import { DraftPanel, UnconfiguredHint } from "@/components/DraftPanel";
@@ -155,16 +155,23 @@ export function PullRequestsPage({
   // allows one run per engine, so a second engine's start must not inherit
   // the first engine's still-streaming events.
   const runToken = useRef(0);
+  // The live run's abort handle: navigating away releases the SSE connection
+  // instead of leaving it streaming behind a page that is gone.
+  const runAbortRef = useRef<AbortController | null>(null);
+  useEffect(() => () => runAbortRef.current?.abort(), []);
 
   const runReview = (pr: number, engine: ReviewEngine) => {
     const token = ++runToken.current;
+    const controller = new AbortController();
+    runAbortRef.current = controller;
     setReviewRun(runStarted(engine, pr, token));
     void (async () => {
       try {
-        for await (const event of streamReviewRun({ engine, pr })) {
+        for await (const event of streamReviewRun({ engine, pr, signal: controller.signal })) {
           setReviewRun((current) => (current.token === token ? runEvent(current, event) : current));
         }
       } catch (error) {
+        if (controller.signal.aborted) return;
         if (error instanceof ReviewRunHttpError && error.status === 409 && error.payload?.message) {
           const message = error.payload.message;
           setReviewRun((current) =>

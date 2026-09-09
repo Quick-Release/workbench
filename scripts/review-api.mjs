@@ -153,8 +153,10 @@ export const handleReviewRunCancel = ({ body, host, origin, registry }) => {
     return { status: 400, json: { error: "invalid_request", message: "engine is required" } };
   }
 
-  const run = registry.active(request.engine);
-  if (!run) {
+  // A claimed-but-unbound engine (still resolving its target) answers
+  // cancelled too: the registry remembers the request and applies it the
+  // moment the run binds.
+  if (!registry.cancel(request.engine)) {
     return {
       status: 404,
       json: { error: "no_run", message: `no active ${request.engine} review` },
@@ -163,7 +165,6 @@ export const handleReviewRunCancel = ({ body, host, origin, registry }) => {
   // Cancelling does not free the engine's slot: the CLI is still dying
   // inside its grace window, and a replacement run must stay rejected until
   // the stream's own release runs (ticket #26: one active run per engine).
-  run.cancel();
   return { status: 200, json: { cancelled: true, engine: request.engine } };
 };
 

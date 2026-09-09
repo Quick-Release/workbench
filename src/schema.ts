@@ -592,14 +592,20 @@ export const ReviewRunRequestSchema = Schema.Struct({
   pr: Schema.Number,
 });
 
-export const parseReviewRunRequest: (input: unknown) => { engine: string; pr: number } =
-  Schema.decodeUnknownSync(ReviewRunRequestSchema, { onExcessProperty: "error" });
+export type ReviewRunRequest = Schema.Schema.Type<typeof ReviewRunRequestSchema>;
+
+export const parseReviewRunRequest: (input: unknown) => ReviewRunRequest = Schema.decodeUnknownSync(
+  ReviewRunRequestSchema,
+  { onExcessProperty: "error" },
+);
 
 export const ReviewCancelRequestSchema = Schema.Struct({
   engine: Schema.Literals(reviewEngines),
 });
 
-export const parseReviewCancelRequest: (input: unknown) => { engine: string } =
+export type ReviewCancelRequest = Schema.Schema.Type<typeof ReviewCancelRequestSchema>;
+
+export const parseReviewCancelRequest: (input: unknown) => ReviewCancelRequest =
   Schema.decodeUnknownSync(ReviewCancelRequestSchema, { onExcessProperty: "error" });
 
 // The run's event stream (epic #20, ticket #26): the runner's typed NDJSON
