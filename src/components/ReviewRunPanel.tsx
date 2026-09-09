@@ -37,8 +37,18 @@ export function ReviewRunPanel({
         <span className="text-xs text-muted-foreground">review of #{run.pr}</span>
         {run.phase === "running" && <Badge variant="outline">running</Badge>}
         {run.phase === "done" && (
-          <Badge variant={run.exit?.cancelled || run.failure ? "outline" : "default"}>
-            {run.exit?.cancelled ? "cancelled" : run.error || run.failure ? "failed" : "done"}
+          <Badge
+            variant={
+              run.exit?.cancelled || run.failure || (run.exit && run.exit.code !== 0)
+                ? "outline"
+                : "default"
+            }
+          >
+            {run.exit?.cancelled
+              ? "cancelled"
+              : run.error || run.failure || (run.exit && run.exit.code !== 0)
+                ? "failed"
+                : "done"}
           </Badge>
         )}
         {run.phase === "running" && run.engine && onCancel && (
