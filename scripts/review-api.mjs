@@ -52,10 +52,24 @@ export const ghReviewTarget =
     try {
       const record = await loadPullRequest(pr);
       return { baseBranch: record.base, hostRepoRoot: hostRoot };
-    } catch {
-      return null;
+    } catch (error) {
+      // gh saying the PR does not exist is an answer; every other failure
+      // (auth, network) must not masquerade as "unknown PR".
+      if (/could not resolve|not found|no pull request/i.test(String(error?.stderr ?? error))) {
+        return null;
+      }
+      throw error;
     }
   };
+
+const busyRejection = (engine) => ({
+  status: 409,
+  json: {
+    error: "run_busy",
+    engine,
+    message: `a ${engine} review is already running; cancel it or wait for it to finish`,
+  },
+});
 
 export const handleReviewRunStart = async ({
   body,
@@ -78,21 +92,15 @@ export const handleReviewRunStart = async ({
     };
   }
 
-  // Single-run per engine (ticket #26): a second start is a typed busy
-  // rejection the UI can render, never a silent queue — checked before
-  // anything spawns, with the claim re-checked below as the race backstop.
-  if (registry.active(request.engine)) {
+  let target;
+  try {
+    target = await resolveTarget(request);
+  } catch (error) {
     return {
-      status: 409,
-      json: {
-        error: "run_busy",
-        engine: request.engine,
-        message: `a ${request.engine} review is already running; cancel it or wait for it to finish`,
-      },
+      status: 500,
+      json: { error: "target_failed", message: String(error?.message ?? error) },
     };
   }
-
-  const target = await resolveTarget(request);
   if (!target) {
     return {
       status: 404,
@@ -100,21 +108,16 @@ export const handleReviewRunStart = async ({
     };
   }
 
+  // Single-run per engine (ticket #26): a second start is a typed busy
+  // rejection the UI can render, never a silent queue — checked before
+  // anything spawns, with the claim re-checked below as the race backstop.
+  if (registry.active(request.engine)) return busyRejection(request.engine);
+
   const run = startRun({ ...request, ...target });
   const claimed = registry.claim(request.engine, run);
   if (!claimed) {
-    // Single-run per engine (ticket #26): a second start is a typed busy
-    // rejection the UI can render, never a silent queue — a just-started
-    // run that lost the claim is stopped again immediately.
     run.cancel();
-    return {
-      status: 409,
-      json: {
-        error: "run_busy",
-        engine: request.engine,
-        message: `a ${request.engine} review is already running; cancel it or wait for it to finish`,
-      },
-    };
+    return busyRejection(request.engine);
   }
 
   return {
@@ -175,32 +178,31 @@ export const reviewApiPlugin = ({
             return;
           }
         }
-        const handled =
-          request.method === "GET" && HEALTH_ROUTE.test(url.pathname)
-            ? await handleReviewApi({
-                method: request.method,
-                pathname: url.pathname,
+        const handled = HEALTH_ROUTE.test(url.pathname)
+          ? await handleReviewApi({
+              method: request.method,
+              pathname: url.pathname,
+              host: request.headers.host,
+              origin: request.headers.origin,
+              probeHealth,
+            })
+          : RUN_ROUTE.test(url.pathname)
+            ? await handleReviewRunStart({
+                body,
                 host: request.headers.host,
                 origin: request.headers.origin,
-                probeHealth,
+                startRun,
+                registry,
+                resolveTarget: ghReviewTarget({ hostRoot }),
               })
-            : RUN_ROUTE.test(url.pathname)
-              ? await handleReviewRunStart({
+            : CANCEL_ROUTE.test(url.pathname)
+              ? handleReviewRunCancel({
                   body,
                   host: request.headers.host,
                   origin: request.headers.origin,
-                  startRun,
                   registry,
-                  resolveTarget: ghReviewTarget({ hostRoot }),
                 })
-              : CANCEL_ROUTE.test(url.pathname)
-                ? handleReviewRunCancel({
-                    body,
-                    host: request.headers.host,
-                    origin: request.headers.origin,
-                    registry,
-                  })
-                : null;
+              : null;
         if (!handled) return next();
         if (handled.stream) {
           // The run travels as server-sent events: one JSON event per frame,

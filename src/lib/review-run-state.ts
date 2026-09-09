@@ -10,6 +10,10 @@ export type ReviewRunPhase = "idle" | "running" | "busy" | "done";
 
 export type ReviewRunState = {
   phase: ReviewRunPhase;
+  // Identifies the run a state belongs to: the page holds one run at a time,
+  // but the server allows one per engine — a second engine's start must not
+  // inherit the first engine's in-flight events.
+  token: number;
   engine: ReviewEngine | null;
   pr: number | null;
   output: string[];
@@ -22,6 +26,7 @@ export type ReviewRunState = {
 
 export const emptyReviewRun: ReviewRunState = {
   phase: "idle",
+  token: 0,
   engine: null,
   pr: null,
   output: [],
@@ -32,9 +37,10 @@ export const emptyReviewRun: ReviewRunState = {
   failure: null,
 };
 
-export const runStarted = (engine: ReviewEngine, pr: number): ReviewRunState => ({
+export const runStarted = (engine: ReviewEngine, pr: number, token: number): ReviewRunState => ({
   ...emptyReviewRun,
   phase: "running",
+  token,
   engine,
   pr,
 });

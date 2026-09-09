@@ -277,8 +277,8 @@ const stringStream = async function* (chunks, isClosed, done) {
 
 const spawned = (child) => {
   const calls = [];
-  const spawn = ({ command, args, options }) => {
-    calls.push({ command, args, options });
+  const spawn = (request) => {
+    calls.push(request);
     return child;
   };
   return { spawn, calls };
@@ -428,6 +428,7 @@ test("the enumerated run commands never accept arbitrary strings from the page",
   await collected;
 
   strictEqual(calls[0].command, "zcode");
+  strictEqual(calls[0].cwd, "/host/repo", "the run executes in the host repo");
   strictEqual(
     calls[0].args.includes("--mode") && calls[0].args[calls[0].args.indexOf("--mode") + 1],
     "plan",

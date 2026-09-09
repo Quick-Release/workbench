@@ -26,8 +26,13 @@ import {
   runStarted,
   type ReviewRunState,
 } from "@/lib/review-run-state";
-import { ReviewRunHttpError, cancelReviewRun, startReviewRun } from "@/lib/review-runs";
-import type { PullRequestRecord, ReviewEngine, ReviewEngineHealth } from "@/types";
+import { ReviewRunHttpError, cancelReviewRun, streamReviewRun } from "@/lib/review-runs";
+import {
+  reviewEngines,
+  type PullRequestRecord,
+  type ReviewEngine,
+  type ReviewEngineHealth,
+} from "@/types";
 
 // The pull-requests page (ticket #38): the open pull requests of the host
 // repo, synced into the snapshot, each with a one-shot "Draft description"
@@ -138,36 +143,55 @@ export function PullRequestsPage({
   // not state — they update synchronously across rapid clicks.
   const sessionRef = useRef<{ controller: AbortController; token: number } | null>(null);
 
+  // The token marks which in-flight run a state belongs to: the server
+  // allows one run per engine, so a second engine's start must not inherit
+  // the first engine's still-streaming events.
+  const runToken = useRef(0);
+
   const runReview = (pr: number, engine: ReviewEngine) => {
-    setReviewRun(runStarted(engine, pr));
+    const token = ++runToken.current;
+    setReviewRun(runStarted(engine, pr, token));
     void (async () => {
       try {
-        for await (const event of startReviewRun({ engine, pr })) {
-          setReviewRun((current) => runEvent(current, event));
+        for await (const event of streamReviewRun({ engine, pr })) {
+          setReviewRun((current) => (current.token === token ? runEvent(current, event) : current));
         }
       } catch (error) {
         if (error instanceof ReviewRunHttpError && error.status === 409 && error.payload?.message) {
-          setReviewRun((current) => runBusy(current, error.payload?.message ?? "review busy"));
-        } else if (error instanceof ReviewRunHttpError && error.status === 404) {
+          const message = error.payload.message;
           setReviewRun((current) =>
-            runFailed(current, "that pull request is not known to the server"),
+            current.token === token ? runBusy(current, message) : current,
+          );
+        } else if (error instanceof ReviewRunHttpError && error.status === 404) {
+          const failure = "that pull request is not known to the server";
+          setReviewRun((current) =>
+            current.token === token ? runFailed(current, failure) : current,
           );
         } else {
-          setReviewRun((current) => runFailed(current, "the review endpoint is unreachable"));
+          const failure = "the review endpoint is unreachable";
+          setReviewRun((current) =>
+            current.token === token ? runFailed(current, failure) : current,
+          );
         }
       }
     })();
   };
 
   const cancelReview = (engine: ReviewEngine) => {
-    void cancelReviewRun()(engine);
+    cancelReviewRun()(engine).catch(() => {
+      setReviewRun((current) =>
+        current.phase === "running"
+          ? runFailed(current, "cancel could not reach the server — the run may still be going")
+          : current,
+      );
+    });
   };
 
   // A review action is live only when that engine's health probe said ready
   // (ticket #24: not-ready engines cannot be started); while the probe is
   // unknown every review action stays off rather than guessing.
   const engineReady = Object.fromEntries(
-    (["coderabbit", "zcode"] as ReviewEngine[]).map((engine) => [
+    reviewEngines.map((engine) => [
       engine,
       engineHealth?.some((health) => health.engine === engine && health.state === "ready") ?? false,
     ]),

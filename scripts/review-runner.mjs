@@ -212,20 +212,23 @@ export const startReviewRun = ({
     clearTimeout(graceTimer);
   };
 
-  // Cancellation escalates: SIGTERM asks the CLI to stop, and a CLI that
+  // Stopping escalates: SIGTERM asks the CLI to stop, and a CLI that
   // ignores it is killed outright once the grace period passes.
-  const signalTree = (signal) => {
-    try {
-      child.kill(signal);
-    } catch {
-      // The child already exited between checks; nothing left to kill.
-    }
+  const stopProcess = () => {
+    const signalTree = (signal) => {
+      try {
+        child.kill(signal);
+      } catch {
+        // The child already exited between checks; nothing left to kill.
+      }
+    };
+    signalTree("SIGTERM");
+    graceTimer = setTimeout(() => signalTree("SIGKILL"), terminateGraceMs);
   };
   const cancel = () => {
     if (ended || cancelled) return;
     cancelled = true;
-    signalTree("SIGTERM");
-    graceTimer = setTimeout(() => signalTree("SIGKILL"), terminateGraceMs);
+    stopProcess();
   };
 
   timeoutTimer = setTimeout(() => {
@@ -235,8 +238,7 @@ export const startReviewRun = ({
       reason: "timeout",
       message: `the ${engine} review exceeded ${Math.round(timeoutMs / 1000)}s and was stopped`,
     });
-    signalTree("SIGTERM");
-    graceTimer = setTimeout(() => signalTree("SIGKILL"), terminateGraceMs);
+    stopProcess();
   }, timeoutMs);
 
   const readStream = async (stream, name) => {

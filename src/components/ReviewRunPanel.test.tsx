@@ -17,7 +17,7 @@ describe("the review-run panel", () => {
   });
 
   it("renders a running run with its output and a cancel affordance", () => {
-    let run = runStarted("coderabbit", 42);
+    let run = runStarted("coderabbit", 42, 1);
     run = runEvent(run, { type: "output", stream: "stdout", text: "finding one\n" });
     const html = renderToString(<ReviewRunPanel run={run} onCancel={() => {}} />);
     expect(html).toContain('data-run-phase="running"');
@@ -26,7 +26,7 @@ describe("the review-run panel", () => {
   });
 
   it("renders a busy rejection as the server's message", () => {
-    const run = runBusy(runStarted("coderabbit", 42), "a coderabbit review is already running");
+    const run = runBusy(runStarted("coderabbit", 42, 1), "a coderabbit review is already running");
     const html = renderToString(<ReviewRunPanel run={run} />);
     expect(html).toContain('data-slot="review-run-busy"');
     expect(html).toContain("a coderabbit review is already running");
@@ -34,7 +34,7 @@ describe("the review-run panel", () => {
   });
 
   it("renders a finished run with its verdict, truncation, and no cancel", () => {
-    let run = runStarted("zcode", 7);
+    let run = runStarted("zcode", 7, 2);
     run = runEvent(run, { type: "output", stream: "stdout", text: "looks fine\n" });
     run = runEvent(run, { type: "truncated" });
     run = runEvent(run, { type: "exit", code: 0, signal: null, cancelled: false });
@@ -47,7 +47,7 @@ describe("the review-run panel", () => {
   });
 
   it("marks a cancelled run as cancelled", () => {
-    let run = runStarted("coderabbit", 42);
+    let run = runStarted("coderabbit", 42, 1);
     run = runEvent(run, { type: "exit", code: null, signal: "SIGTERM", cancelled: true });
     const html = renderToString(<ReviewRunPanel run={run} />);
     expect(html).toContain("cancelled");

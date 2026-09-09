@@ -17,7 +17,7 @@ export class ReviewRunHttpError extends Error {
   }
 }
 
-export const startReviewRun = async function* ({
+export const streamReviewRun = async function* ({
   engine,
   pr,
   fetchImpl = fetch,
@@ -32,6 +32,9 @@ export const startReviewRun = async function* ({
     body: JSON.stringify({ engine, pr }),
   });
   if (!response.ok) {
+    // Rejection payloads (busy, unknown PR) are best-effort display strings:
+    // the typed seam contract covers the run's events, so a malformed
+    // rejection only degrades the message the panel can show.
     const payload = (await response.json().catch(() => null)) as {
       error?: string;
       message?: string;

@@ -9,7 +9,7 @@ import { runBusy, runEvent, runFailed, runStarted } from "./review-run-state";
 
 describe("the review-run board", () => {
   it("starts a run as running with the engine and PR", () => {
-    const state = runStarted("coderabbit", 42);
+    const state = runStarted("coderabbit", 42, 1);
     strictEqual(state.phase, "running");
     strictEqual(state.engine, "coderabbit");
     strictEqual(state.pr, 42);
@@ -17,7 +17,7 @@ describe("the review-run board", () => {
   });
 
   it("appends streamed output and keeps its order", () => {
-    let state = runStarted("zcode", 7);
+    let state = runStarted("zcode", 7, 2);
     state = runEvent(state, { type: "output", stream: "stdout", text: "finding one\n" });
     state = runEvent(state, { type: "output", stream: "stderr", text: "warn\n" });
     deepStrictEqual(state.output, ["finding one\n", "warn\n"]);
@@ -25,7 +25,7 @@ describe("the review-run board", () => {
   });
 
   it("finishes on the exit event, keeping the cancelled verdict", () => {
-    let state = runStarted("coderabbit", 42);
+    let state = runStarted("coderabbit", 42, 1);
     state = runEvent(state, { type: "output", stream: "stdout", text: "partial\n" });
     state = runEvent(state, { type: "exit", code: null, signal: "SIGTERM", cancelled: true });
     strictEqual(state.phase, "done");
@@ -34,13 +34,13 @@ describe("the review-run board", () => {
   });
 
   it("marks truncation once the marker arrives", () => {
-    let state = runStarted("coderabbit", 42);
+    let state = runStarted("coderabbit", 42, 1);
     state = runEvent(state, { type: "truncated" });
     strictEqual(state.truncated, true);
   });
 
   it("finishes with the timeout error's message", () => {
-    let state = runStarted("zcode", 7);
+    let state = runStarted("zcode", 7, 2);
     state = runEvent(state, {
       type: "error",
       reason: "timeout",
@@ -51,7 +51,7 @@ describe("the review-run board", () => {
   });
 
   it("renders a busy rejection as a message, dropping the dead run", () => {
-    let state = runStarted("coderabbit", 42);
+    let state = runStarted("coderabbit", 42, 1);
     state = runBusy(state, "a coderabbit review is already running");
     strictEqual(state.phase, "busy");
     strictEqual(state.busyMessage, "a coderabbit review is already running");
@@ -59,14 +59,14 @@ describe("the review-run board", () => {
   });
 
   it("records an unreachable endpoint as a failure, not a hang", () => {
-    let state = runStarted("zcode", 7);
+    let state = runStarted("zcode", 7, 2);
     state = runFailed(state, "the review endpoint is unreachable");
     strictEqual(state.phase, "done");
     strictEqual(state.failure, "the review endpoint is unreachable");
   });
 
   it("ignores events for a run that is already over", () => {
-    let state = runStarted("coderabbit", 42);
+    let state = runStarted("coderabbit", 42, 1);
     state = runEvent(state, { type: "exit", code: 0, signal: null, cancelled: false });
     state = runEvent(state, { type: "output", stream: "stdout", text: "late\n" });
     expect(state.output.length).toBe(0);

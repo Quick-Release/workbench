@@ -247,3 +247,71 @@ test("run start and cancel sit behind the same request gate", async () => {
   });
   strictEqual(cancelForeign.status, 403);
 });
+
+test("the health endpoint's named 405 survives the plugin's dispatch", async () => {
+  let captured;
+  reviewApiPlugin().configureServer({
+    middlewares: { use: (fn) => (captured = fn) },
+  });
+  const response = {
+    statusCode: 0,
+    headers: {},
+    body: undefined,
+    setHeader(name, value) {
+      response.headers[name] = value;
+    },
+    end(body) {
+      response.body = body;
+    },
+  };
+  await captured(
+    {
+      url: "/api/review/health",
+      method: "POST",
+      headers: { host: "localhost:4051" },
+      on(event, cb) {
+        if (event === "end") cb();
+      },
+    },
+    response,
+    () => {
+      throw new Error("next must not run for a handled route");
+    },
+  );
+  strictEqual(response.statusCode, 405);
+  strictEqual(JSON.parse(response.body).error, "method_not_allowed");
+});
+
+test("a target resolver infrastructure failure is a named 500, not a phantom 404", async () => {
+  const { handled } = await startHarness({
+    overrides: {
+      resolveTarget: async () => {
+        throw new Error("gh auth expired");
+      },
+    },
+  });
+  strictEqual(handled.status, 500);
+  strictEqual(handled.json.error, "target_failed");
+  strictEqual(handled.json.message.includes("gh auth expired"), true);
+});
+
+test("timeout and truncation ride the SSE stream like any other event", async () => {
+  const { handled } = await startHarness({
+    events: [
+      { type: "output", stream: "stdout", text: "partial\n" },
+      { type: "truncated" },
+      { type: "error", reason: "timeout", message: "the coderabbit review exceeded 900s" },
+      { type: "exit", code: null, signal: "SIGKILL", cancelled: false },
+    ],
+  });
+  const frames = await drain(handled);
+  strictEqual(frames.length, 4);
+  strictEqual(
+    frames[2],
+    'data: {"type":"error","reason":"timeout","message":"the coderabbit review exceeded 900s"}\n\n',
+  );
+  strictEqual(
+    frames[3],
+    'data: {"type":"exit","code":null,"signal":"SIGKILL","cancelled":false}\n\n',
+  );
+});
