@@ -5,6 +5,7 @@ import type {
   ReviewCommentRequest,
   ReviewCommentResult,
   ReviewHealth,
+  ReviewHistory,
   SkillClassification,
   SkillFlowEdge,
   SkillsStatus,
@@ -674,6 +675,37 @@ export const parseReviewCommentRequest: (input: unknown) => ReviewCommentRequest
 
 export const parseReviewCommentResult: (input: unknown) => ReviewCommentResult =
   Schema.decodeUnknownSync(ReviewCommentResultSchema, { onExcessProperty: "error" });
+
+// The session run history (epic #20, ticket #27): the runs this dev-server
+// session has already finished, newest first — what the dashboard's history
+// panel lists, re-opens, and re-runs. In-memory only: a dev-server restart
+// resets it.
+export const ReviewRunOutcomeSchema = Schema.Literals([
+  "completed",
+  "failed",
+  "cancelled",
+  "timed_out",
+]);
+
+export const ReviewHistoryEntrySchema = Schema.Struct({
+  id: Schema.Number,
+  engine: Schema.Literals(reviewEngines),
+  pr: Schema.Number,
+  outcome: ReviewRunOutcomeSchema,
+  durationMs: Schema.Number,
+  output: Schema.String,
+  truncated: Schema.Boolean,
+  message: Schema.NullOr(Schema.String),
+});
+
+export const ReviewHistorySchema = Schema.Struct({
+  runs: Schema.Array(ReviewHistoryEntrySchema),
+});
+
+export const parseReviewHistory: (input: unknown) => ReviewHistory = Schema.decodeUnknownSync(
+  ReviewHistorySchema,
+  { onExcessProperty: "error" },
+);
 
 export const LlmTurnSchema = Schema.Struct({
   request_id: Schema.String,

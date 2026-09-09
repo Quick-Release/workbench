@@ -94,3 +94,17 @@ export const runFailed = (state: ReviewRunState, failure: string): ReviewRunStat
 
 export const runCancelFailed = (state: ReviewRunState, message: string): ReviewRunState =>
   state.phase === "running" ? { ...state, cancelError: message } : state;
+
+// The one place a finished run's verdict is named (ticket #27): a timeout's
+// SIGKILL exit reads as timed out — the failure-ish exit code is the
+// timeout's consequence, not a separate verdict — a cancelled exit reads as
+// cancelled, and everything else grades by exit code. Both sides of the seam
+// (the recording endpoint and the panel) classify from here.
+export const reviewRunOutcome = (
+  exit: { code: number | null; cancelled: boolean } | null,
+  timedOut: boolean,
+): "completed" | "failed" | "cancelled" | "timed_out" => {
+  if (timedOut) return "timed_out";
+  if (exit?.cancelled) return "cancelled";
+  return exit && exit.code === 0 ? "completed" : "failed";
+};

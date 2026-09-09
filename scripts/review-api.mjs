@@ -3,26 +3,60 @@ import { resolve } from "node:path";
 import {
   parseReviewCancelRequest,
   parseReviewHealth,
+  parseReviewHistory,
   parseReviewRunRequest,
 } from "../src/schema.ts";
 import { guardedApi, methodMismatch, readBody, sendJson } from "./api-shared.mjs";
 import { ghPullRequestLoader } from "./ai-sources.mjs";
 import { gateRejection } from "./request-gate.mjs";
 import { createRunRegistry, reviewHealth, startReviewRun } from "./review-runner.mjs";
+import { reviewRunOutcome } from "../src/lib/review-run-state.ts";
 
-// The review API middleware (epic #20, ticket #24): the health endpoint the
-// dashboard's PR page probes before offering a review action. The handler is
-// pure — request parts in, a response part out, the answer through the seam's
-// Effect Schema — and the runner probe is injected, so tests stub it and no
-// live CLI is ever touched. A probe failure is a named 500: the endpoint must
-// stay safe to call repeatedly even when the engines are broken.
+// The review API middleware (epic #20): the localhost seam the dashboard's
+// PR page drives — the engines' health (ticket #24), the review runs
+// (ticket #26), and the session history of finished runs (ticket #27). The
+// handlers are pure — request parts in, a response part out, the answers
+// through the Effect Schema — and the runner is injected, so tests stub it
+// and no live CLI is ever touched.
 
 const HEALTH_ROUTE = /^\/api\/review\/health\/?$/;
 const RUN_ROUTE = /^\/api\/review\/?$/;
 const CANCEL_ROUTE = /^\/api\/review\/cancel\/?$/;
+const HISTORY_ROUTE = /^\/api\/review\/history\/?$/;
 
 export const isReviewApiRoute = (pathname) =>
-  HEALTH_ROUTE.test(pathname) || RUN_ROUTE.test(pathname) || CANCEL_ROUTE.test(pathname);
+  HEALTH_ROUTE.test(pathname) ||
+  RUN_ROUTE.test(pathname) ||
+  CANCEL_ROUTE.test(pathname) ||
+  HISTORY_ROUTE.test(pathname);
+
+// The session run history (ticket #27): what the dev-server remembers about
+// the runs it has already finished. In-memory and per-server — a restart
+// resets it by design, consistent with workbench's local-first posture. The
+// list answers newest first, so the panel reads like a history.
+export const createRunHistory = () => {
+  let nextId = 1;
+  const runs = [];
+  return {
+    record(entry) {
+      runs.push({ id: nextId++, ...entry });
+    },
+    list() {
+      return [...runs].reverse();
+    },
+  };
+};
+
+export const handleReviewHistory = ({ method, pathname, host, origin, history }) => {
+  if (!HISTORY_ROUTE.test(pathname)) return null;
+
+  const gate = gateRejection({ host, origin });
+  if (gate) return gate;
+
+  if (method !== "GET") return methodMismatch("GET");
+
+  return { status: 200, json: parseReviewHistory({ runs: history.list() }) };
+};
 
 export const handleReviewApi = async ({ method, pathname, host, origin, probeHealth }) => {
   if (!isReviewApiRoute(pathname)) return null;
@@ -77,6 +111,7 @@ export const handleReviewRunStart = async ({
   origin,
   startRun,
   registry,
+  history = createRunHistory(),
   resolveTarget,
 }) => {
   const gate = gateRejection({ host, origin });
@@ -124,6 +159,9 @@ export const handleReviewRunStart = async ({
     };
   }
 
+  // The duration starts here: a run is "how long the review took", so the
+  // clock includes the spawn, not just the streaming of its output.
+  const startedAt = Date.now();
   let run;
   try {
     run = startRun({ ...request, ...target });
@@ -142,10 +180,33 @@ export const handleReviewRunStart = async ({
     status: 200,
     contentType: "text/event-stream",
     stream: (async function* () {
+      // The stream is the record: what it carries is exactly what the
+      // history entry keeps (ticket #27), so a run can be re-opened after
+      // the fact without re-running it.
+      let output = "";
+      let truncated = false;
+      let timeoutMessage = null;
+      let exit = null;
       try {
-        for await (const event of run.events) yield event;
+        for await (const event of run.events) {
+          if (event.type === "output") output += event.text;
+          else if (event.type === "truncated") truncated = true;
+          else if (event.type === "error" && event.reason === "timeout")
+            timeoutMessage = event.message;
+          else if (event.type === "exit") exit = event;
+          yield event;
+        }
       } finally {
         registry.release(request.engine);
+        history.record({
+          engine: request.engine,
+          pr: request.pr,
+          outcome: reviewRunOutcome(exit, timeoutMessage !== null),
+          durationMs: Date.now() - startedAt,
+          output,
+          truncated,
+          message: timeoutMessage,
+        });
       }
     })(),
     // The page going away is a cancellation: nothing consumes the stream,
@@ -184,6 +245,7 @@ export const reviewApiPlugin = ({
   probeHealth = () => reviewHealth(),
   startRun = startReviewRun,
   registry = createRunRegistry(),
+  history = createRunHistory(),
   resolveTarget,
 } = {}) => ({
   name: "workbench-review-api",
@@ -202,13 +264,17 @@ export const reviewApiPlugin = ({
         // must pass through unread — draining its body would break whatever
         // sibling middleware owns it — and only the POST routes read JSON.
         if (!isReviewApiRoute(url.pathname)) return next();
-        // The run and cancel routes answer POST only; anything else is a
-        // named 405 like the health route gives.
+        // The run and cancel routes answer POST only; the history route
+        // answers GET only — anything else is a named 405 like the health
+        // route gives.
         if (
           request.method !== "POST" &&
           (RUN_ROUTE.test(url.pathname) || CANCEL_ROUTE.test(url.pathname))
         ) {
           return sendJson(response, 405, methodMismatch("POST").json);
+        }
+        if (request.method !== "GET" && HISTORY_ROUTE.test(url.pathname)) {
+          return sendJson(response, 405, methodMismatch("GET").json);
         }
         let body;
         if (RUN_ROUTE.test(url.pathname) || CANCEL_ROUTE.test(url.pathname)) {
@@ -237,6 +303,7 @@ export const reviewApiPlugin = ({
                 origin: request.headers.origin,
                 startRun,
                 registry,
+                history,
                 resolveTarget: resolveTarget ?? ghReviewTarget({ hostRoot }),
               })
             : CANCEL_ROUTE.test(url.pathname)
@@ -246,7 +313,13 @@ export const reviewApiPlugin = ({
                   origin: request.headers.origin,
                   registry,
                 })
-              : null;
+              : handleReviewHistory({
+                  method: request.method,
+                  pathname: url.pathname,
+                  host: request.headers.host,
+                  origin: request.headers.origin,
+                  history,
+                });
         if (!handled) return next();
         if (handled.stream) {
           // The run travels as server-sent events: one JSON event per frame,

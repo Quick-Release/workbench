@@ -309,6 +309,131 @@ describe("the pull-requests route's review flow", () => {
     await unmount();
   });
 
+  it("lists the session's finished runs, re-opens a result, and re-runs through the normal start", async () => {
+    (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+    const calls: { url: string; init?: RequestInit }[] = [];
+    let historyFetches = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        calls.push({ url, init });
+        if (url === "/api/review/health") {
+          return { ok: true, status: 200, json: async () => reviewHealthReady } as Response;
+        }
+        if (url === "/api/ai/health") {
+          return { ok: true, status: 200, json: async () => ({ configured: false }) } as Response;
+        }
+        if (url === "/api/review/history") {
+          historyFetches += 1;
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              runs: [
+                {
+                  id: 9,
+                  engine: "zcode",
+                  pr: 7,
+                  outcome: "completed",
+                  durationMs: 12500,
+                  output: "zcode findings\n",
+                  truncated: false,
+                  message: null,
+                },
+              ],
+            }),
+          } as Response;
+        }
+        if (url === "/api/review") {
+          return new Response(
+            new ReadableStream({
+              start(controller) {
+                controller.enqueue(
+                  new TextEncoder().encode(
+                    `data: ${JSON.stringify({ type: "exit", code: 0, signal: null, cancelled: false })}\n\n`,
+                  ),
+                );
+                controller.close();
+              },
+            }),
+            { status: 200 },
+          );
+        }
+        return { ok: false, status: 404, json: async () => ({}) } as Response;
+      }),
+    );
+
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    await act(async () => {
+      root.render(<PullRequestsRoute />);
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    const unmount = async () => {
+      await act(async () => {
+        root.unmount();
+      });
+      container.remove();
+    };
+
+    // The finished run lists with its outcome and duration.
+    expect(container.innerHTML).toContain('data-history-entry="9"');
+    expect(container.innerHTML).toContain("zcode");
+    expect(container.innerHTML).toContain("completed");
+    expect(container.innerHTML).toContain("12.5s");
+    strictEqual(historyFetches, 1);
+
+    // Re-run is the page's normal start path: engine + pr, nothing else.
+    await click(container, '[data-history-rerun="9"]');
+    const start = calls.find((call) => call.url === "/api/review" && call.init?.method === "POST");
+    expect(start).toBeTruthy();
+    deepStrictEqual(JSON.parse(String(start?.init?.body)), { engine: "zcode", pr: 7 });
+
+    // The rerun's stream ends, and the page refetches the history.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    strictEqual(historyFetches, 2, "the history refetches when a run ends");
+    await unmount();
+  });
+
+  it("answers an empty session history with its own empty state", async () => {
+    (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url === "/api/review/health") {
+          return { ok: true, status: 200, json: async () => reviewHealthReady } as Response;
+        }
+        if (url === "/api/ai/health") {
+          return { ok: true, status: 200, json: async () => ({ configured: false }) } as Response;
+        }
+        if (url === "/api/review/history") {
+          return { ok: true, status: 200, json: async () => ({ runs: [] }) } as Response;
+        }
+        return { ok: false, status: 404, json: async () => ({}) } as Response;
+      }),
+    );
+
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    await act(async () => {
+      root.render(<PullRequestsRoute />);
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    expect(container.innerHTML).toContain('data-slot="review-history-empty"');
+    await act(async () => {
+      root.unmount();
+    });
+    container.remove();
+  });
+
   it("renders a busy rejection as the server's message", async () => {
     (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
     const calls: { url: string; init?: RequestInit }[] = [];
