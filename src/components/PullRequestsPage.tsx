@@ -189,9 +189,12 @@ export function PullRequestsPage({
   };
 
   const cancelReview = (engine: ReviewEngine) => {
+    const token = reviewRun.token;
     cancelReviewRun()(engine).catch(() => {
+      // Scoped to the run that was cancelled: a rejection arriving after a
+      // newer run started must not mark that newer run as failed.
       setReviewRun((current) =>
-        current.phase === "running"
+        current.token === token && current.phase === "running"
           ? runFailed(current, "cancel could not reach the server — the run may still be going")
           : current,
       );

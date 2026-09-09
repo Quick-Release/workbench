@@ -165,24 +165,18 @@ export const reviewApiPlugin = ({
   hostRoot = resolve(process.env.WORKBENCH_SOURCE_ROOT || process.cwd()),
 } = {}) => ({
   name: "workbench-review-api",
-  // The spawned CLIs are detached process groups; without this hook a dev
-  // server shutdown would leave them running unowned until their timeout.
-  closeServer() {
-    registry.cancelAll();
-  },
   configureServer(server) {
+    // The spawned CLIs are detached process groups; a dev-server shutdown is
+    // the last chance to stop them. The HTTP server's own close event is the
+    // version-proof seam — this Vite core runs no plugin closeServer hook
+    // (probed against vite-plus-core 0.2.8).
+    server.httpServer?.once("close", () => registry.cancelAll());
     server.middlewares.use(
       guardedApi(async (request, response, next, url) => {
-        let body;
-        if (request.method === "POST") {
-          const raw = await readBody(request);
-          try {
-            body = JSON.parse(raw || "{}");
-          } catch {
-            sendJson(response, 400, { error: "invalid_request", message: "malformed JSON body" });
-            return;
-          }
-        }
+        // Route matching comes first: a request this middleware doesn't own
+        // must pass through unread — draining its body would break whatever
+        // sibling middleware owns it — and only the POST routes read JSON.
+        if (!isReviewApiRoute(url.pathname)) return next();
         // The run and cancel routes answer POST only; anything else is a
         // named 405 like the health route gives.
         if (
@@ -190,6 +184,18 @@ export const reviewApiPlugin = ({
           (RUN_ROUTE.test(url.pathname) || CANCEL_ROUTE.test(url.pathname))
         ) {
           return sendJson(response, 405, methodMismatch("POST").json);
+        }
+        let body;
+        if (RUN_ROUTE.test(url.pathname) || CANCEL_ROUTE.test(url.pathname)) {
+          const raw = await readBody(request);
+          try {
+            body = JSON.parse(raw || "{}");
+          } catch {
+            return sendJson(response, 400, {
+              error: "invalid_request",
+              message: "malformed JSON body",
+            });
+          }
         }
         const handled = HEALTH_ROUTE.test(url.pathname)
           ? await handleReviewApi({

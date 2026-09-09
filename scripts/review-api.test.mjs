@@ -1,4 +1,5 @@
 import { deepStrictEqual, strictEqual } from "node:assert";
+import { EventEmitter } from "node:events";
 import test from "node:test";
 
 import { handleReviewApi, reviewApiPlugin } from "./review-api.mjs";
@@ -316,8 +317,13 @@ test("closing the dev server cancels every active run", async () => {
   registry.claim("zcode", zcode);
 
   // Detached process groups outlive the dev server unless the plugin stops
-  // them; closeServer is the last chance.
-  reviewApiPlugin({ registry, startRun: () => coderabbit }).closeServer();
+  // them on the HTTP server's close.
+  const httpServer = new EventEmitter();
+  reviewApiPlugin({ registry, startRun: () => coderabbit }).configureServer({
+    middlewares: { use() {} },
+    httpServer,
+  });
+  httpServer.emit("close");
 
   strictEqual(coderabbit.cancelled, true, "the active coderabbit run is cancelled");
   strictEqual(zcode.cancelled, true, "the active zcode run is cancelled");

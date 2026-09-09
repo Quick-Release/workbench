@@ -261,8 +261,10 @@ export const startReviewRun = ({
     }
   };
 
-  void readStream(child.stdout, "stdout");
-  void readStream(child.stderr, "stderr");
+  // A stdio stream failure must not become an unhandled rejection; the
+  // child's exit still surfaces through `exited` with its own error.
+  void readStream(child.stdout, "stdout").catch(() => {});
+  void readStream(child.stderr, "stderr").catch(() => {});
 
   void child.exited.then((exit) => {
     finish();
