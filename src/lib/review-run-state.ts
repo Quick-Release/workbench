@@ -16,7 +16,7 @@ export type ReviewRunState = {
   token: number;
   engine: ReviewEngine | null;
   pr: number | null;
-  output: string[];
+  output: string;
   truncated: boolean;
   exit: { code: number | null; signal: string | null; cancelled: boolean } | null;
   error: { reason: string; message: string } | null;
@@ -32,7 +32,7 @@ export const emptyReviewRun: ReviewRunState = {
   token: 0,
   engine: null,
   pr: null,
-  output: [],
+  output: "",
   truncated: false,
   exit: null,
   error: null,
@@ -55,7 +55,7 @@ export const runEvent = (state: ReviewRunState, event: ReviewRunEvent): ReviewRu
     case "started":
       return state;
     case "output":
-      return { ...state, output: [...state.output, event.text] };
+      return { ...state, output: state.output + event.text };
     case "truncated":
       return { ...state, truncated: true };
     case "exit": {
@@ -70,7 +70,7 @@ export const runEvent = (state: ReviewRunState, event: ReviewRunEvent): ReviewRu
 export const runBusy = (state: ReviewRunState, message: string): ReviewRunState => ({
   ...state,
   phase: "busy",
-  output: [],
+  output: "",
   truncated: false,
   exit: null,
   error: null,
@@ -81,7 +81,7 @@ export const runBusy = (state: ReviewRunState, message: string): ReviewRunState 
 export const runFailed = (state: ReviewRunState, failure: string): ReviewRunState => ({
   ...state,
   phase: "done",
-  output: [],
+  output: "",
   truncated: false,
   exit: null,
   error: null,

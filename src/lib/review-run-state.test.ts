@@ -20,7 +20,7 @@ describe("the review-run board", () => {
     let state = runStarted("zcode", 7, 2);
     state = runEvent(state, { type: "output", stream: "stdout", text: "finding one\n" });
     state = runEvent(state, { type: "output", stream: "stderr", text: "warn\n" });
-    deepStrictEqual(state.output, ["finding one\n", "warn\n"]);
+    strictEqual(state.output, "finding one\nwarn\n");
     strictEqual(state.phase, "running");
   });
 
@@ -35,7 +35,7 @@ describe("the review-run board", () => {
       { code: null, signal: "SIGTERM", cancelled: true },
       "the exit verdict travels without the event discriminant",
     );
-    deepStrictEqual(state.output, ["partial\n"], "the run keeps its output");
+    strictEqual(state.output, "partial\n", "the run keeps its output");
   });
 
   it("marks truncation once the marker arrives", () => {
@@ -60,7 +60,7 @@ describe("the review-run board", () => {
     state = runBusy(state, "a coderabbit review is already running");
     strictEqual(state.phase, "busy");
     strictEqual(state.busyMessage, "a coderabbit review is already running");
-    strictEqual(state.output.length, 0);
+    strictEqual(state.output, "");
   });
 
   it("records an unreachable endpoint as a failure, not a hang", () => {
@@ -74,6 +74,6 @@ describe("the review-run board", () => {
     let state = runStarted("coderabbit", 42, 1);
     state = runEvent(state, { type: "exit", code: 0, signal: null, cancelled: false });
     state = runEvent(state, { type: "output", stream: "stdout", text: "late\n" });
-    expect(state.output.length).toBe(0);
+    expect(state.output).toBe("");
   });
 });

@@ -69,7 +69,7 @@ export function ReviewRunPanel({
           data-slot="review-run-output"
           className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap font-mono text-xs"
         >
-          {run.output.join("")}
+          {run.output}
         </pre>
       )}
       {run.truncated && (

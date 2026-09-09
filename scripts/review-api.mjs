@@ -175,7 +175,6 @@ export const reviewApiPlugin = ({
   probeHealth = () => reviewHealth(),
   startRun = startReviewRun,
   registry = createRunRegistry(),
-  hostRoot = resolve(process.env.WORKBENCH_SOURCE_ROOT || process.cwd()),
 } = {}) => ({
   name: "workbench-review-api",
   configureServer(server) {
@@ -184,6 +183,9 @@ export const reviewApiPlugin = ({
     // version-proof seam — this Vite core runs no plugin closeServer hook
     // (probed against vite-plus-core 0.2.8).
     server.httpServer?.once("close", () => registry.cancelAll());
+    // The runs execute in the host repo — Vite's own notion of the root,
+    // overridable by the source-root env (the same resolution ai-api uses).
+    const hostRoot = resolve(process.env.WORKBENCH_SOURCE_ROOT || server.config.root);
     server.middlewares.use(
       guardedApi(async (request, response, next, url) => {
         // Route matching comes first: a request this middleware doesn't own

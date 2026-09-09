@@ -14,6 +14,7 @@ const loopback = { host: "localhost:4051", origin: undefined };
 const middleware = (probeHealth = async () => ({ engines: [] })) => {
   let captured;
   reviewApiPlugin({ probeHealth }).configureServer({
+    config: { root: "/host/repo" },
     middlewares: { use: (fn) => (captured = fn) },
   });
   return captured;
@@ -354,6 +355,7 @@ test("wrong methods on the run routes are named 405s", async () => {
   const drive = async (url) => {
     let captured;
     reviewApiPlugin().configureServer({
+      config: { root: "/host/repo" },
       middlewares: { use: (fn) => (captured = fn) },
     });
     const response = {
@@ -402,6 +404,7 @@ test("closing the dev server cancels every active run", async () => {
   // them on the HTTP server's close.
   const httpServer = new EventEmitter();
   reviewApiPlugin({ registry, startRun: () => coderabbit }).configureServer({
+    config: { root: "/host/repo" },
     middlewares: { use() {} },
     httpServer,
   });
@@ -428,6 +431,7 @@ test("run start and cancel sit behind the same request gate", async () => {
 test("the health endpoint's named 405 survives the plugin's dispatch", async () => {
   let captured;
   reviewApiPlugin().configureServer({
+    config: { root: "/host/repo" },
     middlewares: { use: (fn) => (captured = fn) },
   });
   const response = {
