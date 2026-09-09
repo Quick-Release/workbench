@@ -31,7 +31,9 @@ const probeVerdict = async <T,>(
   }
 };
 
-function PullRequestsRoute() {
+// Exported for the route's own probe-on-load tests; the router wires it
+// through Route above.
+export function PullRequestsRoute() {
   const [aiConfigured, setAiConfigured] = useState<boolean | null>(null);
   const [engineHealth, setEngineHealth] = useState<readonly ReviewEngineHealth[] | null>(null);
 

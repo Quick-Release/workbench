@@ -124,6 +124,16 @@ _Avoid_: task (overloaded with implementation work)
 A decision ticket's belonging to a map, recorded as a tracker sub-issue; the membership order is the order the map's frontier is worked in. Membership groups tickets onto a map; blocker edges sequence them.
 _Avoid_: parent-child (ambiguous with session trees), sub-issue (the tracker encoding, not the concept)
 
+### Reviews
+
+**Review engine**:
+A CLI that can review a pull request on the Developer's machine — CodeRabbit and zcode. Its health (binary, auth, provider) is probed before a run is offered, with a one-step fix when it cannot run.
+_Avoid_: checker, linter, bot (all understate or misplace the execution)
+
+**Review run**:
+One execution of a review engine against one pull request, started from the dashboard and streamed as typed events. At most one run per engine at a time; a run is cancellable, time-limited, and its output is capped.
+_Avoid_: scan, job, task (none of them stream or hold the single-run guarantee)
+
 ### Decisions and artifacts
 
 **Decision**:

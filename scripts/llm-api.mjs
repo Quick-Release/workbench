@@ -1,4 +1,4 @@
-import { methodMismatch, readBody } from "./api-shared.mjs";
+import { guardedApi, methodMismatch, readBody, sendJson } from "./api-shared.mjs";
 import { gateRejection } from "./request-gate.mjs";
 
 // The session-capture API (ticket #35): read-only proxies to the ingest
@@ -67,21 +67,20 @@ export const handleLlmApi = async ({ method, pathname, host, origin, workerFetch
 export const llmApiPlugin = () => ({
   name: "workbench-llm-api",
   configureServer(server) {
-    server.middlewares.use(async (request, response, next) => {
-      const url = new URL(request.url ?? "/", "http://localhost");
-      if (!isLlmApiRoute(url.pathname)) return next();
-      if (request.method !== "GET") await readBody(request).catch(() => {});
-      const handled = await handleLlmApi({
-        method: request.method,
-        pathname: url.pathname,
-        host: request.headers.host,
-        origin: request.headers.origin,
-        workerFetch: ingestWorkerClient(process.env),
-      });
-      if (!handled) return next();
-      response.statusCode = handled.status;
-      response.setHeader("content-type", "application/json");
-      response.end(JSON.stringify(handled.json));
-    });
+    server.middlewares.use(
+      guardedApi(async (request, response, next, url) => {
+        if (!isLlmApiRoute(url.pathname)) return next();
+        if (request.method !== "GET") await readBody(request).catch(() => {});
+        const handled = await handleLlmApi({
+          method: request.method,
+          pathname: url.pathname,
+          host: request.headers.host,
+          origin: request.headers.origin,
+          workerFetch: ingestWorkerClient(process.env),
+        });
+        if (!handled) return next();
+        sendJson(response, handled.status, handled.json);
+      }),
+    );
   },
 });

@@ -603,6 +603,72 @@ export const parseReviewHealth: (input: unknown) => ReviewHealth = Schema.decode
   { onExcessProperty: "error" },
 );
 
+// The review run request (epic #20, ticket #26): the page names an engine
+// and a PR number — nothing else crosses the seam, so the dashboard can
+// never be tricked into executing arbitrary commands.
+export const ReviewRunRequestSchema = Schema.Struct({
+  engine: Schema.Literals(reviewEngines),
+  pr: Schema.Number,
+});
+
+export type ReviewRunRequest = Schema.Schema.Type<typeof ReviewRunRequestSchema>;
+
+export const parseReviewRunRequest: (input: unknown) => ReviewRunRequest = (input) => {
+  const request = Schema.decodeUnknownSync(ReviewRunRequestSchema, {
+    onExcessProperty: "error",
+  })(input);
+  // Only a real pull-request number may travel: a float or negative would
+  // ride the enumerated command and surface as a confusing unknown PR.
+  if (!Number.isInteger(request.pr) || request.pr <= 0) {
+    throw new Error("pr must be a positive integer");
+  }
+  return request;
+};
+
+export const ReviewCancelRequestSchema = Schema.Struct({
+  engine: Schema.Literals(reviewEngines),
+});
+
+export type ReviewCancelRequest = Schema.Schema.Type<typeof ReviewCancelRequestSchema>;
+
+export const parseReviewCancelRequest: (input: unknown) => ReviewCancelRequest =
+  Schema.decodeUnknownSync(ReviewCancelRequestSchema, { onExcessProperty: "error" });
+
+// The run's event stream (epic #20, ticket #26): the runner's typed NDJSON
+// events as the UI consumes them — started, output chunks, a distinct
+// truncation marker, the exit (with the cancelled flag), and named errors.
+export const ReviewRunEventSchema = Schema.Union([
+  Schema.Struct({
+    type: Schema.Literal("started"),
+    engine: Schema.Literals(reviewEngines),
+    pr: Schema.Number,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("output"),
+    stream: Schema.Literals(["stdout", "stderr"]),
+    text: Schema.String,
+  }),
+  Schema.Struct({ type: Schema.Literal("truncated") }),
+  Schema.Struct({
+    type: Schema.Literal("exit"),
+    code: Schema.NullOr(Schema.Number),
+    signal: Schema.NullOr(Schema.String),
+    cancelled: Schema.Boolean,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("error"),
+    reason: Schema.Literals(["timeout", "spawn_failed"]),
+    message: Schema.String,
+  }),
+]);
+
+export type ReviewRunEvent = Schema.Schema.Type<typeof ReviewRunEventSchema>;
+
+export const parseReviewRunEvent: (input: unknown) => ReviewRunEvent = Schema.decodeUnknownSync(
+  ReviewRunEventSchema,
+  { onExcessProperty: "error" },
+);
+
 export const parseReviewCommentRequest: (input: unknown) => ReviewCommentRequest =
   Schema.decodeUnknownSync(ReviewCommentRequestSchema, { onExcessProperty: "error" });
 

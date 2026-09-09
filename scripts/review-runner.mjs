@@ -1,6 +1,7 @@
-import { spawnSync } from "node:child_process";
+import { spawnSync, spawn as spawnChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
 import { homedir as osHomedir } from "node:os";
+import { StringDecoder } from "node:string_decoder";
 import { join } from "node:path";
 
 // The review runner seam (epic #20): the one component that knows how to
@@ -105,3 +106,261 @@ const engines = [coderabbitEngine, zcodeEngine];
 export const reviewHealth = ({ spawn = nodeSpawn, homedir = osHomedir } = {}) => ({
   engines: engines.map((engine) => engine.probeHealth({ spawn, homedir })),
 });
+
+// --- The run half (ticket #26): cancel, single-run, timeout, output caps ---
+
+// The enumerated review commands (epic #20): engine + PR number in, a fixed
+// argv out — no shell, and no string ever accepted from the page. The
+// coderabbit run still lacks its temporary worktree staging of the PR head
+// (the run tickets, #22/#23); until then both engines execute with the host
+// repo as their working directory.
+const zcodeReviewPrompt = (pr) =>
+  `Review pull request #${pr} in read-only planning mode: report findings, never modify files.`;
+
+const runCommand = {
+  coderabbit: ({ baseBranch }) => ({
+    command: "coderabbit",
+    args: ["review", "--agent", "--base", baseBranch],
+  }),
+  zcode: ({ pr, hostRepoRoot }) => ({
+    command: "zcode",
+    args: ["--prompt", zcodeReviewPrompt(pr), "--mode", "plan", "--cwd", hostRepoRoot, "--json"],
+  }),
+};
+
+// Production spawn adapter: node's spawn with a detached process group, so
+// kills reach the whole CLI process tree and not just the direct child; the
+// child is surfaced in the runner's contract shape (async-iterable stdio and
+// an `exited` promise, since the run consumes the process by subscription).
+const nodeRunSpawn = ({ command, args, cwd }) => {
+  const child = spawnChildProcess(command, args, {
+    cwd,
+    detached: true,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  const exited = new Promise((resolveExit) => {
+    child.once("close", (code, signal) => resolveExit({ code, signal }));
+    child.once("error", (error) => resolveExit({ code: null, signal: null, error }));
+  });
+  return {
+    pid: child.pid,
+    stdout: child.stdout,
+    stderr: child.stderr,
+    // The negative pid signals the process group — that is the tree kill.
+    kill: (signal) => {
+      try {
+        return process.kill(-child.pid, signal);
+      } catch {
+        return child.kill(signal);
+      }
+    },
+    exited,
+  };
+};
+
+// One ordered event channel between the run's concurrent sources (two
+// output streams, the exit, the timers) and the single consumer.
+const eventChannel = () => {
+  // Drained by read index rather than shift(): a CLI can emit many small
+  // chunks, and shift-per-event turns that quadratic.
+  const items = [];
+  let head = 0;
+  let wakeup = null;
+  let closed = false;
+  return {
+    push(event) {
+      if (closed) return;
+      items.push(event);
+      wakeup?.();
+      wakeup = null;
+    },
+    close() {
+      closed = true;
+      wakeup?.();
+      wakeup = null;
+    },
+    async *stream() {
+      while (true) {
+        while (head < items.length) {
+          const event = items[head];
+          items[head] = undefined;
+          head += 1;
+          yield event;
+        }
+        // Fully drained: compact the backing array, which would otherwise
+        // grow for the run's lifetime under many-small-chunk output.
+        items.length = 0;
+        head = 0;
+        if (closed) return;
+        await new Promise((resolve) => (wakeup = resolve));
+      }
+    },
+  };
+};
+
+export const startReviewRun = ({
+  engine,
+  pr,
+  baseBranch,
+  hostRepoRoot,
+  spawn = nodeRunSpawn,
+  timeoutMs = 15 * 60_000,
+  outputCapBytes = 1_000_000,
+  terminateGraceMs = 5_000,
+}) => {
+  const { command, args } = runCommand[engine]({ pr, baseBranch, hostRepoRoot });
+  const child = spawn({ command, args, cwd: hostRepoRoot });
+
+  const channel = eventChannel();
+  channel.push({ type: "started", engine, pr });
+  let cancelled = false;
+  let ended = false;
+  let timeoutTimer = null;
+  let graceTimer = null;
+
+  const finish = () => {
+    if (ended) return;
+    ended = true;
+    clearTimeout(timeoutTimer);
+    clearTimeout(graceTimer);
+  };
+
+  // Stopping escalates: SIGTERM asks the CLI to stop, and a CLI that
+  // ignores it is killed outright once the grace period passes. The
+  // escalation is scheduled at most once per run — a late SIGKILL against a
+  // recycled pid is the bug it exists to prevent.
+  let stopping = false;
+  const stopProcess = () => {
+    if (stopping) return;
+    stopping = true;
+    const signalTree = (signal) => {
+      try {
+        child.kill(signal);
+      } catch {
+        // The child already exited between checks; nothing left to kill.
+      }
+    };
+    signalTree("SIGTERM");
+    graceTimer = setTimeout(() => signalTree("SIGKILL"), terminateGraceMs);
+  };
+  const cancel = () => {
+    if (ended || cancelled) return;
+    cancelled = true;
+    stopProcess();
+  };
+
+  timeoutTimer = setTimeout(() => {
+    if (ended || stopping) return;
+    channel.push({
+      type: "error",
+      reason: "timeout",
+      message: `the ${engine} review exceeded ${Math.round(timeoutMs / 1000)}s and was stopped`,
+    });
+    stopProcess();
+  }, timeoutMs);
+
+  // The cap is the run's, not a stream's: stdout and stderr share one byte
+  // budget and one truncation marker, so a chatty pair of streams cannot
+  // double the limit or double the marker. The chunk that crosses the cap is
+  // forwarded up to the last byte that fits, and once truncated the
+  // remaining chunks are dropped without conversion.
+  let bytes = 0;
+  let truncated = false;
+  const readStream = async (stream, name) => {
+    // Multi-byte UTF-8 sequences can straddle chunk boundaries, so each
+    // stream decodes through its own stateful decoder; the byte accounting
+    // stays on the raw buffer. The pending sequence of a truncated stream
+    // never completes — it is discarded with the rest of the drop.
+    const decoder = new StringDecoder("utf8");
+    for await (const chunk of stream) {
+      if (truncated) continue;
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      const slice = buffer.subarray(0, Math.max(0, outputCapBytes - bytes));
+      bytes += slice.length;
+      if (slice.length > 0) {
+        const text = decoder.write(slice);
+        if (text) channel.push({ type: "output", stream: name, text });
+      }
+      if (slice.length < buffer.length) {
+        truncated = true;
+        channel.push({ type: "truncated" });
+      }
+    }
+    const tail = decoder.end();
+    if (tail && !truncated) channel.push({ type: "output", stream: name, text: tail });
+  };
+
+  // A stdio stream failure must not become an unhandled rejection; the
+  // child's exit still surfaces through `exited` with its own error.
+  void readStream(child.stdout, "stdout").catch(() => {});
+  void readStream(child.stderr, "stderr").catch(() => {});
+
+  void child.exited.then((exit) => {
+    finish();
+    if (exit.error) {
+      channel.push({
+        type: "error",
+        reason: "spawn_failed",
+        message: String(exit.error?.message ?? exit.error),
+      });
+    }
+    channel.push({ type: "exit", code: exit.code, signal: exit.signal, cancelled });
+    channel.close();
+  });
+
+  return {
+    engine,
+    events: channel.stream(),
+    cancel,
+  };
+};
+
+// The endpoint's in-memory registry (ticket #26): one active run per engine,
+// so a second start attempt is a typed busy rejection, never a silent queue.
+// A start claims the engine first — before any spawning — and binds its run
+// once one exists; the claim is released if resolution or spawn fails, and
+// by the run's stream when it ends.
+export const createRunRegistry = () => {
+  // A claimed-but-unbound engine holds a reservation: the run does not exist
+  // yet, but a cancel that arrives in that window is remembered and applied
+  // at bind time instead of being dropped.
+  const RESERVATION = () => ({ __reservation: true, cancelRequested: false });
+  const isRun = (entry) => entry !== null && entry !== undefined && !entry.__reservation;
+  const active = new Map();
+  return {
+    claim(engine) {
+      if (active.has(engine)) return false;
+      active.set(engine, RESERVATION());
+      return true;
+    },
+    bind(engine, run) {
+      const entry = active.get(engine);
+      if (entry && !isRun(entry) && entry.cancelRequested) run.cancel();
+      active.set(engine, run);
+    },
+    release(engine) {
+      active.delete(engine);
+    },
+    active(engine) {
+      const entry = active.get(engine);
+      return isRun(entry) ? entry : null;
+    },
+    // A cancel for a bound run stops it; for a reservation it is applied the
+    // moment the run binds.
+    cancel(engine) {
+      const entry = active.get(engine);
+      if (entry === undefined || entry === null) return false;
+      if (isRun(entry)) entry.cancel();
+      else entry.cancelRequested = true;
+      return true;
+    },
+    // The dev server shutting down is the last chance to stop the detached
+    // process groups it spawned; reservations remember it for their bind.
+    cancelAll() {
+      for (const entry of active.values()) {
+        if (isRun(entry)) entry.cancel();
+        else entry.cancelRequested = true;
+      }
+    },
+  };
+};

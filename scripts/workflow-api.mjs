@@ -22,6 +22,7 @@ import {
 } from "../src/schema.ts";
 import { workflowStateFrom } from "../src/lib/workflow-state.ts";
 import { deriveWorkItem } from "./tracker/labels.mjs";
+import { guardedApi, sendJson } from "./api-shared.mjs";
 
 const execFileAsync = promisify(execFile);
 
@@ -653,21 +654,20 @@ const isWorkflowRoute = (pathname) =>
 export const workflowApiPlugin = () => ({
   name: "workbench-workflow-api",
   configureServer(server) {
-    server.middlewares.use(async (request, response, next) => {
-      const url = new URL(request.url ?? "/", "http://localhost");
-      if (!isWorkflowRoute(url.pathname)) return next();
-      const hostRoot = resolve(process.env.WORKBENCH_SOURCE_ROOT || server.config.root);
-      const body = request.method === "POST" ? await readBody(request) : undefined;
-      const handled = await handleWorkflowApi({
-        method: request.method,
-        pathname: url.pathname,
-        body,
-        hostRoot,
-      });
-      if (!handled) return next();
-      response.statusCode = handled.status;
-      response.setHeader("content-type", "application/json");
-      response.end(JSON.stringify(handled.json));
-    });
+    server.middlewares.use(
+      guardedApi(async (request, response, next, url) => {
+        if (!isWorkflowRoute(url.pathname)) return next();
+        const hostRoot = resolve(process.env.WORKBENCH_SOURCE_ROOT || server.config.root);
+        const body = request.method === "POST" ? await readBody(request) : undefined;
+        const handled = await handleWorkflowApi({
+          method: request.method,
+          pathname: url.pathname,
+          body,
+          hostRoot,
+        });
+        if (!handled) return next();
+        sendJson(response, handled.status, handled.json);
+      }),
+    );
   },
 });
