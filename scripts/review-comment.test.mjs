@@ -121,6 +121,48 @@ test("a rejected token (env-var or keyring) reads as gh_auth_missing too", async
   strictEqual(outcome.remediation, "run `gh auth login` to authenticate the GitHub CLI");
 });
 
+test("a bare 'auth required' complaint reads as gh_auth_missing as well", async () => {
+  const { spawn } = cli(() => ({
+    status: 1,
+    stdout: "",
+    stderr: "auth required",
+  }));
+  const outcome = await postReviewComment({
+    spawn,
+    engine: "zcode",
+    pr: 25,
+    findings: "findings",
+    cwd: "/host/repo",
+  });
+  strictEqual(outcome.error, "gh_auth_missing");
+  strictEqual(outcome.remediation, "run `gh auth login` to authenticate the GitHub CLI");
+});
+
+test("a gh that outlives its timeout is a typed post_timed_out, not a generic failure", async () => {
+  // The fake answers in the spawn contract's own shape: a timed-out
+  // execFile is status null with the kill flagged.
+  const { spawn } = cli(() => ({
+    status: null,
+    stdout: "",
+    stderr: "",
+    timedOut: true,
+    error: Object.assign(new Error("Command was killed with SIGTERM"), { killed: true }),
+  }));
+  const outcome = await postReviewComment({
+    spawn,
+    engine: "coderabbit",
+    pr: 25,
+    findings: "findings",
+    cwd: "/host/repo",
+  });
+  deepStrictEqual(outcome, {
+    ok: false,
+    status: 504,
+    error: "post_timed_out",
+    message: "gh pr comment did not answer within 30 seconds",
+  });
+});
+
 test("a failed comment write that is not about auth surfaces gh's own complaint", async () => {
   const { spawn } = cli(() => ({
     status: 1,

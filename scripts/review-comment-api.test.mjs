@@ -79,17 +79,20 @@ test("wrong methods are named 405s", async () => {
 test("a body that is not JSON, or not a comment request, is a named 400", async () => {
   const malformed = await postRequest({ body: "not json" }).response;
   strictEqual(malformed.status, 400);
+  strictEqual(malformed.json.error, "malformed_request");
   strictEqual(malformed.json.message, "request body is not valid JSON");
 
   const unknownEngine = await postRequest({
     body: JSON.stringify({ engine: "claude", pr: 25, findings: "- a finding" }),
   }).response;
   strictEqual(unknownEngine.status, 400);
+  strictEqual(unknownEngine.json.error, "malformed_request");
 
   const extraField = await postRequest({
     body: JSON.stringify({ engine: "coderabbit", pr: 25, findings: "- f", command: "rm -rf" }),
   }).response;
   strictEqual(extraField.status, 400);
+  strictEqual(extraField.json.error, "malformed_request");
 });
 
 test("bounds the schema alone cannot express are named 400s", async () => {
@@ -97,20 +100,24 @@ test("bounds the schema alone cannot express are named 400s", async () => {
     body: JSON.stringify({ engine: "coderabbit", pr: 0, findings: "- a finding" }),
   }).response;
   strictEqual(zeroPr.status, 400);
+  strictEqual(zeroPr.json.error, "invalid_request");
   const fractionalPr = await postRequest({
     body: JSON.stringify({ engine: "coderabbit", pr: 2.5, findings: "- a finding" }),
   }).response;
   strictEqual(fractionalPr.status, 400);
+  strictEqual(fractionalPr.json.error, "invalid_request");
 
   const emptyFindings = await postRequest({
     body: JSON.stringify({ engine: "coderabbit", pr: 25, findings: "   " }),
   }).response;
   strictEqual(emptyFindings.status, 400);
+  strictEqual(emptyFindings.json.error, "invalid_request");
 
   const oversizedFindings = await postRequest({
     body: JSON.stringify({ engine: "coderabbit", pr: 25, findings: "x".repeat(60_001) }),
   }).response;
   strictEqual(oversizedFindings.status, 400);
+  strictEqual(oversizedFindings.json.error, "invalid_request");
   match(oversizedFindings.json.message, /60000/);
 });
 

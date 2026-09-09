@@ -30,10 +30,15 @@ const rejection = (status, json) => ({ status, json });
 // posting, findings that fit one comment.
 const boundsRejection = ({ pr, findings }) => {
   if (!Number.isInteger(pr) || pr <= 0)
-    return rejection(400, { message: "pr must be a positive integer" });
-  if (!findings.trim()) return rejection(400, { message: "an empty review has nothing to post" });
+    return rejection(400, { error: "invalid_request", message: "pr must be a positive integer" });
+  if (!findings.trim())
+    return rejection(400, {
+      error: "invalid_request",
+      message: "an empty review has nothing to post",
+    });
   if (findings.length > MAX_FINDINGS_LENGTH)
     return rejection(400, {
+      error: "invalid_request",
       message: `the findings exceed one comment's worth of text (${MAX_FINDINGS_LENGTH} character maximum)`,
     });
   return null;
@@ -59,13 +64,16 @@ export const handleReviewCommentApi = async ({
   try {
     raw = JSON.parse(body ?? "");
   } catch {
-    return rejection(400, { message: "request body is not valid JSON" });
+    return rejection(400, {
+      error: "malformed_request",
+      message: "request body is not valid JSON",
+    });
   }
   let request;
   try {
     request = parseReviewCommentRequest(raw);
   } catch (error) {
-    return rejection(400, { message: String(error?.message ?? error) });
+    return rejection(400, { error: "malformed_request", message: String(error?.message ?? error) });
   }
   const bounds = boundsRejection(request);
   if (bounds) return bounds;

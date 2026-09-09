@@ -33,6 +33,7 @@ const nodeSpawn = async ({ command, args, cwd, timeout }) => {
       status: typeof error?.code === "number" ? error.code : null,
       stdout: String(error?.stdout ?? ""),
       stderr: String(error?.stderr ?? ""),
+      timedOut: error?.killed === true,
       error,
     };
   }
@@ -67,10 +68,11 @@ const ghAuthMissing = () => ({
 });
 
 // gh names authentication failures variously across versions and token
-// sources ("run: gh auth login", "unauthorized", "bad credentials", HTTP
-// 401); the write's stderr is classified rather than trusted to one string.
+// sources ("auth required", "run: gh auth login", "unauthorized", "bad
+// credentials", HTTP 401); the write's stderr is classified rather than
+// trusted to one string.
 const authShaped = (text) =>
-  /auth(?:entication)|login|token|credential|unauthorized|401/i.test(text ?? "");
+  /auth(?:entication)?|login|token|credential|unauthorized|401/i.test(text ?? "");
 
 export const postReviewComment = async ({ spawn = nodeSpawn, engine, pr, findings, cwd }) => {
   const posted = await spawn({
@@ -82,6 +84,13 @@ export const postReviewComment = async ({ spawn = nodeSpawn, engine, pr, finding
   // The exact probed argv is the seam's safety invariant: posting is the
   // one comment command, nothing else, ever.
   if (posted.error?.code === "ENOENT") return ghMissing();
+  if (posted.timedOut)
+    return {
+      ok: false,
+      status: 504,
+      error: "post_timed_out",
+      message: `gh pr comment did not answer within ${POST_TIMEOUT_MS / 1000} seconds`,
+    };
   if (posted.status !== 0) {
     const complaint =
       (posted.stderr ?? "").trim() ||
