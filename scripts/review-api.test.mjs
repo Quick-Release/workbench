@@ -270,6 +270,49 @@ test("the busy answer precedes the target resolution and any spawn", async () =>
   strictEqual(second.started.length, 0);
 });
 
+test("a concurrent start while the first resolves its target is a busy rejection", async () => {
+  // The first request holds the claim across its target resolution; the
+  // second must be rejected without spawning, never queued behind it.
+  let releaseFirst;
+  const gate = new Promise((resolve) => (releaseFirst = resolve));
+  const registry = createRunRegistry();
+  const started = [];
+  const startRun = (request) => {
+    const run = stubRun({ events: [], pr: request.pr });
+    started.push(run);
+    return run;
+  };
+  const first = handleReviewRunStart({
+    body: { engine: "coderabbit", pr: 42 },
+    host: "localhost:4051",
+    origin: undefined,
+    startRun,
+    registry,
+    resolveTarget: async () => {
+      await gate;
+      return { baseBranch: "main", hostRepoRoot: "/host/repo" };
+    },
+  });
+  await new Promise((resolve) => setTimeout(resolve, 10));
+
+  const second = await handleReviewRunStart({
+    body: { engine: "coderabbit", pr: 43 },
+    host: "localhost:4051",
+    origin: undefined,
+    startRun,
+    registry,
+    resolveTarget: async () => ({ baseBranch: "main", hostRepoRoot: "/host/repo" }),
+  });
+  strictEqual(second.status, 409);
+  strictEqual(second.json.error, "run_busy");
+  strictEqual(started.length, 0, "the loser never reaches a CLI");
+
+  releaseFirst();
+  const done = await first;
+  strictEqual(done.status, 200);
+  strictEqual(started.length, 1);
+});
+
 test("wrong methods on the run routes are named 405s", async () => {
   const drive = async (url) => {
     let captured;
@@ -313,8 +356,10 @@ test("closing the dev server cancels every active run", async () => {
   const registry = createRunRegistry();
   const coderabbit = stubRun({ events: [{ type: "exit", code: 0 }], pr: 42 });
   const zcode = stubRun({ events: [{ type: "exit", code: 0 }], pr: 43 });
-  registry.claim("coderabbit", coderabbit);
-  registry.claim("zcode", zcode);
+  registry.claim("coderabbit");
+  registry.bind("coderabbit", coderabbit);
+  registry.claim("zcode");
+  registry.bind("zcode", zcode);
 
   // Detached process groups outlive the dev server unless the plugin stops
   // them on the HTTP server's close.

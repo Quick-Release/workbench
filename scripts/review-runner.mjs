@@ -288,16 +288,22 @@ export const startReviewRun = ({
 
 // The endpoint's in-memory registry (ticket #26): one active run per engine,
 // so a second start attempt is a typed busy rejection, never a silent queue.
+// A start claims the engine first — before any spawning — and binds its run
+// once one exists; the claim is released if resolution or spawn fails, and
+// by the run's stream when it ends.
 export const createRunRegistry = () => {
   const active = new Map();
   return {
-    claim(engine, run) {
-      if (active.has(engine)) return null;
-      active.set(engine, run);
-      return run;
+    claim(engine) {
+      if (active.has(engine)) return false;
+      active.set(engine, null);
+      return true;
     },
-    release(engine, run) {
-      if (active.get(engine) === run) active.delete(engine);
+    bind(engine, run) {
+      active.set(engine, run);
+    },
+    release(engine) {
+      active.delete(engine);
     },
     active(engine) {
       return active.get(engine) ?? null;
@@ -305,7 +311,7 @@ export const createRunRegistry = () => {
     // The dev server shutting down is the last chance to stop the detached
     // process groups it spawned.
     cancelAll() {
-      for (const run of active.values()) run.cancel();
+      for (const run of active.values()) run?.cancel();
     },
   };
 };

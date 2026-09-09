@@ -92,21 +92,23 @@ export const handleReviewRunStart = async ({
     };
   }
 
-  // Single-run per engine (ticket #26): a second start is a typed busy
-  // rejection the UI can render, never a silent queue — answered before any
-  // target resolution, with the claim re-checked below as the race backstop.
-  if (registry.active(request.engine)) return busyRejection(request.engine);
+  // Single-run per engine (ticket #26): the engine is claimed before the
+  // target resolves or anything spawns, so two concurrent starts cannot both
+  // reach a CLI — the loser gets the typed busy rejection.
+  if (!registry.claim(request.engine)) return busyRejection(request.engine);
 
   let target;
   try {
     target = await resolveTarget(request);
   } catch (error) {
+    registry.release(request.engine);
     return {
       status: 500,
       json: { error: "target_failed", message: String(error?.message ?? error) },
     };
   }
   if (!target) {
+    registry.release(request.engine);
     return {
       status: 404,
       json: { error: "pr_unknown", message: `PR #${request.pr} is not in the snapshot` },
@@ -114,11 +116,7 @@ export const handleReviewRunStart = async ({
   }
 
   const run = startRun({ ...request, ...target });
-  const claimed = registry.claim(request.engine, run);
-  if (!claimed) {
-    run.cancel();
-    return busyRejection(request.engine);
-  }
+  registry.bind(request.engine, run);
 
   return {
     status: 200,
@@ -127,7 +125,7 @@ export const handleReviewRunStart = async ({
       try {
         for await (const event of run.events) yield event;
       } finally {
-        registry.release(request.engine, run);
+        registry.release(request.engine);
       }
     })(),
   };
