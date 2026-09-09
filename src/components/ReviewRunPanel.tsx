@@ -2,6 +2,7 @@ import { Square } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import type { ReviewEngine } from "@/types";
 import type { ReviewRunState } from "@/lib/review-run-state";
 
 // The review-run panel (ticket #26): what a run's lifecycle looks like on
@@ -23,7 +24,8 @@ export function ReviewRunPanel({
   onCancel,
 }: {
   run: ReviewRunState;
-  onCancel?: (engine: NonNullable<ReviewRunState["engine"]>) => void;
+  // Review runs only — the agent panel owns its own cancel affordance.
+  onCancel?: (engine: ReviewEngine) => void;
 }) {
   if (run.phase === "idle") return null;
   return (
@@ -57,7 +59,7 @@ export function ReviewRunPanel({
             variant="outline"
             size="xs"
             className="ml-auto"
-            onClick={() => onCancel(run.engine as NonNullable<ReviewRunState["engine"]>)}
+            onClick={() => run.engine && onCancel(run.engine as ReviewEngine)}
           >
             <Square aria-hidden />
             Cancel

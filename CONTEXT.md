@@ -23,7 +23,7 @@ The single validated localhost API through which the browser reads live state an
 _Avoid_: write API (understates reads), backend (implies hosting)
 
 **Planning state**:
-What the dashboard may act on: issues, triage states, blocker edges, maps, decision tickets. Agent sessions are observed, not acted on, until session spawning is decided.
+What the dashboard may act on: issues, triage states, blocker edges, maps, decision tickets, and — through the issue agent (ADR 0010) — issue runs. Agent sessions remain observed, never acted on.
 _Avoid_: project data (vague)
 
 ### Reporting
@@ -133,6 +133,14 @@ _Avoid_: checker, linter, bot (all understate or misplace the execution)
 **Review run**:
 One execution of a review engine against one pull request, started from the dashboard and streamed as typed events. At most one run per engine at a time; a run is cancellable, time-limited, and its output is capped.
 _Avoid_: scan, job, task (none of them stream or hold the single-run guarantee)
+
+**Issue agent**:
+The engine that acts on a host-repo issue from the dashboard — currently opencode on a local Ollama model — inside a fresh git worktree under a fixed prompt, ending in a draft pull request for the Developer's review. Its health (CLI, local model server, model pull state) is probed like a review engine's.
+_Avoid_: autonomous agent (overstates the fence), bot (misplaces the execution)
+
+**Agent run**:
+One execution of the issue agent against one issue, streamed as the same typed events as a review run and bounded like one — cancellable, time-limited, capped. A successful run ends in a draft PR; a failed run keeps its worktree for inspection.
+_Avoid_: session (that is capture's noun), job, task (none of them stream or hold the single-run guarantee)
 
 ### Decisions and artifacts
 

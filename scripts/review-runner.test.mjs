@@ -28,7 +28,7 @@ test("a found coderabbit binary with working auth reports the engine ready", asy
         ? { status: 0, stdout: "coderabbit 1.2.3\n", stderr: "" }
         : { status: 0, stdout: "", stderr: "" },
   });
-  const health = reviewHealth({ spawn, homedir: () => "/home/dev" });
+  const health = await reviewHealth({ spawn, homedir: () => "/home/dev", which: () => null });
   deepStrictEqual(
     health.engines.find((e) => e.engine === "coderabbit"),
     {
@@ -51,7 +51,7 @@ const enoent = () => ({
 
 test("a missing coderabbit binary reports binary_missing with the install command", async () => {
   const { spawn } = cli({ coderabbit: enoent });
-  const health = reviewHealth({ spawn, homedir: () => "/home/dev" });
+  const health = await reviewHealth({ spawn, homedir: () => "/home/dev", which: () => null });
   deepStrictEqual(
     health.engines.find((e) => e.engine === "coderabbit"),
     {
@@ -69,7 +69,7 @@ test("an unauthenticated coderabbit CLI reports auth_missing with the login comm
         ? { status: 0, stdout: "coderabbit 1.2.3\n", stderr: "" }
         : { status: 1, stdout: "", stderr: "not logged in" },
   });
-  const health = reviewHealth({ spawn, homedir: () => "/home/dev" });
+  const health = await reviewHealth({ spawn, homedir: () => "/home/dev", which: () => null });
   deepStrictEqual(
     health.engines.find((e) => e.engine === "coderabbit"),
     {
@@ -98,7 +98,7 @@ test("a spawn-level failure of the auth probe reports probe_error, not auth_miss
             error: Object.assign(new Error("spawn coderabbit EACCES"), { code: "EACCES" }),
           },
   });
-  const health = reviewHealth({ spawn, homedir: () => "/home/dev" });
+  const health = await reviewHealth({ spawn, homedir: () => "/home/dev", which: () => null });
   const coderabbit = health.engines.find((e) => e.engine === "coderabbit");
   strictEqual(coderabbit.state, "probe_error");
   match(coderabbit.message, /EACCES/);
@@ -125,7 +125,7 @@ const homeWithProviderConfig = async () => {
 test("a found zcode binary with a provider config reports the engine ready", async () => {
   const { spawn, calls } = zcodeCli();
   const home = await homeWithProviderConfig();
-  const health = reviewHealth({ spawn, homedir: () => home });
+  const health = await reviewHealth({ spawn, homedir: () => home, which: () => null });
   deepStrictEqual(
     health.engines.find((e) => e.engine === "zcode"),
     {
@@ -144,7 +144,7 @@ test("a found zcode binary with a provider config reports the engine ready", asy
 test("zcode without a model provider config reports provider_missing with the login command", async () => {
   const { spawn } = zcodeCli();
   const home = await mkdtemp(join(tmpdir(), "review-runner-home-"));
-  const health = reviewHealth({ spawn, homedir: () => home });
+  const health = await reviewHealth({ spawn, homedir: () => home, which: () => null });
   deepStrictEqual(
     health.engines.find((e) => e.engine === "zcode"),
     {
@@ -158,7 +158,11 @@ test("zcode without a model provider config reports provider_missing with the lo
 
 test("a missing zcode binary reports binary_missing instead of touching a config", async () => {
   const { spawn } = cli({ zcode: enoent });
-  const health = reviewHealth({ spawn, homedir: () => "/home/never-checked" });
+  const health = await reviewHealth({
+    spawn,
+    homedir: () => "/home/never-checked",
+    which: () => null,
+  });
   deepStrictEqual(
     health.engines.find((e) => e.engine === "zcode"),
     {
@@ -174,8 +178,11 @@ test("a present but broken binary reports probe_error with the CLI's own complai
     coderabbit: () => ({ status: 1, stdout: "", stderr: "syntax error near unexpected token" }),
     zcode: () => ({ status: 1, stdout: "", stderr: "syntax error near unexpected token" }),
   });
-  const health = reviewHealth({ spawn, homedir: () => "/home/dev" });
-  for (const engine of health.engines) {
+  const health = await reviewHealth({ spawn, homedir: () => "/home/dev", which: () => null });
+  // The review engines both answer with the CLI's own complaint; the opencode
+  // engine (which: null here) never reaches a binary at all.
+  for (const name of ["coderabbit", "zcode"]) {
+    const engine = health.engines.find((e) => e.engine === name);
     strictEqual(engine.state, "probe_error");
     strictEqual(engine.message, "syntax error near unexpected token");
   }
@@ -190,7 +197,7 @@ test("a spawn-level failure (not a CLI exit) reports probe_error with the spawn'
       error: Object.assign(new Error("spawn EACCES"), { code: "EACCES" }),
     }),
   });
-  const health = reviewHealth({ spawn, homedir: () => "/home/dev" });
+  const health = await reviewHealth({ spawn, homedir: () => "/home/dev", which: () => null });
   const coderabbit = health.engines.find((e) => e.engine === "coderabbit");
   strictEqual(coderabbit.state, "probe_error");
   strictEqual(coderabbit.message, "spawn EACCES");
@@ -201,7 +208,7 @@ test("a binary that vanishes between the version and auth probes still reads bin
     coderabbit: (arg) =>
       arg === "--version" ? { status: 0, stdout: "coderabbit 1.2.3\n", stderr: "" } : enoent(),
   });
-  const health = reviewHealth({ spawn, homedir: () => "/home/dev" });
+  const health = await reviewHealth({ spawn, homedir: () => "/home/dev", which: () => null });
   deepStrictEqual(
     health.engines.find((e) => e.engine === "coderabbit"),
     {
@@ -212,15 +219,15 @@ test("a binary that vanishes between the version and auth probes still reads bin
   );
 });
 
-test("health answers for both engines in a fixed order", async () => {
+test("health answers for all engines in a fixed order", async () => {
   const { spawn } = cli({
     coderabbit: () => enoent(),
     zcode: () => enoent(),
   });
-  const health = reviewHealth({ spawn, homedir: () => "/home/dev" });
+  const health = await reviewHealth({ spawn, homedir: () => "/home/dev", which: () => null });
   deepStrictEqual(
     health.engines.map((engine) => engine.engine),
-    ["coderabbit", "zcode"],
+    ["coderabbit", "zcode", "opencode"],
   );
 });
 
@@ -509,4 +516,322 @@ test("the enumerated run commands never accept arbitrary strings from the page",
     true,
     "the PR number rides the fixed prompt template",
   );
+});
+
+// --- The plan half (issue #40): multi-step engines run through the same seam ---
+
+import { inspectAgentLine, opencodeRunCommand } from "./opencode-engine.mjs";
+
+// Unlike the single-command reviews above, a plan spawns several children in
+// sequence: each spawn request gets its own fake child, and every request is
+// recorded so the tests can pin argv, cwd, and env per step.
+const spawnEach = (children) => {
+  const calls = [];
+  const spawn = (request) => {
+    calls.push(request);
+    const child = children[Math.min(calls.length - 1, children.length - 1)];
+    return child;
+  };
+  return { spawn, calls };
+};
+
+const stepPlan = (cleanupCalls = []) => ({
+  steps: [
+    { name: "worktree", command: "git", args: ["worktree", "add"], cwd: "/host/repo" },
+    {
+      name: "agent",
+      command: "opencode",
+      args: ["run"],
+      cwd: "/tmp/wt",
+      inspectLine: inspectAgentLine,
+    },
+    { name: "publish", command: "gh", args: ["pr", "create"], cwd: "/tmp/wt" },
+  ],
+  cleanup: ({ ok }) => cleanupCalls.push(ok),
+});
+
+test("a plan runs its steps in order, each with its own argv, cwd, and env", async () => {
+  const children = [fakeChild(), fakeChild(), fakeChild()];
+  const { spawn, calls } = spawnEach(children);
+  const run = startReviewRun({
+    engine: "opencode",
+    issue: 40,
+    model: "ollama/qwen3-coder:30b",
+    baseBranch: "origin/main",
+    hostRepoRoot: "/host/repo",
+    spawn,
+    runCommands: { opencode: () => stepPlan() },
+  });
+
+  const events = await collect(run);
+  deepStrictEqual(events[0], {
+    type: "started",
+    engine: "opencode",
+    issue: 40,
+    model: "ollama/qwen3-coder:30b",
+  });
+  deepStrictEqual(events.at(-1), { type: "exit", code: 0, signal: null, cancelled: false });
+  deepStrictEqual(
+    calls.map((call) => [call.command, call.cwd]),
+    [
+      ["git", "/host/repo"],
+      ["opencode", "/tmp/wt"],
+      ["gh", "/tmp/wt"],
+    ],
+  );
+  deepStrictEqual(
+    children.every((child) => child.signals.length === 0),
+    true,
+  );
+});
+
+test("a failing step stops the plan, reports step_failed, and still runs cleanup", async () => {
+  const cleanupCalls = [];
+  const hung = fakeChild({ autoExit: false });
+  const children = [fakeChild(), fakeChild({ stderr: ["conflict\n"], autoExit: false }), hung];
+  const { spawn, calls } = spawnEach(children);
+  const run = startReviewRun({
+    engine: "opencode",
+    issue: 40,
+    model: "ollama/qwen3-coder:30b",
+    hostRepoRoot: "/host/repo",
+    spawn,
+    runCommands: { opencode: () => stepPlan(cleanupCalls) },
+  });
+  // The failing step's child decides its own exit; the third step must never
+  // spawn, and its (hung) child is left untouched.
+  setImmediate(() => children[1].exitNow({ code: 1, signal: null }));
+
+  const events = await collect(run);
+  deepStrictEqual(
+    events.filter((event) => event.type === "error"),
+    [
+      {
+        type: "error",
+        reason: "step_failed",
+        message: "the opencode agent step failed with exit code 1",
+      },
+    ],
+  );
+  deepStrictEqual(events.at(-1), { type: "exit", code: 1, signal: null, cancelled: false });
+  deepStrictEqual(cleanupCalls, [false], "a failed run's cleanup knows the plan failed");
+  strictEqual(calls.length, 2, "the step after the failure never spawns");
+  strictEqual(hung.signals.length, 0);
+});
+
+test("a best-effort step's failure neither stops the plan nor fails the run", async () => {
+  // The clearing step fails whenever no leftover worktree exists — a first
+  // run must proceed exactly like a retry.
+  const cleanupCalls = [];
+  const clearing = fakeChild({ autoExit: false });
+  const { spawn, calls } = spawnEach([clearing, fakeChild()]);
+  const run = startReviewRun({
+    engine: "opencode",
+    issue: 40,
+    model: "ollama/qwen3-coder:30b",
+    hostRepoRoot: "/host/repo",
+    spawn,
+    runCommands: {
+      opencode: () => ({
+        steps: [
+          { name: "clear", command: "git", args: ["worktree", "remove"], bestEffort: true },
+          { name: "worktree", command: "git", args: ["worktree", "add"] },
+        ],
+        cleanup: ({ ok }) => cleanupCalls.push(ok),
+      }),
+    },
+  });
+
+  setImmediate(() => clearing.exitNow({ code: 1, signal: null }));
+
+  const events = await collect(run);
+  deepStrictEqual(
+    calls.map((call) => call.command),
+    ["git", "git"],
+  );
+  deepStrictEqual(
+    events.filter((event) => event.type === "error"),
+    [],
+    "a best-effort failure is not a run error",
+  );
+  deepStrictEqual(events.at(-1), { type: "exit", code: 0, signal: null, cancelled: false });
+  deepStrictEqual(cleanupCalls, [true]);
+});
+
+test("a completed plan's cleanup learns the plan succeeded", async () => {
+  const cleanupCalls = [];
+  const { spawn } = spawnEach([fakeChild(), fakeChild(), fakeChild()]);
+  const run = startReviewRun({
+    engine: "opencode",
+    issue: 40,
+    model: "ollama/qwen3-coder:30b",
+    hostRepoRoot: "/host/repo",
+    spawn,
+    runCommands: { opencode: () => stepPlan(cleanupCalls) },
+  });
+  await collect(run);
+  deepStrictEqual(cleanupCalls, [true]);
+});
+
+test("cancelling a plan run kills the current step and skips the rest", async () => {
+  const cleanupCalls = [];
+  const hung = fakeChild({ autoExit: false });
+  const { spawn, calls } = spawnEach([fakeChild(), hung]);
+  const run = startReviewRun({
+    engine: "opencode",
+    issue: 40,
+    model: "ollama/qwen3-coder:30b",
+    hostRepoRoot: "/host/repo",
+    spawn,
+    runCommands: { opencode: () => stepPlan(cleanupCalls) },
+  });
+  // Cancel once the second step is the one running.
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  run.cancel();
+
+  const events = await collect(run);
+  deepStrictEqual(hung.signals, ["SIGTERM"]);
+  deepStrictEqual(events.at(-1), { type: "exit", code: null, signal: "SIGTERM", cancelled: true });
+  deepStrictEqual(cleanupCalls, [false]);
+  strictEqual(calls.length, 2, "no step spawns after the cancel");
+});
+
+test("a plan step that outlives its time limit fails the run and proceeds to cleanup", async () => {
+  const cleanupCalls = [];
+  const hung = fakeChild({ ignoreSigterm: true, autoExit: false });
+  const { spawn, calls } = spawnEach([fakeChild(), hung]);
+  const run = startReviewRun({
+    engine: "opencode",
+    issue: 40,
+    model: "ollama/qwen3-coder:30b",
+    hostRepoRoot: "/host/repo",
+    spawn,
+    timeoutMs: 20,
+    terminateGraceMs: 5,
+    runCommands: { opencode: () => stepPlan(cleanupCalls) },
+  });
+
+  const events = await collect(run);
+  const timeout = events.find((event) => event.type === "error");
+  strictEqual(timeout.reason, "timeout");
+  match(timeout.message, /agent step/, "the timeout names the step that hung");
+  deepStrictEqual(hung.signals, ["SIGTERM", "SIGKILL"]);
+  deepStrictEqual(events.at(-1), { type: "exit", code: null, signal: "SIGKILL", cancelled: false });
+  deepStrictEqual(cleanupCalls, [false]);
+  strictEqual(calls.length, 2, "the step after the timeout never spawns");
+});
+
+test("the plan's output inspector turns agent JSON events into notices", async () => {
+  const children = [
+    fakeChild(),
+    fakeChild({
+      stdout: [
+        '{"type":"step_start"}\n',
+        '{"type":"permission","status":"denied","pattern":"git push*"}\n',
+      ],
+    }),
+    fakeChild(),
+  ];
+  const { spawn } = spawnEach(children);
+  const run = startReviewRun({
+    engine: "opencode",
+    issue: 40,
+    model: "ollama/qwen3-coder:30b",
+    hostRepoRoot: "/host/repo",
+    spawn,
+    runCommands: { opencode: () => stepPlan() },
+  });
+
+  const events = await collect(run);
+  deepStrictEqual(
+    events.filter((event) => event.type === "notice"),
+    [{ type: "notice", message: "agent permission event: permission (git push*)" }],
+  );
+});
+
+test("an unavailable engine (null plan) ends with a typed error and never spawns", async () => {
+  const { spawn, calls } = spawnEach([fakeChild()]);
+  const run = startReviewRun({
+    engine: "opencode",
+    issue: 40,
+    model: "ollama/qwen3-coder:30b",
+    hostRepoRoot: "/host/repo",
+    spawn,
+    runCommands: { opencode: () => null },
+  });
+
+  const events = await collect(run);
+  deepStrictEqual(events, [
+    { type: "started", engine: "opencode", issue: 40, model: "ollama/qwen3-coder:30b" },
+    {
+      type: "error",
+      reason: "engine_unavailable",
+      message: "the opencode engine did not produce a run — its CLI may be missing",
+    },
+    { type: "exit", code: null, signal: null, cancelled: false },
+  ]);
+  deepStrictEqual(calls, [], "no worktree, no agent, no publish");
+});
+
+test("the opencode engine's real plan reaches the runner's step loop", async () => {
+  // The registration seam: the entry the runner registers builds the engine's
+  // own plan (argv pinned by the engine's tests) and executes it here with a
+  // pinned binary so the test stays hermetic.
+  const children = [
+    fakeChild(),
+    fakeChild(),
+    fakeChild(),
+    fakeChild(),
+    fakeChild(),
+    fakeChild(),
+    fakeChild(),
+  ];
+  const { spawn, calls } = spawnEach(children);
+  const run = startReviewRun({
+    engine: "opencode",
+    issue: 40,
+    model: "ollama/qwen3-coder:30b",
+    baseBranch: "origin/main",
+    hostRepoRoot: "/host/repo",
+    spawn,
+    runCommands: {
+      opencode: (request) =>
+        opencodeRunCommand(request, { WORKBENCH_OPENCODE_BIN: "/opt/pinned/opencode" }),
+    },
+  });
+
+  const events = await collect(run);
+  strictEqual(events.at(-1).code, 0);
+  deepStrictEqual(
+    calls.map((call) => call.command),
+    ["git", "git", "/opt/pinned/opencode", "git", "git", "git", "gh"],
+  );
+  strictEqual(calls[2].env.OPENCODE_CONFIG_CONTENT.length > 0, true, "the agent rides the fence");
+});
+
+test("the registered opencode entry resolves the binary through the engine", () => {
+  strictEqual(
+    opencodeRunCommand({ issue: 40, hostRepoRoot: "/h", baseBranch: "origin/main" }, {}),
+    null,
+  );
+  const plan = opencodeRunCommand(
+    { issue: 40, hostRepoRoot: "/h", baseBranch: "origin/main" },
+    { WORKBENCH_OPENCODE_BIN: "/opt/x" },
+  );
+  strictEqual(plan.steps.length, 7);
+  strictEqual(plan.steps[2].command, "/opt/x");
+});
+
+test("the opencode entry fills the default model from the environment", () => {
+  const envPinned = opencodeRunCommand(
+    { issue: 40, hostRepoRoot: "/h", baseBranch: "origin/main" },
+    { WORKBENCH_OPENCODE_BIN: "/opt/x", WORKBENCH_OPENCODE_MODEL: "ollama/llama3.2:latest" },
+  );
+  const pinnedArgs = envPinned.steps[2].args;
+  strictEqual(pinnedArgs[pinnedArgs.indexOf("--model") + 1], "ollama/llama3.2:latest");
+  const fallbackArgs = opencodeRunCommand(
+    { issue: 40, hostRepoRoot: "/h", baseBranch: "origin/main" },
+    { WORKBENCH_OPENCODE_BIN: "/opt/x" },
+  ).steps[2].args;
+  strictEqual(fallbackArgs[fallbackArgs.indexOf("--model") + 1], "ollama/qwen3-coder:30b");
 });

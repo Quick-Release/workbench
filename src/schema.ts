@@ -16,6 +16,7 @@ import {
   blockerEdgeSources,
   decisionSources,
   decisionStatuses,
+  engines,
   reviewEngines,
   serviceStatuses,
   skillFlowEdgeKinds,
@@ -254,8 +255,11 @@ export const AiHealthSchema = Schema.Struct({
 // availability as one typed state each, carrying the engine's version when
 // the binary was found. Not-ready states carry the one-step remediation
 // command, except probe_error, which carries the probe's own message. The
-// auth flavors are engine-specific: CodeRabbit needs an Agentic
-// API key, zcode needs a model provider.
+// setup flavors are engine-specific: CodeRabbit needs an Agentic API key,
+// zcode a model provider, and the issue agent (issue #40) a reachable
+// Ollama server with the default model pulled — plus, when ready, the
+// pulled-model list the panel's picker offers and the context-length
+// warning that keeps a silent truncation from reading as a dumb model.
 export const ReviewEngineHealthSchema = Schema.Union([
   Schema.Struct({
     engine: Schema.Literals(reviewEngines),
@@ -263,7 +267,7 @@ export const ReviewEngineHealthSchema = Schema.Union([
     version: Schema.String,
   }),
   Schema.Struct({
-    engine: Schema.Literals(reviewEngines),
+    engine: Schema.Literals(engines),
     state: Schema.Literal("binary_missing"),
     remediation: Schema.String,
   }),
@@ -280,7 +284,29 @@ export const ReviewEngineHealthSchema = Schema.Union([
     remediation: Schema.String,
   }),
   Schema.Struct({
-    engine: Schema.Literals(reviewEngines),
+    engine: Schema.Literal("opencode"),
+    state: Schema.Literal("ollama_unreachable"),
+    version: Schema.String,
+    remediation: Schema.String,
+  }),
+  Schema.Struct({
+    engine: Schema.Literal("opencode"),
+    state: Schema.Literal("model_missing"),
+    version: Schema.String,
+    model: Schema.String,
+    models: Schema.Array(Schema.String),
+    remediation: Schema.String,
+  }),
+  Schema.Struct({
+    engine: Schema.Literal("opencode"),
+    state: Schema.Literal("ready"),
+    version: Schema.String,
+    models: Schema.Array(Schema.String),
+    defaultModel: Schema.String,
+    warning: Schema.optional(Schema.String),
+  }),
+  Schema.Struct({
+    engine: Schema.Literals(engines),
     state: Schema.Literal("probe_error"),
     message: Schema.String,
   }),
@@ -604,24 +630,52 @@ export const parseReviewHealth: (input: unknown) => ReviewHealth = Schema.decode
   { onExcessProperty: "error" },
 );
 
-// The review run request (epic #20, ticket #26): the page names an engine
-// and a PR number — nothing else crosses the seam, so the dashboard can
-// never be tricked into executing arbitrary commands.
+// The run request (epic #20, ticket #26; widened by issue #40): the page
+// names an engine and exactly one target — a PR for the review engines, an
+// issue for the issue agent, with an optional Ollama model and base branch.
+// No command text ever crosses the seam: the model must be
+// provider-qualified for the local Ollama server, the branch a plain git
+// ref, and both are validated here because they still ride enumerated argv.
 export const ReviewRunRequestSchema = Schema.Struct({
-  engine: Schema.Literals(reviewEngines),
-  pr: Schema.Number,
+  engine: Schema.Literals(engines),
+  pr: Schema.optional(Schema.Number),
+  issue: Schema.optional(Schema.Number),
+  model: Schema.optional(Schema.String),
+  baseBranch: Schema.optional(Schema.String),
 });
 
 export type ReviewRunRequest = Schema.Schema.Type<typeof ReviewRunRequestSchema>;
+
+const positiveInteger = (value: unknown, field: string): number => {
+  if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {
+    throw new Error(`${field} must be a positive integer`);
+  }
+  return value;
+};
 
 export const parseReviewRunRequest: (input: unknown) => ReviewRunRequest = (input) => {
   const request = Schema.decodeUnknownSync(ReviewRunRequestSchema, {
     onExcessProperty: "error",
   })(input);
-  // Only a real pull-request number may travel: a float or negative would
-  // ride the enumerated command and surface as a confusing unknown PR.
-  if (!Number.isInteger(request.pr) || request.pr <= 0) {
-    throw new Error("pr must be a positive integer");
+  if (
+    (request.pr === undefined && request.issue === undefined) ||
+    (request.pr !== undefined && request.issue !== undefined)
+  ) {
+    throw new Error("exactly one of pr or issue is required");
+  }
+  if (request.pr !== undefined) positiveInteger(request.pr, "pr");
+  if (request.issue !== undefined) positiveInteger(request.issue, "issue");
+  if (
+    request.model !== undefined &&
+    !/^ollama\/[A-Za-z0-9][A-Za-z0-9._:+~^-]{0,80}$/.test(request.model)
+  ) {
+    throw new Error("model must be an ollama-qualified model id (ollama/<model>)");
+  }
+  if (
+    request.baseBranch !== undefined &&
+    !/^[A-Za-z0-9][A-Za-z0-9._/-]{0,99}$/.test(request.baseBranch)
+  ) {
+    throw new Error("baseBranch must be a git branch name");
   }
   return request;
 };
@@ -635,14 +689,22 @@ export type ReviewCancelRequest = Schema.Schema.Type<typeof ReviewCancelRequestS
 export const parseReviewCancelRequest: (input: unknown) => ReviewCancelRequest =
   Schema.decodeUnknownSync(ReviewCancelRequestSchema, { onExcessProperty: "error" });
 
-// The run's event stream (epic #20, ticket #26): the runner's typed NDJSON
-// events as the UI consumes them — started, output chunks, a distinct
-// truncation marker, the exit (with the cancelled flag), and named errors.
+// The run's event stream (epic #20, ticket #26; issue #40): the runner's
+// typed events as the UI consumes them — a started echo of the request (the
+// PR for reviews, the issue and model for the agent), output chunks, a
+// distinct truncation marker, notices surfaced from the agent's stream, the
+// exit (with the cancelled flag), and named errors.
 export const ReviewRunEventSchema = Schema.Union([
   Schema.Struct({
     type: Schema.Literal("started"),
     engine: Schema.Literals(reviewEngines),
     pr: Schema.Number,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("started"),
+    engine: Schema.Literal("opencode"),
+    issue: Schema.Number,
+    model: Schema.optional(Schema.String),
   }),
   Schema.Struct({
     type: Schema.Literal("output"),
@@ -651,6 +713,10 @@ export const ReviewRunEventSchema = Schema.Union([
   }),
   Schema.Struct({ type: Schema.Literal("truncated") }),
   Schema.Struct({
+    type: Schema.Literal("notice"),
+    message: Schema.String,
+  }),
+  Schema.Struct({
     type: Schema.Literal("exit"),
     code: Schema.NullOr(Schema.Number),
     signal: Schema.NullOr(Schema.String),
@@ -658,7 +724,7 @@ export const ReviewRunEventSchema = Schema.Union([
   }),
   Schema.Struct({
     type: Schema.Literal("error"),
-    reason: Schema.Literals(["timeout", "spawn_failed"]),
+    reason: Schema.Literals(["timeout", "spawn_failed", "step_failed", "engine_unavailable"]),
     message: Schema.String,
   }),
 ]);
@@ -689,8 +755,12 @@ export const ReviewRunOutcomeSchema = Schema.Literals([
 
 export const ReviewHistoryEntrySchema = Schema.Struct({
   id: Schema.Number,
-  engine: Schema.Literals(reviewEngines),
-  pr: Schema.Number,
+  engine: Schema.Literals(engines),
+  // The run's target: a PR for the review engines, an issue for the agent —
+  // the seam's exactly-one-of rule is enforced where the request is parsed,
+  // and the panel labels an entry by whichever target it carries.
+  pr: Schema.NullOr(Schema.Number),
+  issue: Schema.optional(Schema.Number),
   outcome: ReviewRunOutcomeSchema,
   durationMs: Schema.Number,
   output: Schema.String,

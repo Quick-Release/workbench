@@ -1,10 +1,11 @@
 import type { ReviewRunEvent } from "@/schema";
-import type { ReviewEngine } from "@/types";
+import type { Engine } from "@/types";
 
-// The pure half of the review-run UI (ticket #26): every state decision a
-// run's lifecycle goes through, as functions over plain data — the same
+// The pure half of the run UI (ticket #26; issue #40): every state decision
+// a run's lifecycle goes through, as functions over plain data — the same
 // board pattern as the draft state. The container fires the fetches and
-// hands events in; nothing here touches the network.
+// hands events in; nothing here touches the network. A run's target is a PR
+// for the review engines or an issue (with an optional model) for the agent.
 
 export type ReviewRunPhase = "idle" | "running" | "busy" | "done";
 
@@ -14,10 +15,15 @@ export type ReviewRunState = {
   // but the server allows one per engine — a second engine's start must not
   // inherit the first engine's in-flight events.
   token: number;
-  engine: ReviewEngine | null;
+  engine: Engine | null;
   pr: number | null;
+  issue: number | null;
+  model: string | null;
   output: string;
   truncated: boolean;
+  // States the agent's stream inspector surfaced (permission denials,
+  // confirmation-like stalls) — the signal between the raw JSON and the run.
+  notices: string[];
   exit: { code: number | null; signal: string | null; cancelled: boolean } | null;
   error: { reason: string; message: string } | null;
   busyMessage: string | null;
@@ -32,8 +38,11 @@ export const emptyReviewRun: ReviewRunState = {
   token: 0,
   engine: null,
   pr: null,
+  issue: null,
+  model: null,
   output: "",
   truncated: false,
+  notices: [],
   exit: null,
   error: null,
   busyMessage: null,
@@ -41,12 +50,16 @@ export const emptyReviewRun: ReviewRunState = {
   cancelError: null,
 };
 
-export const runStarted = (engine: ReviewEngine, pr: number, token: number): ReviewRunState => ({
+export type RunTarget = number | { issue: number; model?: string };
+
+export const runStarted = (engine: Engine, target: RunTarget, token: number): ReviewRunState => ({
   ...emptyReviewRun,
   phase: "running",
   token,
   engine,
-  pr,
+  ...(typeof target === "number"
+    ? { pr: target }
+    : { issue: target.issue, model: target.model ?? null }),
 });
 
 export const runEvent = (state: ReviewRunState, event: ReviewRunEvent): ReviewRunState => {
@@ -58,6 +71,8 @@ export const runEvent = (state: ReviewRunState, event: ReviewRunEvent): ReviewRu
       return { ...state, output: state.output + event.text };
     case "truncated":
       return { ...state, truncated: true };
+    case "notice":
+      return { ...state, notices: [...state.notices, event.message] };
     case "exit": {
       const { code, signal, cancelled } = event;
       return { ...state, phase: "done", exit: { code, signal, cancelled } };

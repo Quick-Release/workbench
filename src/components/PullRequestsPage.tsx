@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { GitPullRequest, Square } from "lucide-react";
 
 import { DraftPanel, UnconfiguredHint } from "@/components/DraftPanel";
+import { IssueAgentPanel } from "@/components/IssueAgentPanel";
 import { ReviewEngines } from "@/components/ReviewEngines";
 import { ReviewHistoryPanel } from "@/components/ReviewHistoryPanel";
 import { ReviewRunPanel } from "@/components/ReviewRunPanel";
@@ -32,6 +33,7 @@ import { ReviewRunHttpError, cancelReviewRun, streamReviewRun } from "@/lib/revi
 import { parseReviewHistory } from "@/schema";
 import {
   reviewEngines,
+  type Engine,
   type PullRequestRecord,
   type ReviewEngine,
   type ReviewEngineHealth,
@@ -168,7 +170,7 @@ export function PullRequestsPage({
   // replayed the moment the run registers, instead of being dropped on the
   // benign no_run answer. Keyed by the run's token, so it can only ever
   // fire for the run it was asked of.
-  const pendingCancelRef = useRef<{ token: number; engine: ReviewEngine } | null>(null);
+  const pendingCancelRef = useRef<{ token: number; engine: Engine } | null>(null);
   // The session run history (ticket #27): what the dev server remembers
   // about already-finished runs. The page fetches it on load and refetches
   // whenever a run ends; the server owns the record, so a dev-server
@@ -188,7 +190,11 @@ export function PullRequestsPage({
     void refreshHistory();
   }, []);
 
-  const cancelOnce = (engine: ReviewEngine, token: number) => {
+  const cancelOnce = (
+    engine: Engine,
+    token: number,
+    apply: (updater: (current: ReviewRunState) => ReviewRunState) => void,
+  ) => {
     cancelReviewRun()(engine).catch((error) => {
       // A no_run refusal while the run is still claiming its engine is the
       // registration race: keep the intent. Once the run has registered (or
@@ -208,59 +214,57 @@ export function PullRequestsPage({
         error instanceof ReviewRunHttpError
           ? (error.payload?.message ?? `cancel failed with status ${error.status}`)
           : "cancel could not reach the server — the run may still be going";
-      setReviewRun((current) =>
-        current.token === token ? runCancelFailed(current, failure) : current,
-      );
+      apply((current) => (current.token === token ? runCancelFailed(current, failure) : current));
     });
   };
 
-  const runReview = (pr: number, engine: ReviewEngine) => {
-    const token = ++runToken.current;
-    const controller = new AbortController();
-    runAbortRef.current = controller;
-    setReviewRun(runStarted(engine, pr, token));
+  // The one consumer both boards share: drive the SSE stream into the board
+  // handed in, mapping the server's typed rejections onto it. The boards are
+  // separate because the server runs one review and one agent run at a time.
+  const consumeRun = (
+    request: { engine: Engine; pr: number } | { engine: Engine; issue: number; model?: string },
+    token: number,
+    controller: AbortController,
+    apply: (updater: (current: ReviewRunState) => ReviewRunState) => void,
+  ) => {
     void (async () => {
       try {
         // The first event is the proof of registration: a cancellation that
         // raced it replays here, before any further output is streamed.
         let registered = false;
-        for await (const event of streamReviewRun({ engine, pr, signal: controller.signal })) {
+        for await (const event of streamReviewRun({ ...request, signal: controller.signal })) {
           if (!registered) {
             registered = true;
             if (pendingCancelRef.current?.token === token) {
               const replay = pendingCancelRef.current;
               pendingCancelRef.current = null;
-              cancelOnce(replay.engine, token);
+              cancelOnce(replay.engine, token, apply);
             }
           }
-          setReviewRun((current) => (current.token === token ? runEvent(current, event) : current));
+          apply((current) => (current.token === token ? runEvent(current, event) : current));
         }
         // A stream that ends without an exit — server crash, dropped
         // connection — must not leave the run running forever.
-        setReviewRun((current) =>
+        apply((current) =>
           current.token === token && current.phase === "running"
-            ? runFailed(current, "the review stream ended before the run finished")
+            ? runFailed(current, "the run stream ended before the run finished")
             : current,
         );
       } catch (error) {
         if (controller.signal.aborted) return;
         if (error instanceof ReviewRunHttpError && error.status === 409 && error.payload?.message) {
           const message = error.payload.message;
-          setReviewRun((current) =>
-            current.token === token ? runBusy(current, message) : current,
-          );
+          apply((current) => (current.token === token ? runBusy(current, message) : current));
         } else if (error instanceof ReviewRunHttpError) {
           // The server answered with its own complaint (unknown PR, bad
           // request, runner failure) — show it rather than guessing.
-          const failure =
-            error.payload?.message ?? `the review run failed with status ${error.status}`;
-          setReviewRun((current) =>
-            current.token === token ? runFailed(current, failure) : current,
-          );
+          const failure = error.payload?.message ?? `the run failed with status ${error.status}`;
+          apply((current) => (current.token === token ? runFailed(current, failure) : current));
         } else {
-          const failure = "the review endpoint is unreachable";
-          setReviewRun((current) =>
-            current.token === token ? runFailed(current, failure) : current,
+          apply((current) =>
+            current.token === token
+              ? runFailed(current, "the run endpoint is unreachable")
+              : current,
           );
         }
       } finally {
@@ -271,11 +275,44 @@ export function PullRequestsPage({
     })();
   };
 
+  const runReview = (pr: number, engine: ReviewEngine) => {
+    const token = ++runToken.current;
+    const controller = new AbortController();
+    runAbortRef.current = controller;
+    setReviewRun(runStarted(engine, pr, token));
+    consumeRun({ engine, pr }, token, controller, setReviewRun);
+  };
+
   const cancelReview = (engine: ReviewEngine) => {
     const token = reviewRun.token;
     // A retry clears the previous attempt's notice up front.
     setReviewRun((current) => (current.cancelError ? { ...current, cancelError: null } : current));
-    cancelOnce(engine, token);
+    cancelOnce(engine, token, setReviewRun);
+  };
+
+  // The issue-agent board (issue #40): its own state, its own engine slot —
+  // an agent run and a review can stream side by side.
+  const [agentRun, setAgentRun] = useState<ReviewRunState>(emptyReviewRun);
+  const agentAbortRef = useRef<AbortController | null>(null);
+  useEffect(() => () => agentAbortRef.current?.abort(), []);
+
+  const runAgent = (issue: number, model?: string) => {
+    const token = ++runToken.current;
+    const controller = new AbortController();
+    agentAbortRef.current = controller;
+    setAgentRun(runStarted("opencode", { issue, model }, token));
+    consumeRun(
+      { engine: "opencode", issue, ...(model ? { model } : {}) },
+      token,
+      controller,
+      setAgentRun,
+    );
+  };
+
+  const cancelAgent = () => {
+    const token = agentRun.token;
+    setAgentRun((current) => (current.cancelError ? { ...current, cancelError: null } : current));
+    cancelOnce("opencode", token, setAgentRun);
   };
 
   // A review action is live only when that engine's health probe said ready
@@ -358,7 +395,20 @@ export function PullRequestsPage({
           </CardContent>
         </Card>
       )}
-      <ReviewHistoryPanel history={runHistory} onRerun={runReview} />
+      <IssueAgentPanel
+        health={engineHealth?.find((entry) => entry.engine === ("opencode" as Engine)) ?? null}
+        run={agentRun}
+        onStart={runAgent}
+        onCancel={cancelAgent}
+      />
+      <ReviewHistoryPanel
+        history={runHistory}
+        onRerun={(entry) =>
+          entry.issue !== undefined
+            ? runAgent(entry.issue)
+            : runReview(entry.pr as number, entry.engine as ReviewEngine)
+        }
+      />
     </div>
   );
 }

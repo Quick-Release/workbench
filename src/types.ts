@@ -430,7 +430,15 @@ import type {
   ReviewHistorySchema,
 } from "./schema.ts";
 
+// Every engine the runner can execute: the two review engines (a pull
+// request is their target) and the issue-agent engine (an issue is). The
+// review-only subset keeps its own name — the PR page's per-PR review
+// buttons and the findings-comment action must never offer the agent.
 export const reviewEngines = ["coderabbit", "zcode"] as const;
+
+export const engines = [...reviewEngines, "opencode"] as const;
+
+export type Engine = (typeof engines)[number];
 
 export type ReviewEngine = (typeof reviewEngines)[number];
 

@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { resolve } from "node:path";
 
 import {
@@ -96,6 +97,29 @@ export const ghReviewTarget =
     }
   };
 
+// The issue agent's target (issue #40): the worktree forks the default
+// branch, resolved locally from the remote-tracking HEAD the same way a
+// Developer's `git` would answer. An explicit base branch from the page
+// (already validated as a plain ref) is trusted instead — no git call, no
+// surprise. An unknown issue number is not screened here: the agent reads
+// the issue itself and reports what it finds; the draft PR is the gate.
+export const ghIssueTarget =
+  ({ hostRoot, runGit = defaultGitRunner } = {}) =>
+  async ({ issue, baseBranch }) => {
+    if (baseBranch) return { hostRepoRoot: hostRoot, baseBranch };
+    const result = runGit(["symbolic-ref", "--short", "refs/remotes/origin/HEAD"], hostRoot);
+    if (result.status !== 0) {
+      throw new Error(
+        (result.stderr ?? "").trim() ||
+          `could not resolve the default branch of ${hostRoot} for issue #${issue}`,
+      );
+    }
+    return { hostRepoRoot: hostRoot, baseBranch: result.stdout.trim() };
+  };
+
+const defaultGitRunner = (args, cwd) =>
+  spawnSync("git", args, { cwd, encoding: "utf8", timeout: 5_000 });
+
 const busyRejection = (engine) => ({
   status: 409,
   json: {
@@ -121,17 +145,19 @@ export const handleReviewRunStart = async ({
   try {
     request = parseReviewRunRequest(body);
   } catch (error) {
-    // Missing fields get the friendly summary; a present-but-invalid PR
-    // (fractional, negative) keeps the schema's specific reason — "engine
-    // and pr are required" would misdescribe what actually failed.
+    // Missing fields get the friendly summary; a present-but-invalid field
+    // (fractional PR, both targets, a bad model) keeps the schema's specific
+    // reason — a generic "engine and target are required" would misdescribe
+    // what actually failed.
     const reason = String(error?.message ?? error);
+    const specific = /must be a positive integer|exactly one of|model must be|branch name/.test(
+      reason,
+    );
     return {
       status: 400,
       json: {
         error: "invalid_request",
-        message: reason.includes("pr must be a positive integer")
-          ? reason
-          : "engine and pr are required",
+        message: specific ? reason : "engine, and a pr or issue number, are required",
       },
     };
   }
@@ -200,7 +226,8 @@ export const handleReviewRunStart = async ({
         registry.release(request.engine);
         history.record({
           engine: request.engine,
-          pr: request.pr,
+          pr: request.pr ?? null,
+          ...(request.issue !== undefined ? { issue: request.issue } : {}),
           outcome: reviewRunOutcome(exit, timeoutMessage !== null),
           durationMs: Date.now() - startedAt,
           output,
@@ -258,6 +285,12 @@ export const reviewApiPlugin = ({
     // The runs execute in the host repo — Vite's own notion of the root,
     // overridable by the source-root env (the same resolution ai-api uses).
     const hostRoot = resolve(process.env.WORKBENCH_SOURCE_ROOT || server.config.root);
+    // The target resolver dispatches on the request's shape: a PR resolves
+    // through gh, an issue through the local git default branch (issue #40).
+    const defaultResolveTarget = (request) =>
+      request.pr !== undefined
+        ? ghReviewTarget({ hostRoot })(request)
+        : ghIssueTarget({ hostRoot })(request);
     server.middlewares.use(
       guardedApi(async (request, response, next, url) => {
         // Route matching comes first: a request this middleware doesn't own
@@ -304,7 +337,7 @@ export const reviewApiPlugin = ({
                 startRun,
                 registry,
                 history,
-                resolveTarget: resolveTarget ?? ghReviewTarget({ hostRoot }),
+                resolveTarget: resolveTarget ?? defaultResolveTarget,
               })
             : CANCEL_ROUTE.test(url.pathname)
               ? handleReviewRunCancel({

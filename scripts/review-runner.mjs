@@ -4,6 +4,8 @@ import { homedir as osHomedir } from "node:os";
 import { StringDecoder } from "node:string_decoder";
 import { join } from "node:path";
 
+import { ollamaTagsLoader, opencodeEngine, opencodeRunCommand } from "./opencode-engine.mjs";
+
 // The review runner seam (epic #20): the one component that knows how to
 // execute a review and probe the review engines' health. This is the seam's
 // health half (ticket #24): per-engine availability — CLI binary found (with
@@ -101,10 +103,24 @@ const zcodeEngine = {
   },
 };
 
-const engines = [coderabbitEngine, zcodeEngine];
+// The engine registry: health probes for every engine, and a run command (or,
+// for the issue-agent engine, a whole plan) per engine. The opencode entry is
+// the first plan-shaped engine (issue #40); coderabbit and zcode stay single
+// commands and the runner normalizes them into one-step plans.
+const engines = [coderabbitEngine, zcodeEngine, opencodeEngine];
 
-export const reviewHealth = ({ spawn = nodeSpawn, homedir = osHomedir } = {}) => ({
-  engines: engines.map((engine) => engine.probeHealth({ spawn, homedir })),
+export const reviewHealth = async ({
+  spawn = nodeSpawn,
+  homedir = osHomedir,
+  ollama = { tags: ollamaTagsLoader() },
+  which,
+} = {}) => ({
+  // The opencode probe answers over HTTP (the local model server), so the
+  // probe array resolves asynchronously; the coderabbit and zcode probes
+  // resolve in place.
+  engines: await Promise.all(
+    engines.map((engine) => engine.probeHealth({ spawn, homedir, ollama, which })),
+  ),
 });
 
 // --- The run half (ticket #26): cancel, single-run, timeout, output caps ---
@@ -126,15 +142,19 @@ const runCommand = {
     command: "zcode",
     args: ["--prompt", zcodeReviewPrompt(pr), "--mode", "plan", "--cwd", hostRepoRoot, "--json"],
   }),
+  opencode: opencodeRunCommand,
 };
 
 // Production spawn adapter: node's spawn with a detached process group, so
 // kills reach the whole CLI process tree and not just the direct child; the
 // child is surfaced in the runner's contract shape (async-iterable stdio and
 // an `exited` promise, since the run consumes the process by subscription).
-const nodeRunSpawn = ({ command, args, cwd }) => {
+const nodeRunSpawn = ({ command, args, cwd, env }) => {
   const child = spawnChildProcess(command, args, {
     cwd,
+    // A step's own env rides on top of the inherited environment — it carries
+    // configuration (the permission fence), never a stripped-down PATH.
+    env: env ? { ...process.env, ...env } : undefined,
     detached: true,
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -201,41 +221,45 @@ const eventChannel = () => {
 export const startReviewRun = ({
   engine,
   pr,
+  issue,
+  model,
   baseBranch,
   hostRepoRoot,
   spawn = nodeRunSpawn,
+  runCommands = runCommand,
   timeoutMs = 15 * 60_000,
   outputCapBytes = 1_000_000,
   terminateGraceMs = 5_000,
 }) => {
-  const { command, args } = runCommand[engine]({ pr, baseBranch, hostRepoRoot });
-  const child = spawn({ command, args, cwd: hostRepoRoot });
-
   const channel = eventChannel();
-  channel.push({ type: "started", engine, pr });
+  // The started event echoes the enumerated request — the PR number for the
+  // review engines, the issue and model for the issue agent (issue #40).
+  channel.push(
+    pr !== undefined
+      ? { type: "started", engine, pr }
+      : { type: "started", engine, issue, ...(model !== undefined ? { model } : {}) },
+  );
+
   let cancelled = false;
   let ended = false;
+  let timedOut = false;
   let timeoutTimer = null;
   let graceTimer = null;
-
-  const finish = () => {
-    if (ended) return;
-    ended = true;
-    clearTimeout(timeoutTimer);
-    clearTimeout(graceTimer);
-  };
+  let currentChild = null;
 
   // Stopping escalates: SIGTERM asks the CLI to stop, and a CLI that
   // ignores it is killed outright once the grace period passes. The
   // escalation is scheduled at most once per run — a late SIGKILL against a
-  // recycled pid is the bug it exists to prevent.
+  // recycled pid is the bug it exists to prevent — and targets the child
+  // that was current when the stop began, never a later step's.
   let stopping = false;
   const stopProcess = () => {
     if (stopping) return;
     stopping = true;
+    const target = currentChild;
     const signalTree = (signal) => {
       try {
-        child.kill(signal);
+        target?.kill(signal);
       } catch {
         // The child already exited between checks; nothing left to kill.
       }
@@ -249,29 +273,34 @@ export const startReviewRun = ({
     stopProcess();
   };
 
-  timeoutTimer = setTimeout(() => {
-    if (ended || stopping) return;
-    channel.push({
-      type: "error",
-      reason: "timeout",
-      message: `the ${engine} review exceeded ${Math.round(timeoutMs / 1000)}s and was stopped`,
-    });
-    stopProcess();
-  }, timeoutMs);
-
-  // The cap is the run's, not a stream's: stdout and stderr share one byte
-  // budget and one truncation marker, so a chatty pair of streams cannot
-  // double the limit or double the marker. The chunk that crosses the cap is
-  // forwarded up to the last byte that fits, and once truncated the
-  // remaining chunks are dropped without conversion.
+  // The cap is the run's, not a stream's and not a step's: every stdout and
+  // stderr of the whole plan shares one byte budget and one truncation
+  // marker. The chunk that crosses the cap is forwarded up to the last byte
+  // that fits, and once truncated the remaining chunks are dropped without
+  // conversion.
   let bytes = 0;
   let truncated = false;
-  const readStream = async (stream, name) => {
+  const readStream = async (stream, name, step) => {
     // Multi-byte UTF-8 sequences can straddle chunk boundaries, so each
     // stream decodes through its own stateful decoder; the byte accounting
     // stays on the raw buffer. The pending sequence of a truncated stream
     // never completes — it is discarded with the rest of the drop.
     const decoder = new StringDecoder("utf8");
+    // Complete lines of a step that carries an inspector become notices
+    // (issue #40: permission denials and confirmation-like stalls surface
+    // instead of hiding inside the JSON-event wall).
+    let pending = "";
+    const inspectLines = (text) => {
+      pending += text;
+      let boundary = pending.indexOf("\n");
+      while (boundary !== -1) {
+        const line = pending.slice(0, boundary);
+        pending = pending.slice(boundary + 1);
+        const notice = line.trim() ? step.inspectLine?.(line) : null;
+        if (notice) channel.push({ type: "notice", message: notice });
+        boundary = pending.indexOf("\n");
+      }
+    };
     for await (const chunk of stream) {
       if (truncated) continue;
       const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
@@ -279,7 +308,10 @@ export const startReviewRun = ({
       bytes += slice.length;
       if (slice.length > 0) {
         const text = decoder.write(slice);
-        if (text) channel.push({ type: "output", stream: name, text });
+        if (text) {
+          channel.push({ type: "output", stream: name, text });
+          if (step.inspectLine) inspectLines(text);
+        }
       }
       if (slice.length < buffer.length) {
         truncated = true;
@@ -287,26 +319,128 @@ export const startReviewRun = ({
       }
     }
     const tail = decoder.end();
-    if (tail && !truncated) channel.push({ type: "output", stream: name, text: tail });
+    if (tail && !truncated) {
+      channel.push({ type: "output", stream: name, text: tail });
+      if (step.inspectLine) inspectLines(tail);
+    }
   };
 
-  // A stdio stream failure must not become an unhandled rejection; the
-  // child's exit still surfaces through `exited` with its own error.
-  void readStream(child.stdout, "stdout").catch(() => {});
-  void readStream(child.stderr, "stderr").catch(() => {});
+  void (async () => {
+    const spec = runCommands[engine]?.({ pr, issue, model, baseBranch, hostRepoRoot });
+    // Single-command engines normalize into a one-step plan named for what it
+    // is; a plan-shaped spec rides as-is. A null spec is the engine's own
+    // "unavailable" answer (binary resolution failed) — a typed error instead
+    // of a doomed run.
+    const planShape =
+      spec === null || spec === undefined
+        ? null
+        : spec.steps
+          ? spec
+          : {
+              steps: [
+                { name: "review", command: spec.command, args: spec.args, cwd: hostRepoRoot },
+              ],
+              cleanup: null,
+            };
 
-  void child.exited.then((exit) => {
-    finish();
-    if (exit.error) {
+    let failed = null;
+    let lastExit = null;
+
+    if (!planShape) {
       channel.push({
         type: "error",
-        reason: "spawn_failed",
-        message: String(exit.error?.message ?? exit.error),
+        reason: "engine_unavailable",
+        message: `the ${engine} engine did not produce a run — its CLI may be missing`,
       });
+    } else {
+      for (const step of planShape.steps) {
+        if (ended || cancelled) break;
+        const child = spawn({
+          command: step.command,
+          args: step.args,
+          cwd: step.cwd,
+          env: step.env,
+        });
+        currentChild = child;
+        // The step timeout bounds each step of an unattended plan; a step
+        // without its own bound inherits the run's default.
+        timeoutTimer = setTimeout(() => {
+          if (ended || stopping) return;
+          timedOut = true;
+          channel.push({
+            type: "error",
+            reason: "timeout",
+            message: `the ${engine} ${step.name} step exceeded ${Math.round(
+              (step.timeoutMs ?? timeoutMs) / 1000,
+            )}s and was stopped`,
+          });
+          stopProcess();
+        }, step.timeoutMs ?? timeoutMs);
+
+        // A stdio stream failure must not become an unhandled rejection; the
+        // child's exit still surfaces through `exited` with its own error.
+        void readStream(child.stdout, "stdout", step).catch(() => {});
+        void readStream(child.stderr, "stderr", step).catch(() => {});
+
+        const exit = await child.exited;
+        clearTimeout(timeoutTimer);
+        currentChild = null;
+        if (!step.bestEffort) lastExit = exit;
+
+        // A best-effort step expects to fail sometimes (the issue agent's
+        // clearing step has nothing to clear on a first run): its failure is
+        // not the plan's, and the next step still runs.
+        if (step.bestEffort && !cancelled && !timedOut) continue;
+
+        if (exit.error) {
+          failed = {
+            reason: "spawn_failed",
+            message: String(exit.error?.message ?? exit.error),
+          };
+          channel.push({ type: "error", ...failed });
+          break;
+        }
+        if (cancelled || timedOut) break;
+        if (exit.code !== 0) {
+          // A one-step plan is a review command: its non-zero exit is the
+          // exit event's own verdict, exactly as it always was. An orchestrated
+          // plan names the step that failed and stops before the next one.
+          if (planShape.steps.length > 1) {
+            failed = {
+              reason: "step_failed",
+              message: `the ${engine} ${step.name} step failed with exit code ${exit.code}`,
+            };
+            channel.push({ type: "error", ...failed });
+          }
+          break;
+        }
+      }
     }
-    channel.push({ type: "exit", code: exit.code, signal: exit.signal, cancelled });
+
+    ended = true;
+    clearTimeout(timeoutTimer);
+    clearTimeout(graceTimer);
+    // The plan's cleanup always runs, best-effort, before the exit is
+    // announced; what "ok" means — remove the worktree, keep the evidence —
+    // is the plan's own decision (issue #40: failed runs keep theirs).
+    try {
+      planShape?.cleanup?.({
+        ok: !failed && !cancelled && !timedOut && (lastExit?.code ?? 1) === 0,
+      });
+    } catch {
+      // best-effort: a cleanup failure never breaks the run's ending
+    }
+    channel.push({
+      type: "exit",
+      // A stop the run itself performed (cancel, timeout, spawn failure) has
+      // no meaningful exit code; a step's own non-zero exit passes through —
+      // the error event, when one precedes it, carries the reason.
+      code: cancelled || timedOut ? null : (lastExit?.code ?? null),
+      signal: lastExit?.signal ?? null,
+      cancelled,
+    });
     channel.close();
-  });
+  })();
 
   return {
     engine,

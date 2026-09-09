@@ -1,7 +1,7 @@
 import { deepStrictEqual, strictEqual } from "node:assert";
 import { describe, expect, it } from "vite-plus/test";
 
-import { runBusy, runEvent, runFailed, runStarted } from "./review-run-state";
+import { reviewRunOutcome, runBusy, runEvent, runFailed, runStarted } from "./review-run-state";
 
 // The review-run board (ticket #26): the lifecycle's state decisions as pure
 // functions — a run is running, busy, or done, and every terminal state
@@ -81,5 +81,35 @@ describe("the review-run board", () => {
     state = runEvent(state, { type: "exit", code: 0, signal: null, cancelled: false });
     state = runEvent(state, { type: "output", stream: "stdout", text: "late\n" });
     expect(state.output).toBe("");
+  });
+});
+
+describe("the issue-agent run board (issue #40)", () => {
+  it("starts an agent run with its issue and model instead of a PR", () => {
+    const state = runStarted("opencode", { issue: 40, model: "ollama/qwen3-coder:30b" }, 3);
+    strictEqual(state.phase, "running");
+    strictEqual(state.engine, "opencode");
+    strictEqual(state.issue, 40);
+    strictEqual(state.model, "ollama/qwen3-coder:30b");
+    strictEqual(state.pr, null);
+  });
+
+  it("keeps notices apart from the raw stream", () => {
+    let state = runStarted("opencode", { issue: 40 }, 4);
+    state = runEvent(state, { type: "output", stream: "stdout", text: '{"type":"permission"}\n' });
+    state = runEvent(state, { type: "notice", message: "agent permission event: permission" });
+    state = runEvent(state, { type: "notice", message: "agent needs attention: question" });
+    deepStrictEqual(state.notices, [
+      "agent permission event: permission",
+      "agent needs attention: question",
+    ]);
+    strictEqual(state.phase, "running");
+  });
+
+  it("a finished agent run grades by its exit like any run", () => {
+    let state = runStarted("opencode", { issue: 40 }, 5);
+    state = runEvent(state, { type: "exit", code: 0, signal: null, cancelled: false });
+    strictEqual(state.phase, "done");
+    strictEqual(reviewRunOutcome(state.exit, false), "completed");
   });
 });
