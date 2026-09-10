@@ -136,10 +136,12 @@ When requested to publish work:
 Agents must not merge their own pull requests unless explicitly instructed.
 
 `main` is protected: merges happen only through reviewed pull requests.
-CodeRabbit reviews PRs automatically and its approval gates the merge; resolve
-its comments before requesting merge. Automatic incremental reviews are off,
-so batch pushes and run `@coderabbitai review` when ready; Draft PRs, PRs with
-WIP/Draft/DO NOT MERGE titles, and bot-authored PRs are never auto-reviewed.
+CodeRabbit's automatic PR review is disabled (ADR 0011) — the merge gate is a
+human's review plus the explicit instruction to merge. Batch pushes so the
+reviewer reads one coherent change, keep the PR in draft until it is
+reviewable end-to-end, and expect the merge to wait for that instruction.
+Other automatic reviewers may comment; their threads are input to the human's
+review — address or answer them, resolving them is not the gate.
 
 ## Worktree cleanup
 
