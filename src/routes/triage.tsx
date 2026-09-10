@@ -1,21 +1,15 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 
-import { IssueDetailPanel } from "../components/IssueDetailPanel";
+import { IssuePanelHost } from "../components/IssuePanelHost";
 import { TriagePage, type TriageLens } from "../components/TriagePage";
-import { overviewData } from "../data";
-import { useIssueActionRunner } from "../hooks/use-issue-actions";
-import { setWorkflowState } from "../hooks/use-workflow-state";
-import { issueParamFromSearch, panelIdFor } from "../lib/issue-param";
-import { workflowStateFrom } from "../lib/workflow-state";
-import { parseTriageMoveResult, parseWorkflowStatePayload } from "../schema";
-import type { TriageState, WorkflowStatePayload } from "../types";
+import { setWorkflowState, useWorkflowMode, useWorkflowState } from "../hooks/use-workflow-state";
+import { issueParamFromSearch } from "../lib/issue-param";
+import { workItemIdNumberText } from "../lib/work-item-id";
+import { parseTriageMoveResult } from "../schema";
+import type { TriageState } from "../types";
 
 type TriageSearch = { lens?: TriageLens; issue?: string };
-
-// The bundled snapshot paints the first render and serves static builds;
-// the execution seam's live read replaces it when the dev server answers.
-const initialState: WorkflowStatePayload = workflowStateFrom(overviewData);
 
 export const Route = createFileRoute("/triage")({
   validateSearch: (search: Record<string, unknown>): TriageSearch => ({
@@ -29,38 +23,16 @@ export const Route = createFileRoute("/triage")({
 // grammar (`issue-actions`) picks the route and the fields, so the panel
 // behaves identically on every view.
 function TriageRoute() {
-  const [state, setState] = useState(initialState);
-  const [mode, setMode] = useState<"live" | "static">("live");
+  // The shared workflow atom (see use-workflow-state): the bundled snapshot
+  // paints the first render, the live read replaces it, and a move pushes
+  // its re-read result here — the same state every other view sees.
+  const state = useWorkflowState();
+  const mode = useWorkflowMode();
   const [pendingId, setPendingId] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
-  const {
-    pending: panelPending,
-    message: panelMessage,
-    run: runIssueAction,
-  } = useIssueActionRunner();
   const lens = Route.useSearch({ select: (search) => search.lens ?? "none" });
   const issueParam = Route.useSearch({ select: (search) => search.issue });
   const navigate = Route.useNavigate();
-  const panelIssueId = panelIdFor(issueParam);
-
-  useEffect(() => {
-    let cancelled = false;
-    void (async () => {
-      try {
-        const response = await fetch("/api/workflow");
-        if (!response.ok) throw new Error(String(response.status));
-        const payload = parseWorkflowStatePayload(await response.json());
-        if (cancelled) return;
-        setState(payload);
-        setMode("live");
-      } catch {
-        if (!cancelled) setMode("static");
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
 
   const setIssueParam = (issue: string | undefined) =>
     navigate({ search: (prev) => ({ ...prev, issue }) });
@@ -87,7 +59,6 @@ function TriageRoute() {
       // The seam answers with the re-read state, so the row moves on the
       // next render without a manual reload.
       const result = parseTriageMoveResult(raw);
-      setState(result.state);
       setWorkflowState(result.state);
       setMessage(result.message);
     } catch {
@@ -111,23 +82,15 @@ function TriageRoute() {
           })
         }
         onMove={(issueId, triageState) => void move(issueId, triageState)}
-        onOpenIssue={(issueId) => setIssueParam(issueId.slice(3))}
+        onOpenIssue={(issueId) => setIssueParam(workItemIdNumberText(issueId))}
         onNewIssue={() => setIssueParam("new")}
         pendingId={pendingId}
         message={message}
       />
-      <IssueDetailPanel
-        issueId={panelIssueId}
-        state={state}
-        mode={mode}
-        pending={panelPending}
-        message={panelMessage}
-        onOpenChange={(open) => {
-          if (!open) setIssueParam(undefined);
-        }}
-        onAction={(action) =>
-          void runIssueAction(action, setState, (issueId) => setIssueParam(issueId))
-        }
+      <IssuePanelHost
+        issueParam={issueParam}
+        onParamChange={setIssueParam}
+        onCreated={setIssueParam}
       />
     </>
   );

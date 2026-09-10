@@ -7,7 +7,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { NativeSelect } from "@/components/ui/native-select";
 import type { DisplayCaveat } from "@/lib/display-state";
 import { deriveDisplayState } from "@/lib/display-state";
-import { frontierItemFromWorkItem, itemsById, openBlockers } from "@/lib/frontier";
+import { indexWorkItems, openBlockers } from "@/lib/frontier";
 import { staticMoveCommand, targetStatesFor, triageLanes } from "@/lib/triage";
 import type { BlockerEdgeRecord, TriageState, TrackerMapRecord, WorkItemRecord } from "@/types";
 
@@ -166,7 +166,7 @@ export function TriagePage({
 }: TriagePageProps) {
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
   const lanes = triageLanes(workItems, maps);
-  const frontierItems = itemsById(workItems.map(frontierItemFromWorkItem));
+  const frontierItems = indexWorkItems(workItems);
 
   const rowProps = (record: WorkItemRecord) => {
     const blocked = openBlockers(record.id, blockerEdges, frontierItems).open.length > 0;

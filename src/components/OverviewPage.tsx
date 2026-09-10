@@ -10,6 +10,7 @@ import {
   type FrontierStrip as FrontierStripData,
   type Recommendation,
 } from "@/lib/recommendation";
+import { workItemIdNumberText } from "@/lib/work-item-id";
 
 import type { OverviewData, WorkflowStatePayload } from "../types";
 
@@ -91,10 +92,11 @@ export function OverviewPage({
   );
 }
 
-// The next-action hero (ticket #64, ADR 0010): the recommendation's
-// command-first primary line with its bucket reason line underneath. The
-// item opens the shared detail panel; the command itself is copy bait for
-// the terminal — no dashboard control starts a skill session.
+// The next-action hero (ticket #64): the recommendation's command-first
+// primary line with its bucket reason line underneath (recommendation.ts's
+// priority table). The item opens the shared detail panel; the command
+// itself is copy bait for the terminal — no dashboard control starts a
+// skill session.
 function RecommendationHero({
   recommendation,
   onOpenIssue,
@@ -119,7 +121,7 @@ function RecommendationHero({
             {recommendation.command && <code>{recommendation.command}</code>}
             <span>
               {recommendation.command
-                ? `#${recommendation.issueId.slice(3)}`
+                ? `#${workItemIdNumberText(recommendation.issueId)}`
                 : recommendation.primary}
             </span>
           </button>
@@ -136,8 +138,9 @@ function RecommendationHero({
   );
 }
 
-// The repo-wide frontier strip (ADR 0011): each map's grabbable head in map
-// order plus the unmapped bucket, every item opening the shared panel.
+// The repo-wide frontier strip (recommendation.ts's frontierStrip): each
+// map's grabbable head in map order plus the unmapped bucket, every item
+// opening the shared panel.
 function FrontierStripSection({
   strip,
   onOpenIssue,

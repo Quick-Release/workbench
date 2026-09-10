@@ -70,9 +70,10 @@ const BUCKETS: readonly { key: InFlightBucketKey; label: string; blurb: string }
   },
 ];
 
-// The in-flight view (ticket #62): ADR 0010's in-flight bucket in priority
-// order, straight from the display-state derivation through the workflow
-// read endpoint. Informational only — nothing here recommends or acts.
+// The in-flight view (ticket #62): the in-flight bucket (in-flight.ts) in
+// priority order, straight from the display-state derivation through the
+// workflow read endpoint. Informational only — nothing here recommends or
+// acts.
 export function InFlightPage({ workItems }: { workItems: readonly WorkItemRecord[] }) {
   const buckets = inFlightBuckets(workItems);
   const total = buckets.reviewing.length + buckets.implementing.length + buckets.notStarted.length;

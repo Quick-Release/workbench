@@ -131,9 +131,9 @@ describe("the panel's actions in live mode", () => {
     expect(html).toContain("open on GitHub");
   });
 
-  it("jumps show-in-graph for items in an effort — map children to their map", () => {
+  it("jumps show-in-graph for items in a map — map children to their map", () => {
     const html = renderPanel({ issueId: "GH-42" });
-    expect(html).toContain('href="/blockers?effort=GH-41&amp;focus=42"');
+    expect(html).toContain('href="/blockers?map=GH-41&amp;focus=42"');
   });
 
   it("offers no graph jump for an item no snapshot record places in an effort", () => {

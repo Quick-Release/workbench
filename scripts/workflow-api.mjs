@@ -21,6 +21,7 @@ import {
   parseWorkflowStatePayload,
 } from "../src/schema.ts";
 import { workflowStateFrom } from "../src/lib/workflow-state.ts";
+import { byIssueNumber, workItemIdNumber } from "../src/lib/work-item-id.ts";
 import { deriveWorkItem } from "./tracker/labels.mjs";
 import { guardedApi, sendJson } from "./api-shared.mjs";
 
@@ -43,21 +44,29 @@ const EDGE_REMOVE_ROUTE = /^\/api\/workflow\/edge\/remove\/?$/;
 // The seam imports the generated snapshot module — its only syntax is the
 // erasable kind (a type-only import and `satisfies`), so plain Node loads it.
 // The mtime-keyed query re-imports after a re-sync instead of serving Node's
-// module cache, so a fresh snapshot needs no dev-server restart.
+// module cache, so a fresh snapshot needs no dev-server restart. The module
+// also carries the sync warnings channel, read structurally instead of
+// scraped from the sync output's console copy.
 let snapshotCache = null;
 
 const importSnapshot = async (appDirectory) => {
   const path = join(appDirectory, "src", "data.generated.ts");
   const { mtimeMs } = await stat(path);
   if (snapshotCache && snapshotCache.path === path && snapshotCache.mtimeMs === mtimeMs)
-    return snapshotCache.snapshot;
+    return snapshotCache;
   const module = await import(`${pathToFileURL(path).href}?t=${mtimeMs}`);
-  snapshotCache = { path, mtimeMs, snapshot: module.overviewData };
-  return snapshotCache.snapshot;
+  snapshotCache = {
+    path,
+    mtimeMs,
+    snapshot: module.overviewData,
+    // A generated module from an older workbench carries no warnings export.
+    warnings: Array.isArray(module.syncWarnings) ? module.syncWarnings : [],
+  };
+  return snapshotCache;
 };
 
 export const loadWorkflowState = async (appDirectory = APP_DIRECTORY) => {
-  const snapshot = await importSnapshot(appDirectory);
+  const { snapshot } = await importSnapshot(appDirectory);
   if (!snapshot || typeof snapshot !== "object" || typeof snapshot.meta !== "object")
     throw new Error("snapshot file does not carry the overviewData literal");
   return workflowStateFrom(snapshot);
@@ -80,8 +89,6 @@ const issueFromGhView = (payload) => ({
   assignees: Array.isArray(payload.assignees) ? payload.assignees : [],
   labels: Array.isArray(payload.labels) ? payload.labels : [],
 });
-
-const byIssueNumber = (left, right) => Number(left.id.slice(3)) - Number(right.id.slice(3));
 
 const issueNumberFrom = (issueId) => /^GH-(\d+)$/.exec(issueId)?.[1];
 
@@ -338,8 +345,8 @@ const withRefreshedEdges = (state, blockedId, freshNativeEdges) => {
   );
   const edges = [...surviving, ...freshNativeEdges];
   edges.sort((left, right) => {
-    const order = (edge) => Number(edge.blockedId.slice(3));
-    const blockerOrder = (edge) => Number(edge.blockerId.slice(3));
+    const order = (edge) => workItemIdNumber(edge.blockedId);
+    const blockerOrder = (edge) => workItemIdNumber(edge.blockerId);
     return (
       order(left) - order(right) ||
       blockerOrder(left) - blockerOrder(right) ||
@@ -450,31 +457,21 @@ export const applyEdgeRemove = async ({ blockedId, blockerId, confirm, state, ru
 
 // The sync trigger (ticket #64) runs what a Developer would run by hand —
 // `pnpm sync` in the app directory, whose script resolves the host repo —
-// then serves the refreshed state with the sync output's warnings channel
-// (cycles, dangling edges, unparsable statuses, missing linkage).
-const warningsFromSyncOutput = (stdout) => {
-  const lines = stdout.split("\n");
-  const start = lines.findIndex((line) => /^Tracker warnings \(\d+\):/.test(line.trim()));
-  if (start === -1) return [];
-  const warnings = [];
-  for (const line of lines.slice(start + 1)) {
-    const match = /^\s+-\s+(.*)$/.exec(line);
-    if (!match) break;
-    warnings.push(match[1]);
-  }
-  return warnings;
-};
-
+// then serves the refreshed state with the sync warnings channel (cycles,
+// dangling edges, unparsable statuses, missing linkage), read structurally
+// from the regenerated snapshot module.
 export const applySyncTrigger = async ({ appDirectory, run }) => {
-  let outcome;
   try {
-    outcome = await run("pnpm", ["sync"], appDirectory);
+    await run("pnpm", ["sync"], appDirectory);
   } catch (error) {
     return { ok: false, status: 502, message: `pnpm sync failed: ${messageFrom(error)}` };
   }
-  const warnings = warningsFromSyncOutput(String(outcome?.stdout ?? ""));
   let state;
+  let warnings;
   try {
+    // The mtime cache makes the second import free; loadWorkflowState owns
+    // the snapshot-shape guard so it cannot drift from the GET read.
+    warnings = (await importSnapshot(appDirectory)).warnings;
     state = parseWorkflowStatePayload(await loadWorkflowState(appDirectory));
   } catch (error) {
     return {

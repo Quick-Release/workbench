@@ -14,25 +14,24 @@ import {
   type BlockerBox,
   type BlockerLayoutNode,
 } from "@/lib/blocker-layout";
-import { effortGraph, emptyStateFor, whyNotLine } from "@/lib/blockers";
-import { frontierItemFromWorkItem, itemsById, openBlockers } from "@/lib/frontier";
+import { mapGraph, emptyStateFor, whyNotLine } from "@/lib/blockers";
+import { indexWorkItems, openBlockers } from "@/lib/frontier";
+import { workItemIdLabel } from "@/lib/work-item-id";
 import type { BlockerEdgeRecord, TrackerMapRecord, WorkItemRecord } from "@/types";
 
 type BlockersPageProps = {
   maps: readonly TrackerMapRecord[];
   workItems: readonly WorkItemRecord[];
   blockerEdges: readonly BlockerEdgeRecord[];
-  /** The effort map's id from the `?effort` param; null falls back to map order. */
-  effortId: string | null;
+  /** The map's id from the `?map` param; null falls back to map order. */
+  mapId: string | null;
   /** The focused node's id from the `?focus` param — the show-in-graph target. */
   focusId: string | null;
   expandClosed: boolean;
-  onEffortChange: (mapId: string) => void;
+  onMapChange: (mapId: string) => void;
   onExpandClosedChange: (expanded: boolean) => void;
   onOpenIssue: (issueId: string) => void;
 };
-
-const numberLabel = (id: string) => `#${id.slice(id.lastIndexOf("-") + 1)}`;
 
 const truncate = (text: string, max: number) =>
   text.length <= max ? text : `${text.slice(0, max - 1)}…`;
@@ -49,7 +48,7 @@ const blockerEdgePath = (from: BlockerBox, to: BlockerBox): string => {
 };
 
 const EMPTY_COPY: Record<"all-clear" | "in-flight" | "stuck-blocked", string> = {
-  "all-clear": "All clear — every ticket in this effort has closed.",
+  "all-clear": "All clear — every ticket in this map has closed.",
   "in-flight": " claimed — the work is in flight, not grabbable.",
   "stuck-blocked": "Nothing grabbable — open work waits on its gates.",
 };
@@ -64,16 +63,15 @@ export function BlockersPage({
   maps,
   workItems,
   blockerEdges,
-  effortId,
+  mapId,
   focusId,
   expandClosed,
-  onEffortChange,
+  onMapChange,
   onExpandClosedChange,
   onOpenIssue,
 }: BlockersPageProps) {
   const map =
-    maps.find((candidate) => candidate.mapId === effortId) ??
-    (effortId === null ? maps[0] : undefined);
+    maps.find((candidate) => candidate.mapId === mapId) ?? (mapId === null ? maps[0] : undefined);
 
   const header = (
     <>
@@ -84,12 +82,12 @@ export function BlockersPage({
         </div>
         <div className="flex items-center gap-2">
           <NativeSelect
-            aria-label="Effort"
+            aria-label="Map"
             className="w-64 text-xs"
-            value={map?.mapId ?? effortId ?? ""}
-            onChange={(event) => onEffortChange(event.target.value)}
+            value={map?.mapId ?? mapId ?? ""}
+            onChange={(event) => onMapChange(event.target.value)}
           >
-            {map ? null : <option value={effortId ?? ""}>{effortId ?? "—"}</option>}
+            {map ? null : <option value={mapId ?? ""}>{mapId ?? "—"}</option>}
             {maps.map((candidate) => (
               <option key={candidate.mapId} value={candidate.mapId}>
                 {candidate.mapId} · {truncate(candidate.title, 36)}
@@ -107,7 +105,7 @@ export function BlockersPage({
         </div>
       </div>
       <p className="max-w-2xl text-sm text-muted-foreground">
-        Each effort's gate chain at a glance — blockers left, blocked right, the grabbable frontier
+        Each map's gate chain at a glance — blockers left, blocked right, the grabbable frontier
         highlighted. A reference no collected record covers renders as broken: it counts open, so a
         typo'd gate can never silently ungate work.
       </p>
@@ -121,13 +119,13 @@ export function BlockersPage({
         <p className="text-sm text-muted-foreground" role="status">
           {maps.length === 0
             ? "No wayfinder map in the snapshot — sync a host repo with a wayfinder:map issue and its gate chain renders here."
-            : `The snapshot carries no such effort — ${effortId} matches no map.`}
+            : `The snapshot carries no such map — ${mapId} matches no map.`}
         </p>
       </div>
     );
   }
 
-  const graph = effortGraph(map, workItems, blockerEdges, maps);
+  const graph = mapGraph(map, workItems, blockerEdges, maps);
   const layout = layoutBlockerGraph({
     nodes: graph.nodes,
     // Dangling pairs ride along so the layout places their warning nodes —
@@ -141,11 +139,11 @@ export function BlockersPage({
   const warningBoxes = new Map(layout.warnings.map((warning) => [warning.blockerId, warning.box]));
   const positionOf = (id: string): BlockerBox | undefined =>
     layout.positions[id] ?? warningBoxes.get(id);
-  const frontierItems = itemsById(workItems.map(frontierItemFromWorkItem));
+  const blockerIndex = indexWorkItems(workItems);
 
   const nodes: GraphNodeDatum[] = graph.nodes.map((node: BlockerLayoutNode) => {
     const box = layout.positions[node.id];
-    const label = `#${numberLabel(node.id)}`;
+    const label = workItemIdLabel(node.id);
     const record = workItems.find((item) => item.id === node.id);
     const whyNot = whyNotLine(node.id, workItems, blockerEdges, graph.frontierIds);
     if (node.closed) {
@@ -169,7 +167,7 @@ export function BlockersPage({
     const { open: openGates, dangling: brokenGates } = openBlockers(
       node.id,
       blockerEdges,
-      frontierItems,
+      blockerIndex,
     );
     let sublabel: string;
     if (graph.frontierIds.has(node.id)) sublabel = "GRABBABLE";
@@ -195,7 +193,7 @@ export function BlockersPage({
     nodes.push({
       id: warning.blockerId,
       box: warning.box,
-      label: `⚠ ${numberLabel(warning.blockerId)} unknown reference`,
+      label: `⚠ ${workItemIdLabel(warning.blockerId)} unknown reference`,
       sublabel: "COUNTS OPEN · FAIL-CLOSED",
       accent: "var(--coral)",
       broken: true,
