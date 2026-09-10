@@ -2,9 +2,9 @@ import { describe, expect, it } from "vite-plus/test";
 
 import type { BlockerEdgeRecord, TrackerMapRecord, WorkItemRecord } from "../types";
 import {
-  effortFor,
   frontier,
   frontierItemFromWorkItem,
+  mapFor,
   openBlockers,
   type FrontierItem,
 } from "./frontier";
@@ -114,7 +114,7 @@ describe("frontier selector", () => {
   });
 });
 
-describe("effortFor", () => {
+describe("mapFor", () => {
   const maps: TrackerMapRecord[] = [
     {
       mapId: "GH-41",
@@ -124,11 +124,11 @@ describe("effortFor", () => {
     },
   ];
 
-  it("names a map child's effort as its map", () => {
-    expect(effortFor("GH-42", maps)).toBe("GH-41");
+  it("names a map child's map", () => {
+    expect(mapFor("GH-42", maps)).toBe("GH-41");
   });
 
-  it("names no effort for an item outside every map", () => {
-    expect(effortFor("GH-60", maps)).toBeNull();
+  it("names no map for an item outside every map", () => {
+    expect(mapFor("GH-60", maps)).toBeNull();
   });
 });

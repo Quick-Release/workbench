@@ -190,7 +190,7 @@ describe("the recommendation engine", () => {
     expect(recommendation?.issueId).toBe("GH-42");
   });
 
-  it("recommends /to-tickets on an effort sitting at specced (flow advance)", () => {
+  it("recommends /to-tickets on a map sitting at specced (flow advance)", () => {
     const recommendation = recommendNextAction(
       state([item(41, { kind: "map", phase: "specced" })], [map(41, [])]),
     );
@@ -201,7 +201,7 @@ describe("the recommendation engine", () => {
     expect(recommendation?.reason).toContain("flow advance");
   });
 
-  it("skips a gated or parked specced effort in the flow-advance bucket", () => {
+  it("skips a gated or parked specced map in the flow-advance bucket", () => {
     const recommendation = recommendNextAction(
       state(
         [

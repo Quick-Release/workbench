@@ -1,4 +1,5 @@
 import type { ArtifactRecord, DecisionRecord } from "../types";
+import { compareWorkItemIds } from "./work-item-id";
 
 // The decisions view's index (ticket #63): records regrouped by work item —
 // ADR, resolution, and spec records stay distinct but side by side, research
@@ -21,15 +22,8 @@ export const unlinkedWarning = (count: number) =>
 // The snapshot's stable id order (scripts/tracker/decisions.mjs): namespace
 // first, numerically within it, then source — so ADR records sort beside
 // their resolution rather than after every GH id.
-const namespace = (id: string) => id.slice(0, id.lastIndexOf("-"));
-
-const numberSuffix = (id: string) => Number(id.slice(id.lastIndexOf("-") + 1)) || 0;
-
-const compareIds = (left: string, right: string) =>
-  namespace(left).localeCompare(namespace(right)) || numberSuffix(left) - numberSuffix(right);
-
 const byRecordId = (left: { id: string; source: string }, right: { id: string; source: string }) =>
-  compareIds(left.id, right.id) || left.source.localeCompare(right.source);
+  compareWorkItemIds(left.id, right.id) || left.source.localeCompare(right.source);
 
 type MutableGroup = {
   workItemId: string | null;
@@ -63,7 +57,7 @@ export const decisionGroups = (
 
   const sorted: readonly DecisionGroup[] = [
     ...[...linked.values()].sort((left, right) =>
-      compareIds(left.workItemId ?? "", right.workItemId ?? ""),
+      compareWorkItemIds(left.workItemId ?? "", right.workItemId ?? ""),
     ),
   ];
   const hasUnlinked = unlinked.decisions.length + unlinked.artifacts.length > 0;

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import type { BlockerEdgeRecord, TrackerMapRecord, WorkItemRecord } from "../types";
-import { emptyStateFor, effortGraph, whyNotLine } from "./blockers";
+import { emptyStateFor, mapGraph, whyNotLine } from "./blockers";
 
 const item = (number: number, overrides: Partial<WorkItemRecord> = {}): WorkItemRecord => ({
   id: `GH-${number}`,
@@ -32,12 +32,12 @@ const map: TrackerMapRecord = {
   ticketIds: ["GH-42", "GH-51", "GH-53"],
 };
 
-describe("effortGraph", () => {
+describe("mapGraph", () => {
   it("scopes the canvas to the map's members plus their declared gates", () => {
     // GH-53 is gated by member GH-51 and by GH-7, which is no member — the
     // gate chain renders, the outsider renders as a node.
     const workItems = [item(42), item(51, { state: "closed" }), item(53), item(7)];
-    const graph = effortGraph(map, workItems, [edge(53, 51), edge(53, 7), edge(9, 8)], []);
+    const graph = mapGraph(map, workItems, [edge(53, 51), edge(53, 7), edge(9, 8)], []);
     expect(graph.nodes.map((node) => node.id)).toEqual(["GH-42", "GH-51", "GH-53", "GH-7"]);
     expect(graph.edges).toEqual([
       { blockedId: "GH-53", blockerId: "GH-51" },
@@ -47,7 +47,7 @@ describe("effortGraph", () => {
 
   it("renders a declared-but-unknown blocker as a dangling warning, fail-closed", () => {
     const workItems = [item(53)];
-    const graph = effortGraph(map, workItems, [edge(53, 99)], []);
+    const graph = mapGraph(map, workItems, [edge(53, 99)], []);
     expect(graph.nodes.map((node) => node.id)).toEqual(["GH-53"]);
     expect(graph.dangling).toEqual([{ blockedId: "GH-53", blockerId: "GH-99" }]);
   });
@@ -59,16 +59,16 @@ describe("effortGraph", () => {
       item(53),
       item(7, { state: "closed" }),
     ];
-    const graph = effortGraph(map, workItems, [edge(53, 7)], []);
+    const graph = mapGraph(map, workItems, [edge(53, 7)], []);
     expect(graph.frontierIds).toEqual(new Set(["GH-53"]));
     expect(graph.memberFrontierIds).toEqual(new Set(["GH-53"]));
   });
 
-  it("marks a grabbable gate outside the map as frontier on the canvas, not in the effort", () => {
+  it("marks a grabbable gate outside the map as frontier on the canvas, not in the map", () => {
     // GH-7 gates GH-53 and is itself open, unassigned, and unblocked —
     // grabbable work per ADR 0008 even though it is no map member.
     const workItems = [item(53, { state: "closed" }), item(7)];
-    const graph = effortGraph(map, workItems, [edge(53, 7)], []);
+    const graph = mapGraph(map, workItems, [edge(53, 7)], []);
     expect(graph.frontierIds).toEqual(new Set(["GH-7"]));
     expect(graph.memberFrontierIds).toEqual(new Set());
   });

@@ -1,4 +1,5 @@
 import type { TriageState, TrackerMapRecord, WorkItemRecord } from "../types";
+import { byIssueNumber, workItemIdNumberText } from "./work-item-id";
 
 // The triage view's lanes (ticket #59): an Intake lane — the triage skill's
 // surface of unlabeled ∪ needs-triage issues with map children excluded — and
@@ -16,9 +17,6 @@ export type TriageLanes = {
 
 export const isMapChild = (record: WorkItemRecord, maps: readonly TrackerMapRecord[]) =>
   maps.some((map) => map.ticketIds.includes(record.id));
-
-const byIssueNumber = (left: WorkItemRecord, right: WorkItemRecord) =>
-  Number(left.id.slice(3)) - Number(right.id.slice(3));
 
 // Partition rule, first match wins: refusal, then the Waiting groups in
 // whose-move order (reporter, human, parked), then Intake — unlabeled ∪
@@ -81,7 +79,7 @@ const SETTLE_TARGET: Record<TriageState, TriageState | null> = {
 export const staticMoveCommand = (record: WorkItemRecord): string => {
   const target = record.deferred ? "needs-triage" : SETTLE_TARGET[record.triageState];
   if (!target) return "";
-  const args = ["gh issue edit", record.id.slice(3), "--add-label", target];
+  const args = ["gh issue edit", workItemIdNumberText(record.id), "--add-label", target];
   if (record.deferred) args.push("--remove-label", "deferred");
   if (record.triageState !== "unlabeled" && record.triageState !== target)
     args.push("--remove-label", record.triageState);

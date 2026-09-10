@@ -1,8 +1,9 @@
 import type { WorkItemRecord } from "../types";
 import { deriveDisplayState } from "./display-state";
+import { byIssueNumber } from "./work-item-id";
 
-// ADR 0010's in-flight bucket (ticket #62): the assigned work a Developer
-// resumes before grabbing anything new, in priority order — reviewing, then
+// The in-flight bucket (ticket #62): the assigned work a Developer resumes
+// before grabbing anything new, in priority order — reviewing, then
 // implementing, then claimed-but-not-started. Membership derives from
 // display state alone; the view over it is informational only.
 export type InFlightBuckets = {
@@ -10,9 +11,6 @@ export type InFlightBuckets = {
   implementing: WorkItemRecord[];
   notStarted: WorkItemRecord[];
 };
-
-const byIssueNumber = (left: WorkItemRecord, right: WorkItemRecord) =>
-  Number(left.id.slice(3)) - Number(right.id.slice(3));
 
 // The excluded states (ticket #62): work waiting on someone else or already
 // done never poses as in flight — needs-info and ready-for-human belong to

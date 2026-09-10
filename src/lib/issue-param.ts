@@ -11,7 +11,7 @@ export const panelIdFor = (param: string | undefined): string | null => {
   return param === "new" ? "new" : `GH-${param}`;
 };
 
-// The blocker graph's params (ticket #61): `?effort` names the map — the
+// The blocker graph's params (ticket #61): `?map` names the map — the
 // panel's show-in-graph link spells it qualified (GH-41), bare numbers work
 // too — and `?focus` deep-links a node as the jump target. `?expand` is the
 // closed tier's toggle, spelled 1/0 like the other URL-param toggles.
@@ -22,8 +22,8 @@ const qualifiedId = (value: unknown): string | undefined =>
       ? value
       : undefined;
 
-export const effortParamFromSearch = (search: Record<string, unknown>): string | undefined =>
-  qualifiedId(search.effort);
+export const mapParamFromSearch = (search: Record<string, unknown>): string | undefined =>
+  qualifiedId(search.map);
 
 export const focusParamFromSearch = (search: Record<string, unknown>): string | undefined =>
   qualifiedId(search.focus);

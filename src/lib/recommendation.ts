@@ -7,14 +7,15 @@ import type {
 import { deriveDisplayState } from "./display-state";
 import { frontier, frontierItemFromWorkItem } from "./frontier";
 import { inFlightBuckets } from "./in-flight";
+import { byMapOrderThenNumber, mapOrderIndex } from "./map-order";
 import { triageLanes } from "./triage";
+import { workItemIdLabel } from "./work-item-id";
 
-// ADR 0010's ordered priority table (spec #54, "Derivation"): the
-// recommendation engine is a pure function over the snapshot, layering
-// readiness filters on the structural frontier and reading the buckets in
-// order — the global recommendation is the head of the first non-empty
-// bucket. There is no to-spec row: grilling completion is not
-// machine-detectable.
+// The ordered priority table (spec #54, "Derivation"): the recommendation
+// engine is a pure function over the snapshot, layering readiness filters on
+// the structural frontier and reading the buckets below in order — the
+// global recommendation is the head of the first non-empty bucket. There is
+// no to-spec row: grilling completion is not machine-detectable.
 export const recommendationBuckets = [
   "in-flight",
   "implementation-frontier",
@@ -38,26 +39,14 @@ export type Recommendation = {
   reason: string;
 };
 
-// Tiebreaks (ADR 0010): map order where it exists, otherwise issue number
-// ascending.
-const mapOrder = (maps: readonly TrackerMapRecord[]) => {
-  const order = new Map<string, number>();
-  for (const map of maps)
-    for (const ticketId of map.ticketIds) if (!order.has(ticketId)) order.set(ticketId, order.size);
-  return order;
-};
-
-const byMapOrderThenNumber =
-  (order: Map<string, number>) =>
-  (left: WorkItemRecord, right: WorkItemRecord): number =>
-    (order.get(left.id) ?? Number.MAX_SAFE_INTEGER) -
-      (order.get(right.id) ?? Number.MAX_SAFE_INTEGER) ||
-    Number(left.id.slice(3)) - Number(right.id.slice(3));
+// Buckets tiebreak by map order where membership gives one, otherwise issue
+// number ascending — the shared comparator (map-order).
+const compareInMapOrder = (maps: readonly TrackerMapRecord[]) =>
+  byMapOrderThenNumber(mapOrderIndex(maps));
 
 const inFlightBucket = (state: WorkflowStatePayload): Recommendation[] => {
   const buckets = inFlightBuckets(state.workItems);
-  const order = mapOrder(state.maps);
-  const compare = byMapOrderThenNumber(order);
+  const compare = compareInMapOrder(state.maps);
   const rows: { records: WorkItemRecord[]; command: string | null; reason: string }[] = [
     {
       records: buckets.reviewing,
@@ -77,15 +66,15 @@ const inFlightBucket = (state: WorkflowStatePayload): Recommendation[] => {
   ];
   const recommendations: Recommendation[] = [];
   for (const { records, command, reason } of rows) {
-    for (const record of [...records].sort(compare))
+    for (const record of [...records].sort((left, right) => compare(left.id, right.id)))
       recommendations.push({
         bucket: "in-flight",
         issueId: record.id,
         title: record.title,
         command,
         primary: command
-          ? `${command} #${record.id.slice(3)}`
-          : `#${record.id.slice(3)} claimed — not started`,
+          ? `${command} ${workItemIdLabel(record.id)}`
+          : `${workItemIdLabel(record.id)} claimed — not started`,
         reason,
       });
   }
@@ -122,14 +111,14 @@ const implementationFrontierBucket = (state: WorkflowStatePayload): Recommendati
       issueId: record.id,
       title: record.title,
       command: "/implement",
-      primary: `/implement #${record.id.slice(3)}`,
+      primary: `/implement ${workItemIdLabel(record.id)}`,
       reason: "implementation frontier — ticketed, ready-for-agent, every blocker closed",
     });
   }
   return recommendations;
 };
 
-// Readiness filters (ADR 0010, story 6): the recommendation never points at
+// Readiness filters (spec #54, story 6): the recommendation never points at
 // work waiting on someone else — needs-info, ready-for-human, deferred,
 // wontfix, and shipped work are skipped in every bucket.
 const waiting = (display: { triageState: string; deferred: boolean; phase: string | null }) =>
@@ -168,27 +157,26 @@ const mapFrontierBucket = (state: WorkflowStatePayload): Recommendation[] => {
       title: record.title,
       command,
       primary: command
-        ? `${command} #${record.id.slice(3)}`
-        : `#${record.id.slice(3)} claimed — not started`,
+        ? `${command} ${workItemIdLabel(record.id)}`
+        : `${workItemIdLabel(record.id)} claimed — not started`,
       reason: `map frontier — grabbable ${record.kind} ticket, first in map order`,
     });
   }
   return recommendations;
 };
 
-// Flow advance: `/to-tickets` on efforts sitting at specced. Maps carry
+// Flow advance: `/to-tickets` on maps sitting at specced. Maps carry
 // phase like any issue (ADR 0007 — to-spec labels the map), so a specced
 // map is the flow-advance signal. There is no to-spec row: grilling
 // completion is not machine-detectable.
 const flowAdvanceBucket = (state: WorkflowStatePayload): Recommendation[] => {
-  const order = mapOrder(state.maps);
-  const compare = byMapOrderThenNumber(order);
+  const compare = compareInMapOrder(state.maps);
   const recommendations: Recommendation[] = [];
   const specced = state.maps
     .map((map) => state.workItems.find((item) => item.id === map.mapId))
     .filter((record): record is WorkItemRecord => record !== undefined)
     .filter((record) => record.phase === "specced")
-    .sort(compare);
+    .sort((left, right) => compare(left.id, right.id));
   for (const record of specced) {
     const display = deriveDisplayState(record, false);
     if (waiting(display)) continue;
@@ -197,8 +185,8 @@ const flowAdvanceBucket = (state: WorkflowStatePayload): Recommendation[] => {
       issueId: record.id,
       title: record.title,
       command: "/to-tickets",
-      primary: `/to-tickets #${record.id.slice(3)}`,
-      reason: "flow advance — the effort sits at specced, ready for tickets",
+      primary: `/to-tickets ${workItemIdLabel(record.id)}`,
+      reason: "flow advance — the map sits at specced, ready for tickets",
     });
   }
   return recommendations;
@@ -216,7 +204,7 @@ const triageIntakeBucket = (state: WorkflowStatePayload): Recommendation[] => {
     issueId: record.id,
     title: record.title,
     command: "/triage",
-    primary: `/triage #${record.id.slice(3)}`,
+    primary: `/triage ${workItemIdLabel(record.id)}`,
     reason: "triage intake — fresh work awaiting triage",
   }));
 };
@@ -237,11 +225,11 @@ export const recommendNextAction = (state: WorkflowStatePayload): Recommendation
   return null;
 };
 
-// The repo-wide frontier strip (ADR 0011): each map's grabbable head in map
-// order, plus the unmapped grabbable issues with no ordering pretense —
-// ascending issue number, deterministically, claiming no priority. Both
-// halves are the structural frontier (open ∧ unassigned ∧ all blockers
-// closed, unknown references fail closed).
+// The repo-wide frontier strip: each map's grabbable head in map order, plus
+// the unmapped grabbable issues with no ordering pretense — ascending issue
+// number, deterministically, claiming no priority. Both halves are the
+// structural frontier (open ∧ unassigned ∧ all blockers closed, unknown
+// references fail closed).
 export type FrontierStripMap = {
   map: TrackerMapRecord;
   head: WorkItemRecord | null;

@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import {
-  effortParamFromSearch,
   expandParamFromSearch,
   focusParamFromSearch,
   issueParamFromSearch,
+  mapParamFromSearch,
   panelIdFor,
 } from "./issue-param";
 
@@ -26,10 +26,10 @@ describe("the ?issue search-param grammar", () => {
 });
 
 describe("the blocker graph's search-param grammar (ticket #61)", () => {
-  it("accepts the panel's show-in-graph spellings — qualified effort, bare focus", () => {
-    expect(effortParamFromSearch({ effort: "GH-41" })).toBe("GH-41");
-    expect(effortParamFromSearch({ effort: "41" })).toBe("GH-41");
-    expect(effortParamFromSearch({ effort: "nope" })).toBeUndefined();
+  it("accepts the panel's show-in-graph spellings — qualified map, bare focus", () => {
+    expect(mapParamFromSearch({ map: "GH-41" })).toBe("GH-41");
+    expect(mapParamFromSearch({ map: "41" })).toBe("GH-41");
+    expect(mapParamFromSearch({ map: "nope" })).toBeUndefined();
     expect(focusParamFromSearch({ focus: "42" })).toBe("GH-42");
     expect(focusParamFromSearch({ focus: "GH-42" })).toBe("GH-42");
     expect(focusParamFromSearch({ focus: "new" })).toBeUndefined();

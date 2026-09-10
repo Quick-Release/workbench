@@ -5,6 +5,7 @@
 // swap-in replaces only this module, never the views.
 
 import type { BlockerEdgeRecord } from "../types";
+import { byNumberThenId } from "./map-order";
 
 export type BlockerLayoutNode = {
   id: string;
@@ -14,15 +15,13 @@ export type BlockerLayoutNode = {
 
 export type BlockerEdgePair = Pick<BlockerEdgeRecord, "blockedId" | "blockerId">;
 
-const numberSuffix = (id: string) => Number(id.slice(id.lastIndexOf("-") + 1)) || 0;
-
 // Longest-path ranking over real edges only — a dangling edge names no
 // endpoint to traverse, so it contributes no rank (its blocker renders as a
 // warning node beside the column instead). Cycles have no depth order to
 // expose: every edge whose blocker reaches back to the blocked ticket drops
 // first, so the members of a declared cycle rank as if unblocked by each
 // other and the computation stays finite; sync warns about the cycle
-// separately (ADR 0008). Effort graphs are small (≤ ~50 nodes), so plain
+// separately (ADR 0008). Map graphs are small (≤ ~50 nodes), so plain
 // reachability checks carry the cycle detection.
 export const blockerRanks = (
   nodes: readonly BlockerLayoutNode[],
@@ -74,7 +73,8 @@ export const blockerRanks = (
 };
 
 // Within-layer order: map order where membership gives one — "first in map
-// order wins" (ADR 0008) — then issue number ascending for the rest.
+// order wins" (ADR 0008) — then the shared number-then-id tiebreak for the
+// rest.
 export const blockerOrders = (
   members: readonly string[],
   nodes: readonly BlockerLayoutNode[],
@@ -86,7 +86,7 @@ export const blockerOrders = (
   const nonMembers = nodes
     .map((node) => node.id)
     .filter((id) => !(id in orders))
-    .sort((left, right) => numberSuffix(left) - numberSuffix(right) || left.localeCompare(right));
+    .sort(byNumberThenId);
   nonMembers.forEach((id, index) => {
     orders[id] = members.length + index;
   });

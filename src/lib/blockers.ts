@@ -1,39 +1,46 @@
 import type { BlockerEdgeRecord, TrackerMapRecord, WorkItemRecord } from "../types";
-import { frontierItemFromWorkItem, frontier, itemsById, openBlockers } from "./frontier";
 import type { BlockerEdgePair, BlockerLayoutNode } from "./blocker-layout";
+import {
+  frontierItemFromWorkItem,
+  frontier,
+  indexWorkItems,
+  itemsById,
+  openBlockers,
+} from "./frontier";
 
-// The blocker graph's derivation (ticket #61): what the per-effort canvas
+// The blocker graph's derivation (ticket #61): what the per-map canvas
 // shows, the why-not-grabbable line on every non-frontier node, and the
 // three-way empty split. Pure over the workflow state; rendering consumes
 // the results verbatim.
 
-export type EffortDangling = { blockedId: string; blockerId: string };
+export type MapDangling = { blockedId: string; blockerId: string };
 
-export type EffortGraph = {
+export type MapGraph = {
   nodes: BlockerLayoutNode[];
   edges: BlockerEdgePair[];
-  dangling: EffortDangling[];
+  dangling: MapDangling[];
   /** Grabbable nodes on the canvas — members and their gates alike (ADR 0008's frontier is not map-scoped). */
   frontierIds: Set<string>;
-  /** Grabbable members only — the effort's own frontier, the empty banner's input. */
+  /** Grabbable members only — the map's own frontier, the empty banner's input. */
   memberFrontierIds: Set<string>;
 };
 
-// The canvas's scope: the effort map's members plus every known gate they
-// declare, edges into members, and unknown references kept as fail-closed
-// dangling warnings (ADR 0008) so a typo'd gate shows as broken, never as
-// silently ungating work.
-export const effortGraph = (
+// The canvas's scope: the map's members plus every known gate they declare,
+// edges into members, and unknown references kept as fail-closed dangling
+// warnings (ADR 0008) so a typo'd gate shows as broken, never as silently
+// ungating work.
+export const mapGraph = (
   map: TrackerMapRecord,
   workItems: readonly WorkItemRecord[],
   blockerEdges: readonly BlockerEdgeRecord[],
   maps: readonly TrackerMapRecord[],
-): EffortGraph => {
+): MapGraph => {
   const members = new Set(map.ticketIds);
-  const byId = itemsById(workItems.map(frontierItemFromWorkItem));
+  const frontierItems = workItems.map(frontierItemFromWorkItem);
+  const byId = itemsById(frontierItems);
 
   const edges: BlockerEdgePair[] = [];
-  const dangling: EffortDangling[] = [];
+  const dangling: MapDangling[] = [];
   const gateIds = new Set<string>();
   for (const record of blockerEdges) {
     if (!members.has(record.blockedId)) continue;
@@ -60,9 +67,7 @@ export const effortGraph = (
     if (node) nodes.push(node);
   }
 
-  const grabbable = new Set(
-    frontier(workItems.map(frontierItemFromWorkItem), blockerEdges, maps).map((item) => item.id),
-  );
+  const grabbable = new Set(frontier(frontierItems, blockerEdges, maps).map((item) => item.id));
   const canvasIds = new Set(nodes.map((node) => node.id));
   const frontierIds = new Set([...grabbable].filter((id) => canvasIds.has(id)));
   const memberFrontierIds = new Set([...grabbable].filter((id) => members.has(id)));
@@ -86,8 +91,7 @@ export const whyNotLine = (
   if (record.assignees.length > 0)
     return `Not grabbable — claimed by ${record.assignees.map((a) => `@${a}`).join(", ")}.`;
 
-  const byId = itemsById(workItems.map(frontierItemFromWorkItem));
-  const { open, dangling } = openBlockers(issueId, blockerEdges, byId);
+  const { open, dangling } = openBlockers(issueId, blockerEdges, indexWorkItems(workItems));
   const bits: string[] = [];
   if (open.length > 0) bits.push(`blocked by ${open.length} open (${open.join(", ")})`);
   if (dangling.length > 0)

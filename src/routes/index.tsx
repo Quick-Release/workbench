@@ -2,12 +2,12 @@ import { useState } from "react";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { z } from "zod";
 
-import { IssueDetailPanel } from "../components/IssueDetailPanel";
+import { IssuePanelHost } from "../components/IssuePanelHost";
 import { OverviewPage } from "../components/OverviewPage";
 import { overviewData } from "../data";
-import { useIssueActionRunner } from "../hooks/use-issue-actions";
-import { useWorkflowMode, useWorkflowState, setWorkflowState } from "../hooks/use-workflow-state";
-import { issueParamFromSearch, panelIdFor } from "../lib/issue-param";
+import { setWorkflowState, useWorkflowMode, useWorkflowState } from "../hooks/use-workflow-state";
+import { issueParamFromSearch } from "../lib/issue-param";
+import { workItemIdNumberText } from "../lib/work-item-id";
 import { parseSyncTriggerResult } from "../schema";
 
 const searchSchema = z.object({
@@ -34,13 +34,7 @@ function WorkbenchRoute() {
   const [syncPending, setSyncPending] = useState(false);
   const [syncMessage, setSyncMessage] = useState<string | null>(null);
   const [syncWarnings, setSyncWarnings] = useState<readonly string[]>([]);
-  const {
-    pending: panelPending,
-    message: panelMessage,
-    run: runIssueAction,
-  } = useIssueActionRunner();
   const issueParam = Route.useSearch({ select: (s) => s.issue });
-  const panelIssueId = panelIdFor(issueParam);
 
   const setIssueParam = (issue: string | undefined) =>
     navigate({ search: (prev) => ({ ...prev, issue }) });
@@ -78,24 +72,16 @@ function WorkbenchRoute() {
         data={overviewData}
         state={state}
         mode={mode}
-        onOpenIssue={(issueId) => setIssueParam(issueId.slice(3))}
+        onOpenIssue={(issueId) => setIssueParam(workItemIdNumberText(issueId))}
         onSync={() => void sync()}
         syncPending={syncPending}
         syncMessage={syncMessage}
         syncWarnings={syncWarnings}
       />
-      <IssueDetailPanel
-        issueId={panelIssueId}
-        state={state}
-        mode={mode}
-        pending={panelPending}
-        message={panelMessage}
-        onOpenChange={(open) => {
-          if (!open) setIssueParam(undefined);
-        }}
-        onAction={(action) =>
-          void runIssueAction(action, undefined, (issueId) => setIssueParam(issueId))
-        }
+      <IssuePanelHost
+        issueParam={issueParam}
+        onParamChange={setIssueParam}
+        onCreated={setIssueParam}
       />
     </>
   );

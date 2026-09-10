@@ -5,7 +5,8 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { deriveDisplayState } from "@/lib/display-state";
-import { effortFor, frontierItemFromWorkItem, itemsById, openBlockers } from "@/lib/frontier";
+import { indexWorkItems, mapFor, openBlockers } from "@/lib/frontier";
+import { workItemIdNumberText } from "@/lib/work-item-id";
 import { cn } from "@/lib/utils";
 import type { WorkflowStatePayload } from "../types";
 
@@ -35,7 +36,7 @@ const commandClass = "block rounded bg-muted px-2 py-1 text-xs break-all";
 const shellQuote = (text: string) => text.replace(/"/g, '\\"');
 
 const githubUrl = (issueId: string, repo: string) =>
-  `https://github.com/${repo}/issues/${issueId.slice(3)}`;
+  `https://github.com/${repo}/issues/${workItemIdNumberText(issueId)}`;
 
 const secondaryLink =
   "inline-flex items-center gap-1 text-xs text-muted-foreground underline-offset-4 hover:underline";
@@ -133,15 +134,11 @@ function IssueRecordSections({
   const [bodyDraft, setBodyDraft] = useState("");
   const [confirmingEdit, setConfirmingEdit] = useState(false);
 
-  const blockers = openBlockers(
-    record.id,
-    state.blockerEdges,
-    itemsById(state.workItems.map(frontierItemFromWorkItem)),
-  );
+  const blockers = openBlockers(record.id, state.blockerEdges, indexWorkItems(state.workItems));
   const blocked = blockers.open.length > 0 || blockers.dangling.length > 0;
   const display = deriveDisplayState(record, blocked);
-  const effort = effortFor(record.id, state.maps);
-  const number = record.id.slice(3);
+  const map = mapFor(record.id, state.maps);
+  const number = workItemIdNumberText(record.id);
   const repo = state.meta.repo;
 
   const blockedLine =
@@ -183,8 +180,8 @@ function IssueRecordSections({
           </p>
         ))}
         <div className="flex flex-wrap items-center gap-3">
-          {effort && (
-            <a className={secondaryLink} href={`/blockers?effort=${effort}&focus=${number}`}>
+          {map && (
+            <a className={secondaryLink} href={`/blockers?map=${map}&focus=${number}`}>
               <Network className="size-3.5" />
               Show in graph
             </a>
@@ -363,10 +360,10 @@ function BlockerEdgesSection({
   const [confirmingRemoval, setConfirmingRemoval] = useState<string | null>(null);
 
   const declared = state.blockerEdges.filter((edge) => edge.blockedId === record.id);
-  const number = record.id.slice(3);
+  const number = workItemIdNumberText(record.id);
   const repo = state.meta.repo;
   const databaseId = (blockerId: string) =>
-    `$(gh api repos/${repo}/issues/${blockerId.slice(3)} --jq .id)`;
+    `$(gh api repos/${repo}/issues/${workItemIdNumberText(blockerId)} --jq .id)`;
   const addCommand = `gh api --method POST repos/${repo}/issues/${number}/dependencies/blocked_by -F issue_id=${databaseId(blockerDraft || "GH-")}`;
   const removeCommand = (blockerId: string) =>
     `gh api --method DELETE repos/${repo}/issues/${number}/dependencies/blocked_by/${databaseId(blockerId)}`;

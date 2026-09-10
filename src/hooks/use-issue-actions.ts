@@ -2,6 +2,7 @@ import { useState } from "react";
 
 import type { IssuePanelAction } from "../components/IssueDetailPanel";
 import { issueActionBody, issueActionRoute, parseIssueActionResult } from "../lib/issue-actions";
+import { workItemIdNumberText } from "../lib/work-item-id";
 import type { WorkflowStatePayload } from "../types";
 import { setWorkflowState } from "./use-workflow-state";
 
@@ -40,7 +41,8 @@ export const useIssueActionRunner = () => {
         onState?.(result.state);
       }
       setMessage(result.message);
-      if (action.kind === "create" && "issueId" in result) onCreated?.(result.issueId.slice(3));
+      if (action.kind === "create" && "issueId" in result)
+        onCreated?.(workItemIdNumberText(result.issueId));
     } catch {
       setMessage("The action did not go through — the dev server API is not reachable.");
     } finally {
