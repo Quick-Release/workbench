@@ -1,5 +1,11 @@
 # @quick-release/workbench
 
+## 0.12.0
+
+### Minor Changes
+
+- 65a6428: Standards follow-ups from the #74 review batch, plus the recorded review-gate decision. The blocker-graph view speaks CONTEXT.md's vocabulary — the deep link is now `/blockers?map=GH-NN&focus=NN` (was `?effort=`), and the picker's aria label and empty-state copy say Map. The triage view reads the shared workflow atom instead of its own live-read fetch, so its rows, panel, and every other view see one state. The sync trigger's warnings channel is structured: sync writes a `syncWarnings` export into the generated snapshot module and the seam reads it from the same mtime-keyed import instead of scraping the "Tracker warnings (N)" console copy (older generated modules degrade to an empty channel). Two new lib modules gather the duplicated logic — `work-item-id.ts` (the namespaced id grammar: namespace, number, `#NN` label, stable id order, issue-number sort) and `map-order.ts` (the map-order tiebreak) — and `IssuePanelHost` replaces the panel wiring repeated across the overview, blockers, and triage routes. Comments citing the prototype-branch ADR 0010/0011 now repoint at the in-code tables they describe. CodeRabbit's automatic PR review is disabled; a human's review and explicit merge instruction are the gate (ADR 0011).
+
 ## 0.11.0
 
 ### Minor Changes
