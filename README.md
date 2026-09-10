@@ -109,8 +109,9 @@ script when you run `pnpm install`. A failing check blocks the commit until
 it is fixed; the hook also refuses commits with a stale
 `src/data.generated.ts` (run `pnpm sync` and stage the result). Bypass with
 `git commit --no-verify` only in a genuine emergency. Merges to `main` are
-additionally gated on review: pull requests are required, and CodeRabbit
-reviews every PR automatically.
+additionally gated on review: pull requests are required, and a human
+reviews and merges — the CodeRabbit automatic reviewer is disabled
+(ADR 0011).
 
 ## Configuration
 
