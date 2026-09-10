@@ -11,16 +11,8 @@ submodule.
 
 ## Install it in a host repository
 
-Workbench is distributed through the GitHub Packages npm registry. One-time
-setup — give npm/pnpm the scoped registry and a token with `read:packages`
-(user-level `~/.npmrc` or the host repo's `.npmrc`):
-
-```ini
-@quick-release:registry=https://npm.pkg.github.com
-//npm.pkg.github.com/:_authToken=<GitHub token with read:packages>
-```
-
-Then, in the host repository:
+Workbench is distributed through the public npm registry. In the host
+repository:
 
 ```sh
 pnpm add @quick-release/workbench

@@ -23,9 +23,22 @@ jobs:
           cache: pnpm
       # The changesets action overrides user-level npm config with its own
       # generated .npmrc, so put a literal (CI-only) token in the project
-      # .npmrc, which both npm and pnpm always honor.
-      - name: Configure GitHub Packages auth
-        run: echo "//npm.pkg.github.com/:_authToken=${{ secrets.GITHUB_TOKEN }}" >> .npmrc
+      # .npmrc, which both npm and pnpm always honor. The publish registry
+      # follows the NPM_TOKEN secret: npmjs.com when it is set (public
+      # installs need no GitHub auth), GitHub Packages otherwise.
+      - name: Configure publish registry
+        env:
+          NPMJS_TOKEN: ${{ secrets.NPM_TOKEN }}
+          GH_PACKAGES_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ -n "$NPMJS_TOKEN" ]; then
+            echo "//registry.npmjs.org/:_authToken=$NPMJS_TOKEN" >> .npmrc
+            echo "NPM_TOKEN=$NPMJS_TOKEN" >> "$GITHUB_ENV"
+          else
+            echo "@quick-release:registry=https://npm.pkg.github.com" >> .npmrc
+            echo "//npm.pkg.github.com/:_authToken=$GH_PACKAGES_TOKEN" >> .npmrc
+            echo "NPM_TOKEN=$GH_PACKAGES_TOKEN" >> "$GITHUB_ENV"
+          fi
       - run: pnpm install --frozen-lockfile
       - run: pnpm check
       - uses: changesets/action@v1
@@ -33,7 +46,7 @@ jobs:
           publish: pnpm run release-publish
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          NPM_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NPM_TOKEN: ${{ env.NPM_TOKEN }}
       # The changesets action silently skips the tag push and the GitHub
       # release (its --follow-tags push misses changesets v3's lightweight
       # tags) — this step finishes the release the repo's way (#77), and
