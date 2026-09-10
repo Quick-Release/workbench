@@ -2,6 +2,8 @@
 
 Status: accepted
 
+Work item: GH-111
+
 The repository ran with CodeRabbit as the standing reviewer: it reviewed every pull request automatically, its approval gated merges, and `AGENTS.md`, the README, and the pull-request template steered authors to batch pushes and summon `@coderabbitai review` by hand. That automation is now switched off — CodeRabbit is disabled on this repository, and nothing automatic takes its place. The gate does not loosen with it: `main` stays protected, pull requests stay required, and the review that admits a merge is a **human's**, expressed operationally as the explicit merge instruction. The standing rule that agents must not merge their own pull requests unless explicitly instructed was one guard among several while the bot gate existed; with the bot gone it is the gate, and it is a human act by definition.
 
 What changes in practice: a PR's author — human or agent — requests review from a human instead of relying on a bot's badge; "reviewed" means the human read the change and said merge, not that an approval appeared; batching pushes and keeping a PR in draft until it is reviewable end-to-end remain the courtesies that make that human review one coherent reading instead of a stream of diffs. What does not change: CodeRabbit-the-product stays a **review engine** in CONTEXT.md's sense — a local CLI a Developer can start against a pull request from the dashboard, probed and health-checked like any other engine. The GitHub App's automatic PR review and the locally-run CLI are different surfaces; only the former is retired.
