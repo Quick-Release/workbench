@@ -115,6 +115,24 @@ export type ClientTicketCoverage = {
   reasons: readonly string[];
 };
 
+// The bug gate's typed denial (GH-136, ADR 0012): what a refused start
+// carries over the seam — the reason, a human explanation, and the open
+// client bugs blocking, repository-scoped. The browser renders the refs
+// instead of guessing at a failure.
+export const startDenialReasons = [
+  "client_bugs_open",
+  "client_priority_unverified",
+  "target_not_open",
+] as const;
+
+export type StartDenialReason = (typeof startDenialReasons)[number];
+
+export type StartDenial = {
+  error: StartDenialReason;
+  message: string;
+  blocking: readonly { id: string; title: string; url: string }[];
+};
+
 // ADR 0008: the tracker adapter's first-class records. A work item carries
 // exactly what display state derives from (phase + triage + deferred +
 // open/closed + assignees + kind); a map record is membership and order.

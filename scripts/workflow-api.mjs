@@ -24,6 +24,7 @@ import {
 import { workflowStateFrom } from "../src/lib/workflow-state.ts";
 import { byIssueNumber, workItemIdNumber } from "../src/lib/work-item-id.ts";
 import { deriveWorkItem } from "./tracker/labels.mjs";
+import { ghIssueRecord } from "./tracker/gh-view.mjs";
 import { collectClientTickets } from "./tracker/client-tickets.mjs";
 import { tokenFromGhCli } from "./tracker/index.mjs";
 import { GITHUB_API } from "./tracker/issues.mjs";
@@ -83,40 +84,17 @@ const runGh = (command, args, cwd) => execFileAsync(command, args, { cwd, encodi
 const messageFrom = (error) =>
   String(error?.stderr ?? error?.message ?? error ?? "unexpected failure").trim();
 
-// `gh issue view --json` reports the GraphQL state spelling (OPEN/CLOSED) and
-// names the web url `url`; the tracker grammar expects the REST shapes.
-const issueFromGhView = (payload) => ({
-  number: payload.number,
-  title: payload.title ?? "",
-  body: payload.body ?? "",
-  state: String(payload.state ?? "").toLocaleLowerCase() === "closed" ? "closed" : "open",
-  html_url: payload.url ?? "",
-  assignees: Array.isArray(payload.assignees) ? payload.assignees : [],
-  labels: Array.isArray(payload.labels) ? payload.labels : [],
-});
-
 const issueNumberFrom = (issueId) => /^GH-(\d+)$/.exec(issueId)?.[1];
 
 // Read the issue back through the same label grammar sync uses, so the
 // served state stays tracker-derived rather than drifting from it. A write
 // that succeeded but cannot be read back is a 502, not silence.
-const readIssueRecord = async (number, state, run, cwd) => {
-  const readBack = await run(
-    "gh",
-    [
-      "issue",
-      "view",
-      number,
-      "--repo",
-      state.meta.repo,
-      "--json",
-      "number,title,url,state,assignees,labels,body",
-    ],
-    cwd,
-  );
-  const { record: derived } = deriveWorkItem(issueFromGhView(JSON.parse(readBack.stdout)));
-  return derived;
-};
+const readIssueRecord = async (number, state, run, cwd) =>
+  ghIssueRecord({
+    issue: number,
+    repo: state.meta.repo,
+    run: (args) => run("gh", args, cwd),
+  });
 
 const readBackOrFail = async (issueId, number, state, run, cwd, verb) => {
   try {
