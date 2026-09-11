@@ -24,6 +24,10 @@ export const workflowStateFrom = (
   },
   // GH-145: the sync warnings channel, live reads only.
   ...(warnings && warnings.length > 0 ? { warnings } : {}),
+  // Ticket #146: the board's shipped page and parsed placement table ride
+  // only when the snapshot carries them, same as the freshness stamp.
+  ...(snapshot.recentlyShipped ? { recentlyShipped: snapshot.recentlyShipped } : {}),
+  ...(snapshot.decisionPlacement ? { decisionPlacement: snapshot.decisionPlacement } : {}),
   // GH-136: spread so an older snapshot without the field serializes without
   // the key instead of an undefined value.
   ...(snapshot.clientCoverage ? { clientCoverage: snapshot.clientCoverage } : {}),

@@ -17,6 +17,7 @@ import {
   artifactKinds,
   blockerEdgeSources,
   clientTicketKinds,
+  decisionTicketKinds,
   startDenialReasons,
   decisionSources,
   decisionStatuses,
@@ -83,6 +84,22 @@ export const WorkflowPhaseSchema = Schema.NullOr(Schema.Literals(workflowPhases)
 export const TriageStateSchema = Schema.Literals(triageStates);
 
 export const WayfinderKindSchema = Schema.NullOr(Schema.Literals(wayfinderKinds));
+
+// The board-placement columns are canonical phases, never null — a
+// decision ticket's placement always names two real columns.
+export const WorkflowPhaseColumnSchema = Schema.Literals(workflowPhases);
+
+// The decision-ticket kinds, map excluded — a placement row never places a
+// map (it carries phase like any work item).
+export const DecisionTicketKindSchema = Schema.Literals(decisionTicketKinds);
+
+// Ticket #146: one row of the parsed board-placement table — where a
+// decision-ticket kind sits open vs closed.
+export const DecisionPlacementRowSchema = Schema.Struct({
+  kind: DecisionTicketKindSchema,
+  openColumn: WorkflowPhaseColumnSchema,
+  closedColumn: WorkflowPhaseColumnSchema,
+});
 
 export const TrackerCategorySchema = Schema.NullOr(Schema.Literals(trackerCategories));
 
@@ -215,6 +232,11 @@ export const WorkflowStatePayloadSchema = Schema.Struct({
   artifacts: Schema.Array(ArtifactRecordSchema),
   meta: WorkflowStateMetaSchema,
   warnings: Schema.optional(Schema.Array(Schema.String)),
+  // Ticket #146: the shipped page and the parsed placement table ride only
+  // when the snapshot carries them; the excess-property matrix makes a
+  // present-but-malformed key a loud failure.
+  recentlyShipped: Schema.optional(Schema.Array(WorkItemRecordSchema)),
+  decisionPlacement: Schema.optional(Schema.Array(DecisionPlacementRowSchema)),
   clientCoverage: Schema.optional(ClientTicketCoverageSchema),
 });
 
@@ -519,6 +541,10 @@ export const OverviewDataSchema = Schema.Struct({
   blockerEdges: Schema.Array(BlockerEdgeRecordSchema),
   decisions: Schema.Array(DecisionRecordSchema),
   artifacts: Schema.Array(ArtifactRecordSchema),
+  // Ticket #146: double-written with src/types.ts — the board's shipped page
+  // and placement table, absent in snapshots an older sync generated.
+  recentlyShipped: Schema.optional(Schema.Array(WorkItemRecordSchema)),
+  decisionPlacement: Schema.optional(Schema.Array(DecisionPlacementRowSchema)),
   pullRequests: Schema.Array(PullRequestRecordSchema),
   skills: Schema.Array(SkillRecordSchema),
   skillInstalls: Schema.Array(Schema.String),

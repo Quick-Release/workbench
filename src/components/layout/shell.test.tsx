@@ -120,7 +120,7 @@ describe("app shell (shadcn dashboard frame)", () => {
     expect(anchorFor(triage, "/triage")).toContain('data-active="true"');
   });
 
-  it("carries the Workflow nav group led by Skill flow between the others", async () => {
+  it("carries the Workflow nav group led by Skill flow, with the Board beside it", async () => {
     const html = await renderShellAt("/");
     const labels = [...html.matchAll(/data-slot="sidebar-group-label"[^>]*>([^<]+)</g)].map(
       (match) => match[1],
@@ -129,11 +129,13 @@ describe("app shell (shadcn dashboard frame)", () => {
     const workspace = html.indexOf('data-slot="sidebar-group-label"');
     const workflow = html.indexOf(">Workflow<");
     const flow = html.indexOf('href="/flow');
+    const board = html.indexOf('href="/board"');
     const triage = html.indexOf('href="/triage"');
     const sessions = html.indexOf('href="/sessions"');
     expect(workflow).toBeGreaterThan(workspace);
     expect(flow).toBeGreaterThan(workflow);
-    expect(triage).toBeGreaterThan(flow);
+    expect(board).toBeGreaterThan(flow);
+    expect(triage).toBeGreaterThan(board);
     expect(sessions).toBeGreaterThan(triage);
   });
 

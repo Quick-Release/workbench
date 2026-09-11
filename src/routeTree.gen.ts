@@ -11,6 +11,7 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as BlockersRouteImport } from './routes/blockers'
+import { Route as BoardRouteImport } from './routes/board'
 import { Route as ClientTicketsRouteImport } from './routes/client-tickets'
 import { Route as DecisionsRouteImport } from './routes/decisions'
 import { Route as FlowRouteImport } from './routes/flow'
@@ -30,6 +31,11 @@ const IndexRoute = IndexRouteImport.update({
 const BlockersRoute = BlockersRouteImport.update({
   id: '/blockers',
   path: '/blockers',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const BoardRoute = BoardRouteImport.update({
+  id: '/board',
+  path: '/board',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ClientTicketsRoute = ClientTicketsRouteImport.update({
@@ -86,6 +92,7 @@ const TriageRoute = TriageRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/blockers': typeof BlockersRoute
+  '/board': typeof BoardRoute
   '/client-tickets': typeof ClientTicketsRoute
   '/decisions': typeof DecisionsRoute
   '/flow': typeof FlowRoute
@@ -100,6 +107,7 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/blockers': typeof BlockersRoute
+  '/board': typeof BoardRoute
   '/client-tickets': typeof ClientTicketsRoute
   '/decisions': typeof DecisionsRoute
   '/flow': typeof FlowRoute
@@ -115,6 +123,7 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/blockers': typeof BlockersRoute
+  '/board': typeof BoardRoute
   '/client-tickets': typeof ClientTicketsRoute
   '/decisions': typeof DecisionsRoute
   '/flow': typeof FlowRoute
@@ -131,6 +140,7 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/blockers'
+    | '/board'
     | '/client-tickets'
     | '/decisions'
     | '/flow'
@@ -145,6 +155,7 @@ export interface FileRouteTypes {
   to:
     | '/'
     | '/blockers'
+    | '/board'
     | '/client-tickets'
     | '/decisions'
     | '/flow'
@@ -159,6 +170,7 @@ export interface FileRouteTypes {
     | '__root__'
     | '/'
     | '/blockers'
+    | '/board'
     | '/client-tickets'
     | '/decisions'
     | '/flow'
@@ -174,6 +186,7 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   BlockersRoute: typeof BlockersRoute
+  BoardRoute: typeof BoardRoute
   ClientTicketsRoute: typeof ClientTicketsRoute
   DecisionsRoute: typeof DecisionsRoute
   FlowRoute: typeof FlowRoute
@@ -200,6 +213,13 @@ declare module '@tanstack/react-router' {
       path: '/blockers'
       fullPath: '/blockers'
       preLoaderRoute: typeof BlockersRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/board': {
+      id: '/board'
+      path: '/board'
+      fullPath: '/board'
+      preLoaderRoute: typeof BoardRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/client-tickets': {
@@ -278,6 +298,7 @@ declare module '@tanstack/react-router' {
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   BlockersRoute: BlockersRoute,
+  BoardRoute: BoardRoute,
   ClientTicketsRoute: ClientTicketsRoute,
   DecisionsRoute: DecisionsRoute,
   FlowRoute: FlowRoute,
