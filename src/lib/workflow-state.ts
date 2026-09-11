@@ -11,4 +11,7 @@ export const workflowStateFrom = (snapshot: OverviewData): WorkflowStatePayload 
   decisions: snapshot.decisions,
   artifacts: snapshot.artifacts,
   meta: { snapshot: snapshot.meta.snapshot, repo: snapshot.meta.repo },
+  // GH-136: spread so an older snapshot without the field serializes without
+  // the key instead of an undefined value.
+  ...(snapshot.clientCoverage ? { clientCoverage: snapshot.clientCoverage } : {}),
 });

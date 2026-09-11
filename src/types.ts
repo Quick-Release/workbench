@@ -96,9 +96,30 @@ export const trackerCategories = ["bug", "enhancement"] as const;
 
 export type TrackerCategory = (typeof trackerCategories)[number];
 
+// GH-136: a client ticket is a host-repo issue wearing one of the two client
+// labels. Origin is declared by label, never inferred from author identity or
+// wording; `client-bug` wins when both labels ride, and a `client-feedback`
+// issue categorized `bug` receives bug-tier treatment so inconsistent tagging
+// cannot bypass the gate. The kind is derived from the source labels by
+// src/lib/client-priority.ts — never stored on the record.
+export const clientTicketKinds = ["client-bug", "client-feedback"] as const;
+
+export type ClientTicketKind = (typeof clientTicketKinds)[number];
+
+// How completely the last client-ticket pass read GitHub (GH-136): a capped
+// or failed pass is unknown client state, never "no client tickets".
+export type ClientTicketCoverage = {
+  labels: readonly string[];
+  checkedAt: string;
+  complete: boolean;
+  reasons: readonly string[];
+};
+
 // ADR 0008: the tracker adapter's first-class records. A work item carries
 // exactly what display state derives from (phase + triage + deferred +
 // open/closed + assignees + kind); a map record is membership and order.
+// Source labels and timestamps ride since GH-136 — absent means an older
+// snapshot, which is unknown, not internal (treated fail-closed).
 export type WorkItemRecord = {
   id: string;
   title: string;
@@ -111,6 +132,9 @@ export type WorkItemRecord = {
   category: TrackerCategory | null;
   kind: WayfinderKind | null;
   summary: string;
+  labels?: readonly string[];
+  createdAt?: string;
+  updatedAt?: string;
 };
 
 export type TrackerMapRecord = {
@@ -150,6 +174,7 @@ export type WorkflowStatePayload = {
   decisions: readonly DecisionRecord[];
   artifacts: readonly ArtifactRecord[];
   meta: WorkflowStateMeta;
+  clientCoverage?: ClientTicketCoverage;
 };
 
 // The triage move action's contract: one work item, one target triage state.
@@ -411,6 +436,7 @@ export type OverviewData = {
   skillInstalls: readonly string[];
   sessions: SessionUsage;
   highlights: readonly CommitCandidate[];
+  clientCoverage?: ClientTicketCoverage;
 };
 
 // The review engines (epic #20): what the review runner's health probe

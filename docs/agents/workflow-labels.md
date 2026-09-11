@@ -29,6 +29,15 @@ Developers may hand-move any label at any time. If an issue wears two `workflow:
 
 Absent label = no category (chores, docs, research). Category belongs to implementation-bound issues only — maps and decision tickets never carry it.
 
+## Client tickets
+
+Two labels mark a ticket as client-originated — the signal for the client-first work policy (CONTEXT.md, "Clients"; ADR 0012). Matched by exact name, never a substring; `client-bug` wins when both ride. Filed by a teammate on a client's behalf counts exactly the same; origin is never inferred from author or wording. While an open client bug exists, unrelated feature starts are gated.
+
+| Kind            | Label             | Meaning                                        |
+| --------------- | ----------------- | ---------------------------------------------- |
+| client bug      | `client-bug`      | A client reported something that isn't working |
+| client feedback | `client-feedback` | A client's request, comment, or feedback       |
+
 ## Parking
 
 | State    | Label      | Meaning                                                                                   |

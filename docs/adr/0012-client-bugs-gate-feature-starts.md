@@ -1,0 +1,27 @@
+# Client bugs gate feature starts: labels declare origin, attention is not permission, and the seam enforces fail-closed
+
+Status: accepted
+
+Work item: GH-136
+
+Client-reported problems were invisible to Workbench's selection machinery: the tracker dropped source labels, the recommendation engine had no client tier, and the issue-agent start path deliberately never screened the issue. The decision has three load-bearing parts. First, client origin is **declared by label** — `client-bug` and `client-feedback`, matched by exact normalized name, never inferred from author identity, title wording, or an LLM; bug tier wins when both labels ride, and `client-feedback` categorized `bug` receives bug-tier treatment so inconsistent tagging cannot weaken the gate. Second, the policy keeps **client attention** (every open client ticket, however unactionable) strictly apart from **allowed actions** (what triage state, blocker edges, and ownership actually justify), so a waiting, deferred, or untriaged client bug stays visible and gating without being declared executable. Third, while any open client bug is open, **unrelated feature implementation cannot be started through the execution seam** — enforced server-side in the start handler (claim → check → release-on-denial), resolving the target's classification there and never trusting a browser-supplied category. This supersedes the display-only posture the #54 recommendation spec described: recommendations reorder (client actions first), and the gate turns the ordering rule into an enforced boundary for Workbench-controlled starts. ADR 0010's run fences are unchanged and untouched.
+
+The gate is **fail-closed**, ADR 0008's frontier precedent applied to policy: the pass set is open client tickets themselves, `bug`-category targets with no client labels, wayfinder decision tickets (planning, not build slices), and targets that are validated blocker edges of an open client bug; `enhancement`, unclassified, unknown, and closed targets are denied with typed reasons (`client_bugs_open`, `client_priority_unverified`, `target_not_open`). Coverage is part of the contract: a capped, failed, or stale client-ticket pass is _unknown_ client state, never "no client bugs", and cannot grant a fresh all-clear. Discovery is bounded label-specific paginated reads under the OR of the two labels, unioned with the canonical sweep; the snapshot carries source labels, source timestamps, and explicit coverage so every consumer derives the same answer from one pure module (`src/lib/client-priority.ts`). There is no dashboard bypass, no killing of already-running runs, and no severity ordering inside the bug tier in this slice; releasing the gate happens only in GitHub — closure or reclassification. The enforced boundary is Workbench-controlled execution: external terminals, GitHub merges, and independently running agents are outside it, and future managed implementation entry points (#133) must call this same policy.
+
+## Considered options
+
+- **Display-only emphasis** (banner and ordering, no gate) — rejected: the issue's own research showed a UI-only tier cannot recover classification the tracker discarded, and a visual suggestion is not a policy.
+- **Trusting the browser's classification or category fields** — rejected: the request grammar carries only a number by design (ADR 0010); a client-supplied `isClientBug` is a gate bypass with a JSON body.
+- **Fail-open for unclassified targets** — rejected: a ticket wrongly looking grabbable silently violates the gate, while one wrongly blocked is visible and self-correcting (ADR 0008's exact trade).
+- **Killing in-flight runs when a new client bug appears** — rejected: destruction loses the Developer's intent and audit trail; the gate re-checks every subsequent start, and there is no queue to evict (one run per engine).
+- **Inferring client origin from author or wording** — rejected: authorship is not origin; a teammate filing on a client's behalf counts exactly the same.
+- **Severity ordering inside the bug tier** — deferred: no host vocabulary declares it; the policy module leaves the seam, and a later decision can slot it in without reshaping callers.
+
+## Consequences
+
+- The tracker record grows source `labels`, `createdAt`, `updatedAt`, and a top-level `clientCoverage` — additive and optional, so older snapshots decode as _unknown_, which the policy treats fail-closed rather than reading as internal.
+- Pagination continuation counts raw pages: a full issue-list page mixing pull requests no longer stops the walk early, and a failed or capped page reports `failed`/`capped` for coverage, not just prose warnings.
+- The recommendation order gains a client-action tier ahead of in-flight work; the hero can therefore name a client action where it previously surfaced unrelated internal features.
+- The gate checks run at every start (per-engine slot held during the check, released on denial), so a bug filed moments after a start affects the next refresh and every later start — never the running process.
+- Freshness has a documented polling target (GitHub changes visible within ~60 seconds while active under healthy API conditions, with backoff and last-success provenance); it is a target, not a synchronization guarantee.
+- The enforcement seam is the only place starts happen under Workbench; static snapshots degrade to copy-the-command and make no freshness claims.

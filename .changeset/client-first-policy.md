@@ -1,0 +1,5 @@
+---
+"@quick-release/workbench": minor
+---
+
+Client-first work policy, step 1 of 3 (issue #136, ADR 0012): the tracker preserves each work item's source labels and creation/update timestamps, discovers client tickets by bounded label-specific paginated reads under the OR of `client-bug`/`client-feedback`, and reports explicit client coverage — a capped or failed pass is unknown client state, never "no client tickets". Pagination continuation now counts raw pages, so a full issue-list page mixing pull requests no longer stops the walk early. A pure shared policy module (`src/lib/client-priority.ts`) derives classification (exact normalized label match, bug tier winning doubles, feedback-plus-`bug` upgraded to bug treatment), client attention, tier ordering with a deterministic issue-number fallback, and the fail-closed feature-start gate verdicts (`client_bugs_open`, `client_priority_unverified`, `target_not_open`); the snapshot and seam payload carry the coverage, and older snapshots decode as unknown, which the policy treats fail-closed. UI, enforcement wiring, and the refresh lifecycle follow in steps 2 and 3.

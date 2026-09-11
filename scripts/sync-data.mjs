@@ -296,6 +296,7 @@ const main = async () => {
     skillInstalls: skillsCatalog.installedIds,
     sessions,
     highlights,
+    clientCoverage: tracker.clientCoverage,
   };
   await writeFile(
     outputPath,
@@ -317,6 +318,10 @@ const main = async () => {
       `Tracker: ${tracker.workItems.length} work items, ${tracker.maps.length} maps, no warnings.`,
     );
   }
+  if (!tracker.clientCoverage.complete)
+    console.log(
+      `Client-ticket coverage incomplete (${tracker.clientCoverage.reasons.join(", ")}); client state is unknown, not empty.`,
+    );
 
   // Telemetry rides the end of a successful sync (ADR 0001): one payload
   // per Developer per repo per UTC day, delivery failures logged and

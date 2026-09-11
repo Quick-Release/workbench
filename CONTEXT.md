@@ -124,6 +124,36 @@ _Avoid_: task (overloaded with implementation work)
 A decision ticket's belonging to a map, recorded as a tracker sub-issue; the membership order is the order the map's frontier is worked in. Membership groups tickets onto a map; blocker edges sequence them.
 _Avoid_: parent-child (ambiguous with session trees), sub-issue (the tracker encoding, not the concept)
 
+### Clients
+
+**Client**:
+The company's customer whose reported problems and requests are filed in the host repo's tracker and marked with a client label. Client-ness is declared by label, never inferred from author identity, title wording, or an LLM.
+_Avoid_: customer (unassigned), reporter (implies author inference)
+
+**Client ticket**:
+A host-repo issue carrying `client-bug` or `client-feedback`. One ticket, one tier: bug wins when both labels ride.
+_Avoid_: client issue (loose), support ticket (implies a helpdesk)
+
+**Client bug**:
+A client ticket whose tier is bug — wearing `client-bug`, or `client-feedback` with the `bug` category, so inconsistent tagging cannot weaken the gate.
+_Avoid_: P0 (client origin is not a severity)
+
+**Client feedback**:
+A client ticket whose tier is feedback: a client's request or comment, not necessarily a defect. It outranks internal work in ordering but never hard-blocks it.
+_Avoid_: feature request (only sometimes true)
+
+**Client attention**:
+Every open client ticket, surfaced wherever work is shown, whether or not anything can be done about it right now. Attention is not executability.
+_Avoid_: queue, backlog
+
+**Allowed action**:
+Work the client-first policy permits starting now, justified by the ticket's actual triage state, blocker edges, and ownership. A ticket can demand attention while permitting no action.
+_Avoid_: recommendation (the hero's pick among allowed actions)
+
+**Bug gate**:
+The enforced boundary: while any open client bug exists, unrelated feature implementation cannot be started through the execution seam. Released only by GitHub — closure or reclassification — never by a dashboard toggle.
+_Avoid_: freeze (overbroad — only feature starts pause), block-all (wrong — remediation and planning stay available)
+
 ### Reviews
 
 **Review engine**:

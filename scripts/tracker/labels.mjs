@@ -180,6 +180,12 @@ export const deriveWorkItem = (issue, vocabulary = DEFAULT_WORKFLOW_VOCABULARY) 
       category: category.value,
       kind: kind.kind,
       summary: shorten(issue.body ?? ""),
+      // GH-136: the source labels and timestamps ride so the shared client
+      // policy (src/lib/client-priority.ts) derives classification, tier, and
+      // gate decisions from what GitHub actually says — never a stored copy.
+      labels,
+      createdAt: issue.created_at ?? undefined,
+      updatedAt: issue.updated_at ?? undefined,
     },
     warnings: [
       ...withPrefix(phase.warning),
