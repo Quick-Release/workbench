@@ -36,6 +36,20 @@ export const TRIAGE_LABELS = [
 
 export const WAYFINDER_KINDS = ["map", "research", "prototype", "grilling", "task"];
 
+// The map organizes the effort; it is not a decision ticket, so board
+// placement never lists it.
+export const DECISION_TICKET_KINDS = WAYFINDER_KINDS.filter((kind) => kind !== "map");
+
+// docs/agents/workflow-labels.md "Board placement" — decision tickets carry
+// no phase, so the board derives their column from kind plus open/closed
+// state. This default stands in for host repos that do not carry the table.
+export const DEFAULT_DECISION_PLACEMENT = [
+  { kind: "grilling", openColumn: "grilling", closedColumn: "shipped" },
+  { kind: "research", openColumn: "grilling", closedColumn: "shipped" },
+  { kind: "prototype", openColumn: "prototyping", closedColumn: "shipped" },
+  { kind: "task", openColumn: "ticketed", closedColumn: "shipped" },
+];
+
 export const CATEGORY_LABELS = ["bug", "enhancement"];
 
 const labelNames = (issue) =>
@@ -54,6 +68,23 @@ export const workflowVocabularyFromMarkdown = (text) => {
     vocabulary.push({ phase, label: `workflow:${name}` });
   }
   return vocabulary;
+};
+
+// The decision-ticket board-placement table: a backticked `wayfinder:` kind
+// followed by two bare columns. The shape shares no row with the phase
+// vocabulary's grammar, so neither parser can capture the other's table.
+export const decisionPlacementFromMarkdown = (text) => {
+  const placement = [];
+  for (const line of String(text ?? "").split(/\r?\n/)) {
+    const row = line.match(
+      /^\|\s*`wayfinder:([a-z][a-z-]*)`\s*\|\s*([a-z][a-z-]*)\s*\|\s*([a-z][a-z-]*)\s*\|/,
+    );
+    if (!row) continue;
+    const [, kind, openColumn, closedColumn] = row;
+    if (placement.some((entry) => entry.kind === kind)) continue;
+    placement.push({ kind, openColumn, closedColumn });
+  }
+  return placement;
 };
 
 // Loads the vocabulary from its doc home, falling back to the built-in table
@@ -90,6 +121,61 @@ export const loadWorkflowVocabulary = async (path) => {
       (label) =>
         `tracker: workflow vocabulary declares ${label}, which is not a canonical phase; ignored`,
     ),
+  };
+};
+
+// Loads the board-placement table from its doc home, falling back to the
+// built-in table with a warning into the sync warnings channel (never
+// silently): the file is unreadable, parses to no rows, or places a kind the
+// grammar doesn't know or a column outside the canonical phases. Rows drop
+// whole — a placement with one unreadable column is not parseable truth.
+export const loadDecisionPlacement = async (path) => {
+  if (!path) return { placement: DEFAULT_DECISION_PLACEMENT, warnings: [] };
+  let text = "";
+  try {
+    text = await readFile(path, "utf8");
+  } catch {
+    return {
+      placement: DEFAULT_DECISION_PLACEMENT,
+      warnings: [
+        `tracker: workflow vocabulary file ${path} unreadable; using the built-in placement`,
+      ],
+    };
+  }
+  const parsed = decisionPlacementFromMarkdown(text);
+  if (parsed.length === 0)
+    return {
+      placement: DEFAULT_DECISION_PLACEMENT,
+      warnings: [
+        `tracker: workflow vocabulary file ${path} has no board-placement table; using the built-in placement`,
+      ],
+    };
+  const usable = [];
+  const warnings = [];
+  for (const entry of parsed) {
+    if (!DECISION_TICKET_KINDS.includes(entry.kind)) {
+      warnings.push(
+        `tracker: workflow vocabulary places unknown decision-ticket kind "wayfinder:${entry.kind}"; ignored`,
+      );
+      continue;
+    }
+    if (
+      !CANONICAL_WORKFLOW_PHASES.includes(entry.openColumn) ||
+      !CANONICAL_WORKFLOW_PHASES.includes(entry.closedColumn)
+    ) {
+      const column = CANONICAL_WORKFLOW_PHASES.includes(entry.openColumn)
+        ? entry.closedColumn
+        : entry.openColumn;
+      warnings.push(
+        `tracker: workflow vocabulary places wayfinder:${entry.kind} in "${column}", which is not a canonical phase; ignored`,
+      );
+      continue;
+    }
+    usable.push(entry);
+  }
+  return {
+    placement: usable.length > 0 ? usable : DEFAULT_DECISION_PLACEMENT,
+    warnings,
   };
 };
 

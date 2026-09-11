@@ -14,7 +14,7 @@ import { CLIENT_TICKET_LABELS, collectClientTickets } from "./client-tickets.mjs
 import { lineEdgesForBody, mergeBlockerEdges } from "./edges.mjs";
 import { resolutionDecisionFromIssue, sortDecisions, specDecisionFromIssue } from "./decisions.mjs";
 import { fetchOpenPullRequests } from "./pulls.mjs";
-import { deriveWorkItem, loadWorkflowVocabulary } from "./labels.mjs";
+import { deriveWorkItem, loadDecisionPlacement, loadWorkflowVocabulary } from "./labels.mjs";
 
 const execFileAsync = promisify(execFile);
 
@@ -93,6 +93,10 @@ export const collectTrackerState = async ({
     phaseVocabulary = loaded.vocabulary;
     warnings.push(...loaded.warnings);
   }
+  // Validation-only until the board consumes the placement: every sync keeps
+  // the doc home honest, dropping malformed rows into the warnings channel.
+  const placement = await loadDecisionPlacement(vocabularyPath);
+  warnings.push(...placement.warnings);
   const sweep = await fetchOpenIssues({ repo, token, apiBase, fetchImpl, maxPages });
   warnings.push(...sweep.warnings);
   const mapIssues = await fetchMapIssues({ repo, token, apiBase, fetchImpl, maxPages });
