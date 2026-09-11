@@ -3,7 +3,7 @@ import { vi } from "vite-plus/test";
 import { deepStrictEqual, strictEqual } from "node:assert";
 import { describe, expect, it } from "vite-plus/test";
 
-import { cancelReviewRun, streamReviewRun } from "./review-runs";
+import { ReviewRunHttpError, cancelReviewRun, streamReviewRun } from "./review-runs";
 
 // The review-run client (ticket #26): the SSE frame parser and the two
 // POSTs, with the network boundary stubbed — only engine + pr ever travel,
@@ -117,5 +117,35 @@ describe("the issue-agent client (issue #40)", () => {
       issue: 40,
       model: "ollama/qwen3-coder:30b",
     });
+  });
+});
+
+describe("ReviewRunHttpError denials (GH-136)", () => {
+  it("renders the bug gate's denial with its blocking references", () => {
+    const error = new ReviewRunHttpError(403, {
+      error: "client_bugs_open",
+      message: "1 open client bug — new feature starts are paused until it closes.",
+      blocking: [
+        {
+          id: "GH-12",
+          title: "Checkout charges twice",
+          url: "https://github.com/example/project/issues/12",
+        },
+      ],
+    });
+    const rendered = error.denialMessage();
+    expect(rendered).toContain("GH-12");
+    expect(rendered).toContain("Checkout charges twice");
+    expect(rendered).toContain("paused");
+  });
+
+  it("a non-denial rejection carries no denial message", () => {
+    expect(
+      new ReviewRunHttpError(409, {
+        error: "run_busy",
+        message: "a coderabbit review is already running",
+      }).denialMessage(),
+    ).toBeNull();
+    expect(new ReviewRunHttpError(500, null).denialMessage()).toBeNull();
   });
 });

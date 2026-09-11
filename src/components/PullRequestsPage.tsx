@@ -257,8 +257,12 @@ export function PullRequestsPage({
           apply((current) => (current.token === token ? runBusy(current, message) : current));
         } else if (error instanceof ReviewRunHttpError) {
           // The server answered with its own complaint (unknown PR, bad
-          // request, runner failure) — show it rather than guessing.
-          const failure = error.payload?.message ?? `the run failed with status ${error.status}`;
+          // request, runner failure, the bug gate's denial with its blocking
+          // references) — show it rather than guessing.
+          const failure =
+            error.denialMessage() ??
+            error.payload?.message ??
+            `the run failed with status ${error.status}`;
           apply((current) => (current.token === token ? runFailed(current, failure) : current));
         } else {
           apply((current) =>

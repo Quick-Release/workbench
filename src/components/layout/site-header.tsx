@@ -2,7 +2,7 @@ import type { OverviewData } from "@/types";
 import { LifeBuoy } from "lucide-react";
 import { Separator } from "@/components/ui/separator";
 import { SidebarTrigger } from "@/components/ui/sidebar";
-import { useWorkflowState } from "@/hooks/use-workflow-state";
+import { useLiveRefreshStatus, useWorkflowState } from "@/hooks/use-workflow-state";
 import { clientAttention, openClientBugs } from "@/lib/client-priority";
 import { recommendNextAction, type Recommendation } from "@/lib/recommendation";
 
@@ -56,6 +56,35 @@ export function ClientCountChip({ bugs, requests }: { bugs: number; requests: nu
   );
 }
 
+// When the seam was last checked (GH-136): a fresh answer at the documented
+// cadence reads as a plain timestamp; a failed check says so in words — the
+// stale state is visible, never silently old.
+export function LiveRefreshChip({
+  status,
+}: {
+  status: { lastCheckedAt: string | null; error: string | null };
+}) {
+  if (!status.lastCheckedAt && !status.error) return null;
+  const label = status.lastCheckedAt
+    ? new Intl.DateTimeFormat("en-GB", { timeStyle: "medium" }).format(
+        new Date(status.lastCheckedAt),
+      )
+    : "never";
+  return (
+    <span
+      data-slot="live-refresh-status"
+      data-error={status.error ? "1" : undefined}
+      title={status.error ? `last refresh failed: ${status.error}` : `last checked ${label}`}
+      className={`text-[0.67rem] tracking-widest uppercase ${
+        status.error ? "text-amber" : "text-muted-foreground"
+      }`}
+    >
+      {status.error ? "refresh failed — retrying" : "checked"}{" "}
+      <b className={status.error ? "text-foreground" : "text-foreground"}>{label}</b>
+    </span>
+  );
+}
+
 export function SiteHeader({ meta }: SiteHeaderProps) {
   const projectName = meta.projectName || meta.repo || "Local project";
   const snapshotLabel = new Intl.DateTimeFormat("en-GB", {
@@ -63,6 +92,7 @@ export function SiteHeader({ meta }: SiteHeaderProps) {
     timeStyle: "short",
   }).format(new Date(meta.snapshot));
   const workflowState = useWorkflowState();
+  const refresh = useLiveRefreshStatus();
   const recommendation = recommendNextAction(workflowState);
   const bugs = openClientBugs(workflowState.workItems);
   const feedback = clientAttention(workflowState.workItems).feedback;
@@ -81,6 +111,7 @@ export function SiteHeader({ meta }: SiteHeaderProps) {
         <span className="text-muted-foreground">
           LOCAL SNAPSHOT <b className="text-foreground">{snapshotLabel}</b>
         </span>
+        <LiveRefreshChip status={refresh} />
         <span className="inline-flex items-center gap-1.5 rounded-md border border-border px-1.5 py-0.5 text-[0.67rem] tracking-widest text-muted-foreground uppercase">
           <i className="size-1.5 rounded-full bg-good" /> control surface / localhost
         </span>

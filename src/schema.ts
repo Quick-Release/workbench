@@ -3,6 +3,7 @@ import { Schema } from "effect";
 import type {
   ClosedClientTickets,
   OverviewData,
+  StartDenial,
   ReviewCommentRequest,
   ReviewCommentResult,
   ReviewHealth,
@@ -16,6 +17,7 @@ import {
   artifactKinds,
   blockerEdgeSources,
   clientTicketKinds,
+  startDenialReasons,
   decisionSources,
   decisionStatuses,
   engines,
@@ -132,6 +134,17 @@ export const ClientTicketCoverageSchema = Schema.Struct({
 export const ClosedClientTicketsSchema = Schema.Struct({
   tickets: Schema.Array(WorkItemRecordSchema),
   coverage: ClientTicketCoverageSchema,
+});
+
+// The bug gate's typed denial (GH-136, ADR 0012): the refusal a start
+// receives when the client-first policy blocks it. Validated browser-side
+// best-effort — a malformed denial degrades to its message string.
+export const StartDenialSchema = Schema.Struct({
+  error: Schema.Literals(startDenialReasons),
+  message: Schema.String,
+  blocking: Schema.Array(
+    Schema.Struct({ id: Schema.String, title: Schema.String, url: Schema.String }),
+  ),
 });
 
 // ADR 0009: one decision record per source conclusion — `statement` carries
@@ -593,6 +606,11 @@ export const parseWorkflowStatePayload = Schema.decodeUnknownSync(WorkflowStateP
 // The closed lens' response, validated at the seam boundary like every read.
 export const parseClosedClientTickets: (input: unknown) => ClosedClientTickets =
   Schema.decodeUnknownSync(ClosedClientTicketsSchema, { onExcessProperty: "error" });
+
+export const parseStartDenial: (input: unknown) => StartDenial = Schema.decodeUnknownSync(
+  StartDenialSchema,
+  { onExcessProperty: "error" },
+);
 
 export const parseTriageMoveRequest = Schema.decodeUnknownSync(TriageMoveRequestSchema, {
   onExcessProperty: "error",

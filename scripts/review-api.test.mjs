@@ -1,4 +1,4 @@
-import { deepStrictEqual, match, strictEqual } from "node:assert";
+import { deepStrictEqual, match, ok, rejects, strictEqual } from "node:assert";
 import { EventEmitter } from "node:events";
 import test from "node:test";
 
@@ -859,4 +859,192 @@ test("a git failure while resolving the default branch is a named 500", async ()
   strictEqual(handled.json.error, "target_failed");
   match(handled.json.message, /no such ref/);
   strictEqual(registry.active("opencode"), null, "the failed start freed the engine");
+});
+
+// --- The bug gate (ADR 0012, GH-136): server-side client-first enforcement ---
+
+import { defaultClientGate } from "./review-api.mjs";
+
+// A derived record the way resolveIssueRecord answers (tracker grammar).
+const gateIssue = (number, overrides = {}) => ({
+  id: `GH-${number}`,
+  title: `Issue ${number}`,
+  url: `https://github.com/example/project/issues/${number}`,
+  state: "open",
+  assignees: [],
+  phase: null,
+  triageState: "unlabeled",
+  deferred: false,
+  category: null,
+  kind: null,
+  summary: "",
+  labels: [],
+  ...overrides,
+});
+
+const gatePolicy = (overrides = {}) => ({
+  openClientBugs: [],
+  coverageComplete: true,
+  prerequisiteOf: () => [],
+  ...overrides,
+});
+
+const gateHarness = ({ record = gateIssue(80), policy = gatePolicy(), clientGate, ...rest } = {}) =>
+  startIssueHarness({
+    overrides: {
+      clientGate: clientGate ?? {
+        resolveIssueRecord: async () => record,
+        loadClientPolicyState: async () => policy,
+      },
+      ...rest,
+    },
+  });
+
+test("a feature start is denied with typed blocking references while a client bug is open", async () => {
+  const policy = gatePolicy({
+    openClientBugs: [
+      {
+        id: "GH-12",
+        title: "Checkout charges twice",
+        url: "https://github.com/example/project/issues/12",
+      },
+    ],
+  });
+  const { handled, started, registry } = await gateHarness({
+    record: gateIssue(80, { labels: ["enhancement"], category: "enhancement" }),
+    policy,
+  });
+  strictEqual(handled.status, 403);
+  strictEqual(handled.json.error, "client_bugs_open");
+  ok(String(handled.json.message).includes("GH-12"));
+  deepStrictEqual(handled.json.blocking, policy.openClientBugs);
+  deepStrictEqual(started, [], "no run may start behind the denial");
+  ok(registry.active("opencode") === null, "the denial released the engine slot");
+});
+
+test("an unclassifiable target cannot silently pass — fail closed", async () => {
+  const policy = gatePolicy({
+    openClientBugs: [
+      { id: "GH-12", title: "Broken", url: "https://github.com/example/project/issues/12" },
+    ],
+  });
+  const { handled } = await gateHarness({
+    record: gateIssue(80, { labels: undefined }),
+    policy,
+  });
+  strictEqual(handled.status, 403);
+  strictEqual(handled.json.error, "client_bugs_open");
+});
+
+test("client remediation, internal bug fixes, and validated prerequisites pass", async () => {
+  for (const { record, policy } of [
+    { record: gateIssue(12, { labels: ["client-bug"] }), policy: gatePolicy() },
+    {
+      record: gateIssue(12, { labels: ["client-bug"], triageState: "wontfix", deferred: true }),
+      policy: gatePolicy(),
+    },
+    { record: gateIssue(83, { labels: ["bug"], category: "bug" }), policy: gatePolicy() },
+    {
+      record: gateIssue(80, { labels: ["enhancement"], category: "enhancement" }),
+      policy: gatePolicy({ prerequisiteOf: () => ["GH-12"] }),
+    },
+  ]) {
+    const { handled, started, registry } = await gateHarness({ record, policy });
+    strictEqual(handled.status, 200, `${record.id} passes the gate`);
+    strictEqual(started.length, 1);
+    await drain(handled);
+    strictEqual(registry.active("opencode"), null);
+  }
+});
+
+test("unverified coverage refuses a feature start even with zero known bugs", async () => {
+  const { handled, started } = await gateHarness({
+    record: gateIssue(80, { labels: ["enhancement"], category: "enhancement" }),
+    policy: gatePolicy({ coverageComplete: false }),
+  });
+  strictEqual(handled.status, 403);
+  strictEqual(handled.json.error, "client_priority_unverified");
+  deepStrictEqual(started, []);
+});
+
+test("an unknown or closed target is a typed target_not_open denial", async () => {
+  const { handled } = await gateHarness({ record: null });
+  strictEqual(handled.status, 403);
+  strictEqual(handled.json.error, "target_not_open");
+
+  const closed = await gateHarness({ record: gateIssue(80, { state: "closed" }) });
+  strictEqual(closed.handled.json.error, "target_not_open");
+});
+
+test("gate machinery failing is a client_priority_unverified denial, never a start", async () => {
+  const threw = await gateHarness({
+    clientGate: {
+      resolveIssueRecord: async () => {
+        throw new Error("rate limited");
+      },
+      loadClientPolicyState: async () => gatePolicy(),
+    },
+  });
+  strictEqual(threw.handled.status, 403);
+  strictEqual(threw.handled.json.error, "client_priority_unverified");
+  match(threw.handled.json.message, /rate limited/);
+
+  const policyFailed = await gateHarness({
+    clientGate: {
+      resolveIssueRecord: async () => gateIssue(80),
+      loadClientPolicyState: async () => {
+        throw new Error("network down");
+      },
+    },
+  });
+  strictEqual(policyFailed.handled.status, 403);
+  strictEqual(policyFailed.handled.json.error, "client_priority_unverified");
+  ok(policyFailed.registry.active("opencode") === null);
+});
+
+test("a start without the gate injected behaves as before — the gate is wiring, not luck", async () => {
+  const { handled, started } = await startIssueHarness({});
+  strictEqual(handled.status, 200);
+  strictEqual(started.length, 1);
+  await drain(handled);
+});
+
+test("a PR review start is never gated — reviews stay available", async () => {
+  let gateCalls = 0;
+  const { handled, started } = await startHarness({
+    overrides: {
+      clientGate: {
+        resolveIssueRecord: async () => {
+          gateCalls += 1;
+          return gateIssue(80);
+        },
+        loadClientPolicyState: async () =>
+          gatePolicy({
+            openClientBugs: [
+              { id: "GH-12", title: "Broken", url: "https://github.com/example/project/issues/12" },
+            ],
+          }),
+      },
+    },
+  });
+  strictEqual(handled.status, 200);
+  strictEqual(started.length, 1);
+  strictEqual(gateCalls, 0, "PR reviews ride past the bug gate");
+  await drain(handled);
+});
+
+test("the default gate fails closed when the snapshot is unavailable", async () => {
+  const gate = defaultClientGate({
+    appDirectory: "/tmp/does-not-exist",
+    hostRoot: "/host/repo",
+    env: { GITHUB_TOKEN: "secret" },
+    ghToken: async () => "",
+    fetchImpl: async () => {
+      throw new Error("no network in this test");
+    },
+  });
+  // Both halves lean on the synced snapshot; with it unreadable every answer
+  // is a thrown failure the start handler maps to a typed unverified denial.
+  await rejects(() => gate.resolveIssueRecord({ issue: 7 }), /ENOENT|does not exist|not found/i);
+  await rejects(() => gate.loadClientPolicyState(), /ENOENT|does not exist|not found/i);
 });

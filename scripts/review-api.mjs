@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import {
   parseReviewCancelRequest,
@@ -7,10 +8,17 @@ import {
   parseReviewHistory,
   parseReviewRunRequest,
 } from "../src/schema.ts";
+import { evaluateClientGate, openClientBugs } from "../src/lib/client-priority.ts";
 import { guardedApi, methodMismatch, readBody, sendJson } from "./api-shared.mjs";
 import { ghPullRequestLoader } from "./ai-sources.mjs";
 import { gateRejection } from "./request-gate.mjs";
+import { collectClientTickets } from "./tracker/client-tickets.mjs";
+import { ghIssueRecord, isGhNotFound } from "./tracker/gh-view.mjs";
+import { deriveWorkItem } from "./tracker/labels.mjs";
+import { tokenFromGhCli } from "./tracker/index.mjs";
+import { GITHUB_API } from "./tracker/issues.mjs";
 import { createRunRegistry, reviewHealth, startReviewRun } from "./review-runner.mjs";
+import { loadWorkflowState } from "./workflow-api.mjs";
 import { reviewRunOutcome } from "../src/lib/review-run-state.ts";
 
 // The review API middleware (epic #20): the localhost seam the dashboard's
@@ -19,6 +27,8 @@ import { reviewRunOutcome } from "../src/lib/review-run-state.ts";
 // handlers are pure — request parts in, a response part out, the answers
 // through the Effect Schema — and the runner is injected, so tests stub it
 // and no live CLI is ever touched.
+
+const APP_DIRECTORY = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 const HEALTH_ROUTE = /^\/api\/review\/health\/?$/;
 const RUN_ROUTE = /^\/api\/review\/?$/;
@@ -120,6 +130,61 @@ export const ghIssueTarget =
 const defaultGitRunner = (args, cwd) =>
   spawnSync("git", args, { cwd, encoding: "utf8", timeout: 5_000 });
 
+// The bug gate's default half (ADR 0012, GH-136): the target issue resolves
+// through the same gh a Developer would run by hand; the open client-bug set
+// revalidates with a bounded live label read immediately before every start
+// (pre-start checks, not UI polling, are the enforcement moment); validated
+// prerequisites are real blocker edges from the synced snapshot whose blocked
+// side is a live-open client bug. Everything failing here fails closed.
+export const defaultClientGate = ({
+  appDirectory = APP_DIRECTORY,
+  hostRoot,
+  env = process.env,
+  ghToken = tokenFromGhCli,
+  fetchImpl = globalThis.fetch,
+} = {}) => ({
+  resolveIssueRecord: async ({ issue }) => {
+    const repo = (await loadWorkflowState(appDirectory)).meta.repo;
+    try {
+      const record = await ghIssueRecord({ issue, repo, cwd: hostRoot });
+      return record.state === "open" ? record : null;
+    } catch (error) {
+      if (isGhNotFound(error)) return null;
+      throw error;
+    }
+  },
+  loadClientPolicyState: async () => {
+    const state = await loadWorkflowState(appDirectory);
+    const fromEnv = typeof env.GITHUB_TOKEN === "string" ? env.GITHUB_TOKEN.trim() : "";
+    const token = fromEnv || (await ghToken());
+    const pass = await collectClientTickets({
+      repo: state.meta.repo,
+      token,
+      apiBase: GITHUB_API,
+      fetchImpl,
+      maxPages: 2,
+      state: "open",
+    });
+    const bugs = openClientBugs(pass.issues.map((issue) => deriveWorkItem(issue).record));
+    const openBugIds = new Set(bugs.map((bug) => bug.id));
+    return {
+      openClientBugs: bugs,
+      coverageComplete: pass.coverage.complete,
+      prerequisiteOf: (targetId) =>
+        state.blockerEdges
+          .filter((edge) => edge.blockerId === targetId && openBugIds.has(edge.blockedId))
+          .map((edge) => edge.blockedId),
+    };
+  },
+});
+
+// The gate's denial shape: the typed reason, a human explanation, and the
+// repository-scoped blocking references the panel renders.
+const gateDenial = (error, message, blocking) => ({
+  status: 403,
+  json: { error, message, blocking },
+});
+
 const busyRejection = (engine) => ({
   status: 409,
   json: {
@@ -137,6 +202,7 @@ export const handleReviewRunStart = async ({
   registry,
   history = createRunHistory(),
   resolveTarget,
+  clientGate = null,
 }) => {
   const gate = gateRejection({ host, origin });
   if (gate) return gate;
@@ -183,6 +249,54 @@ export const handleReviewRunStart = async ({
       status: 404,
       json: { error: "pr_unknown", message: `PR #${request.pr} is not known to this host repo` },
     };
+  }
+
+  // The bug gate (ADR 0012, GH-136): an issue start re-checks the client
+  // policy here, server-side, holding the engine slot while it runs (a
+  // release on every denial path below) — two racing starts cannot both
+  // pass, and the slot never outlives a refused start. The check runs on
+  // every start, so a bug filed moments ago gates the next one; a PR review
+  // is a review, not a feature start, and stays ungated.
+  if (request.issue !== undefined && clientGate) {
+    let record;
+    try {
+      record = await clientGate.resolveIssueRecord({ issue: request.issue });
+    } catch (error) {
+      registry.release(request.engine);
+      return gateDenial(
+        "client_priority_unverified",
+        `the client gate could not resolve issue #${request.issue} (${String(error?.message ?? error)}); the start is refused rather than guessed`,
+        [],
+      );
+    }
+    if (!record) {
+      registry.release(request.engine);
+      return gateDenial(
+        "target_not_open",
+        `issue #${request.issue} is not open in this host repo; there is nothing to start`,
+        [],
+      );
+    }
+    try {
+      const policy = await clientGate.loadClientPolicyState();
+      const verdict = evaluateClientGate({
+        target: record,
+        coverageComplete: policy.coverageComplete,
+        openClientBugs: policy.openClientBugs,
+        prerequisiteOfOpenClientBugs: policy.prerequisiteOf(`GH-${request.issue}`),
+      });
+      if (!verdict.allowed) {
+        registry.release(request.engine);
+        return gateDenial(verdict.reason, verdict.explanation, verdict.blockingBugs);
+      }
+    } catch (error) {
+      registry.release(request.engine);
+      return gateDenial(
+        "client_priority_unverified",
+        `the client gate could not verify the open client bugs (${String(error?.message ?? error)}); the start is refused rather than guessed`,
+        [],
+      );
+    }
   }
 
   // The duration starts here: a run is "how long the review took", so the
@@ -274,6 +388,7 @@ export const reviewApiPlugin = ({
   registry = createRunRegistry(),
   history = createRunHistory(),
   resolveTarget,
+  clientGate,
 } = {}) => ({
   name: "workbench-review-api",
   configureServer(server) {
@@ -291,6 +406,9 @@ export const reviewApiPlugin = ({
       request.pr !== undefined
         ? ghReviewTarget({ hostRoot })(request)
         : ghIssueTarget({ hostRoot })(request);
+    // The bug gate rides every issue start; the default revalidates GitHub
+    // live at the enforcement moment (ADR 0012). Tests override it.
+    const defaultClientGateForHost = clientGate ?? defaultClientGate({ hostRoot });
     server.middlewares.use(
       guardedApi(async (request, response, next, url) => {
         // Route matching comes first: a request this middleware doesn't own
@@ -338,6 +456,7 @@ export const reviewApiPlugin = ({
                 registry,
                 history,
                 resolveTarget: resolveTarget ?? defaultResolveTarget,
+                clientGate: defaultClientGateForHost,
               })
             : CANCEL_ROUTE.test(url.pathname)
               ? handleReviewRunCancel({

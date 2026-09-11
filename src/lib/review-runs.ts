@@ -1,5 +1,5 @@
 import { parseReviewRunEvent, type ReviewRunEvent } from "@/schema";
-import type { Engine } from "@/types";
+import { startDenialReasons, type Engine, type StartDenialReason } from "@/types";
 
 // The run client (ticket #26; issue #40): the browser half of the execution
 // seam. A run starts as a POST whose response body is the runner's event
@@ -7,14 +7,35 @@ import type { Engine } from "@/types";
 // POST. Only the enumerated request ever travels — engine, target number,
 // and for the agent an optional model — the server assembles everything else.
 
+// A rejection's payload: the seam's typed shapes (run_busy, and the bug
+// gate's denial with its repository-scoped blocking references) degrade to
+// display strings only when malformed.
+export type ReviewRunRejection = {
+  error?: string;
+  message?: string;
+  blocking?: readonly { id: string; title: string; url: string }[];
+};
+
 export class ReviewRunHttpError extends Error {
   status: number;
-  payload: { error?: string; message?: string } | null;
+  payload: ReviewRunRejection | null;
 
-  constructor(status: number, payload: { error?: string; message?: string } | null) {
+  constructor(status: number, payload: ReviewRunRejection | null) {
     super(payload?.message ?? `review run failed with status ${status}`);
     this.status = status;
     this.payload = payload;
+  }
+
+  // The bug gate's denial (ADR 0012): the message plus the open client bugs
+  // blocking, spelled out so the panel shows what holds the start. Only the
+  // gate's typed reasons count — run_busy and friends stay plain messages.
+  denialMessage(): string | null {
+    const payload = this.payload;
+    const reason = payload?.error;
+    if (!payload || !reason || !startDenialReasons.includes(reason as StartDenialReason))
+      return null;
+    const refs = (payload.blocking ?? []).map((bug) => `${bug.id} "${bug.title}"`).join(", ");
+    return refs ? `${payload.message} Blocking: ${refs}.` : (payload.message ?? null);
   }
 }
 
@@ -45,13 +66,10 @@ export const streamReviewRun = async function* ({
     signal,
   });
   if (!response.ok) {
-    // Rejection payloads (busy, unknown PR) are best-effort display strings:
-    // the typed seam contract covers the run's events, so a malformed
-    // rejection only degrades the message the panel can show.
-    const payload = (await response.json().catch(() => null)) as {
-      error?: string;
-      message?: string;
-    } | null;
+    // Rejection payloads (busy, unknown PR, the bug gate's denial) are
+    // best-effort typed: the typed seam contract covers the run's events, so
+    // a malformed rejection only degrades the message the panel can show.
+    const payload = (await response.json().catch(() => null)) as ReviewRunRejection | null;
     throw new ReviewRunHttpError(response.status, payload);
   }
 
