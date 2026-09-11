@@ -1,14 +1,13 @@
-import { useState } from "react";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { z } from "zod";
 
 import { IssuePanelHost } from "../components/IssuePanelHost";
 import { OverviewPage } from "../components/OverviewPage";
 import { overviewData } from "../data";
-import { setWorkflowState, useWorkflowMode, useWorkflowState } from "../hooks/use-workflow-state";
+import { useWorkflowMode, useWorkflowState } from "../hooks/use-workflow-state";
+import { useSyncTrigger } from "../hooks/use-sync-trigger";
 import { issueParamFromSearch } from "../lib/issue-param";
 import { workItemIdNumberText } from "../lib/work-item-id";
-import { parseSyncTriggerResult } from "../schema";
 
 const searchSchema = z.object({
   // The detail panel's param (ticket #60): `?issue=NN` / `?issue=new`,
@@ -31,40 +30,18 @@ function WorkbenchRoute() {
   // this page read one state, so syncs and panel actions update both.
   const state = useWorkflowState();
   const mode = useWorkflowMode();
-  const [syncPending, setSyncPending] = useState(false);
-  const [syncMessage, setSyncMessage] = useState<string | null>(null);
-  const [syncWarnings, setSyncWarnings] = useState<readonly string[]>([]);
+  // GH-145: the header's trigger and this page's sync section share one
+  // runner, so a sync from either refreshes both.
+  const {
+    pending: syncPending,
+    message: syncMessage,
+    warnings: syncWarnings,
+    sync,
+  } = useSyncTrigger();
   const issueParam = Route.useSearch({ select: (s) => s.issue });
 
   const setIssueParam = (issue: string | undefined) =>
     navigate({ search: (prev) => ({ ...prev, issue }) });
-
-  const sync = async () => {
-    setSyncPending(true);
-    setSyncMessage(null);
-    setSyncWarnings([]);
-    try {
-      const response = await fetch("/api/workflow/sync", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: "{}",
-      });
-      const raw: unknown = await response.json();
-      if (!response.ok) {
-        const { message: failure } = (raw ?? {}) as { message?: string };
-        setSyncMessage(failure ?? `The sync was rejected (${response.status}).`);
-        return;
-      }
-      const result = parseSyncTriggerResult(raw);
-      setWorkflowState(result.state);
-      setSyncMessage(result.message);
-      setSyncWarnings(result.warnings);
-    } catch {
-      setSyncMessage("The sync did not go through — the dev server API is not reachable.");
-    } finally {
-      setSyncPending(false);
-    }
-  };
 
   return (
     <>

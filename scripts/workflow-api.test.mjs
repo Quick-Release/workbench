@@ -149,6 +149,42 @@ test("loadWorkflowState projects the joined payload with provenance", async () =
   });
 });
 
+test("loadWorkflowState projects the freshness stamp and warnings channel", async () => {
+  const data = snapshot([workItem(7)]);
+  const syncedAt = "2026-09-11T09:30:00.000Z";
+  const directory = await withSnapshot({ ...data, meta: { ...data.meta, syncedAt } }, [
+    'GH-9: unknown workflow label "workflow:shelved"; treated as pre-flow',
+  ]);
+  const state = await loadWorkflowState(directory);
+  deepStrictEqual(state, {
+    workItems: [workItem(7)],
+    maps: [],
+    blockerEdges: [],
+    decisions: [],
+    artifacts: [],
+    meta: { snapshot: "2026-09-05T12:00:00+01:00", repo: REPO, syncedAt },
+    warnings: ['GH-9: unknown workflow label "workflow:shelved"; treated as pre-flow'],
+  });
+});
+
+test("the read endpoint serves the freshness stamp and warnings channel", async () => {
+  const data = snapshot([workItem(7, "needs-triage")]);
+  const syncedAt = "2026-09-11T09:30:00.000Z";
+  const directory = await withSnapshot({ ...data, meta: { ...data.meta, syncedAt } }, [
+    'GH-7: multiple triage labels "needs-triage", "ready-for-agent"; used "needs-triage"',
+  ]);
+  const handled = await handleWorkflowApi({
+    method: "GET",
+    pathname: "/api/workflow",
+    appDirectory: directory,
+  });
+  strictEqual(handled.status, 200);
+  strictEqual(handled.json.meta.syncedAt, syncedAt);
+  deepStrictEqual(handled.json.warnings, [
+    'GH-7: multiple triage labels "needs-triage", "ready-for-agent"; used "needs-triage"',
+  ]);
+});
+
 test("the read endpoint serves the joined records schema-validated", async () => {
   const decisions = [
     {

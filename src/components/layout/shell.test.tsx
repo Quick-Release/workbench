@@ -77,13 +77,16 @@ describe("app shell (shadcn dashboard frame)", () => {
     expect(html).toContain("stub:overview");
   });
 
-  it("shows the brand, project name, snapshot line, posture badge, and both header links", async () => {
+  it("shows the brand, project name, freshness chip, posture badge, and both header links", async () => {
     const html = await renderShellAt("/");
     expect(html).toContain("work");
     expect(html).toContain("bench");
     expect(html).toContain("banquinha");
-    expect(html).toContain("LOCAL SNAPSHOT");
-    expect(html).toContain("29 Aug 2026");
+    // GH-145: the header freshness line reads the atom's snapshot stamp —
+    // every sync stamps syncedAt, so the chip replaces the LOCAL SNAPSHOT
+    // line whenever a current snapshot is served.
+    expect(html).toContain('data-slot="freshness-chip"');
+    expect(html).toContain("synced");
     expect(html).toContain("control surface / localhost");
     expect(html).toContain("agent sessions");
     expect(html).toContain("repository ↗");

@@ -72,10 +72,12 @@ const importSnapshot = async (appDirectory) => {
 };
 
 export const loadWorkflowState = async (appDirectory = APP_DIRECTORY) => {
-  const { snapshot } = await importSnapshot(appDirectory);
+  const { snapshot, warnings } = await importSnapshot(appDirectory);
   if (!snapshot || typeof snapshot !== "object" || typeof snapshot.meta !== "object")
     throw new Error("snapshot file does not carry the overviewData literal");
-  return workflowStateFrom(snapshot);
+  // GH-145: the warnings channel rides the served payload, so the dashboard
+  // sees what sync saw instead of scraping the console.
+  return workflowStateFrom(snapshot, warnings);
 };
 
 // ADR 0005: behind the seam run only the tools a Developer would run by hand.

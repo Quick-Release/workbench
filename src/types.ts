@@ -194,6 +194,9 @@ export type BlockerEdgeRecord = {
 export type WorkflowStateMeta = {
   snapshot: string;
   repo: string;
+  // GH-145: rides only when the snapshot carries it — the chip falls back to
+  // the snapshot stamp for older generated modules.
+  syncedAt?: string;
 };
 
 export type WorkflowStatePayload = {
@@ -203,6 +206,9 @@ export type WorkflowStatePayload = {
   decisions: readonly DecisionRecord[];
   artifacts: readonly ArtifactRecord[];
   meta: WorkflowStateMeta;
+  // GH-145: the sync warnings channel, live reads only — the bundled static
+  // snapshot serializes without the key instead of an empty array.
+  warnings?: readonly string[];
   clientCoverage?: ClientTicketCoverage;
 };
 
@@ -448,6 +454,9 @@ export type OverviewData = {
     theme: WorkbenchTheme;
     services: readonly ExternalServiceStatus[];
     snapshot: string;
+    // GH-145: when this snapshot was generated — the freshness stamp the
+    // header's synced-ago chip reads; absent in snapshots from older syncs.
+    syncedAt?: string;
     branch: string;
     commit: string;
     repo: string;
