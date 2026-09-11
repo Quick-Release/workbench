@@ -15,7 +15,7 @@ Infer the repo from `git remote -v`; `gh` does this automatically when run insid
 
 ## Workflow phase, category, parking
 
-Phase moves are labels written by the skill that makes the move (`workflow:<phase>`, exactly one; absent = pre-flow); category is `bug`/`enhancement`; `deferred` parks work. The vocabulary lives in [workflow-labels.md](./workflow-labels.md) — the sync script parses it, so use those exact strings. Decision tickets (children of a `wayfinder:map`) carry no phase label; their phase derives from type plus open/closed/claimed state.
+Phase moves are labels written by the skill that makes the move (`workflow:<phase>`, exactly one; absent = pre-flow); category is `bug`/`enhancement`; `deferred` parks work. The vocabulary lives in [workflow-labels.md](./workflow-labels.md) — the sync script parses it, so use those exact strings. Decision tickets (children of a `wayfinder:map`) carry no phase label; the board derives their column from type plus open/closed state (workflow-labels.md, "Board placement"), and claiming renders as a chip, never a column move.
 
 ## Pull requests as a triage surface
 

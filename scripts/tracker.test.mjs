@@ -5,8 +5,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
+  DEFAULT_DECISION_PLACEMENT,
   DEFAULT_WORKFLOW_VOCABULARY,
+  decisionPlacementFromMarkdown,
   deriveWorkItem,
+  loadDecisionPlacement,
   loadWorkflowVocabulary,
   phaseFromLabels,
   workflowVocabularyFromMarkdown,
@@ -472,6 +475,71 @@ test("a vocabulary entry outside the canonical phases never resolves", () => {
   const resolved = phaseFromLabels(["workflow:shelved"], polluted);
   strictEqual(resolved.phase, null);
   match(resolved.warning, /unknown workflow label/);
+});
+
+test("decision-ticket board placement parses from its markdown home", async () => {
+  const text = await readFile(
+    new URL("../docs/agents/workflow-labels.md", import.meta.url),
+    "utf8",
+  );
+
+  deepStrictEqual(decisionPlacementFromMarkdown(text), [
+    { kind: "grilling", openColumn: "grilling", closedColumn: "shipped" },
+    { kind: "research", openColumn: "grilling", closedColumn: "shipped" },
+    { kind: "prototype", openColumn: "prototyping", closedColumn: "shipped" },
+    { kind: "task", openColumn: "ticketed", closedColumn: "shipped" },
+  ]);
+});
+
+test("placement parsing reads only its own row shape, first kind wins", () => {
+  const text = [
+    "| Phase | Label | Written by |",
+    "| --- | --- | --- |",
+    "| grilling | `workflow:grilling` | grill |",
+    "| Kind | Open column | Closed column |",
+    "| --- | --- | --- |",
+    "| `wayfinder:task` | ticketed | shipped |",
+    "| `wayfinder:task` | implementing | shipped |",
+    "| client bug | `client-bug` | a client reported it |",
+  ].join("\n");
+
+  deepStrictEqual(decisionPlacementFromMarkdown(text), [
+    { kind: "task", openColumn: "ticketed", closedColumn: "shipped" },
+  ]);
+});
+
+test("placement loading warns on fallback and drops unknown kinds and columns", async () => {
+  const missing = await loadDecisionPlacement(join(tmpdir(), "wb-missing", "workflow-labels.md"));
+  deepStrictEqual(missing.placement, DEFAULT_DECISION_PLACEMENT);
+  strictEqual(missing.warnings.length, 1);
+  match(missing.warnings[0], /unreadable/);
+
+  const directory = await mkdtemp(join(tmpdir(), "wb-placement-"));
+  try {
+    const path = join(directory, "workflow-labels.md");
+    await writeFile(
+      path,
+      [
+        "| Kind | Open column | Closed column |",
+        "| --- | --- | --- |",
+        "| `wayfinder:grilling` | grilling | shipped |",
+        "| `wayfinder:verdict` | grilling | shipped |",
+        "| `wayfinder:task` | shelved | shipped |",
+        "| `wayfinder:map` | grilling | shipped |",
+      ].join("\n"),
+    );
+    const loaded = await loadDecisionPlacement(path);
+    deepStrictEqual(loaded.placement, [
+      { kind: "grilling", openColumn: "grilling", closedColumn: "shipped" },
+    ]);
+    strictEqual(loaded.warnings.length, 3);
+    match(loaded.warnings[0], /wayfinder:verdict/);
+    match(loaded.warnings[1], /wayfinder:task/);
+    match(loaded.warnings[1], /canonical/);
+    match(loaded.warnings[2], /wayfinder:map/);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 });
 
 test("targeted-read caps warn per map and membership stays complete", async () => {

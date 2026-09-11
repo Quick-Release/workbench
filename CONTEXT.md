@@ -96,6 +96,10 @@ _Avoid_: helper, utility
 Where a work item sits on a skill flow — grilling, prototyping, specced, ticketed, implementing, reviewing, shipped. A work item has no phase until a flow skill first touches it. Distinct from triage state: an issue can be ready-for-agent while its effort sits in the spec phase.
 _Avoid_: status (overloaded with triage state and ticket status)
 
+**Board placement**:
+Where a work item renders on the flow board. Regular work items place by their workflow phase; decision tickets place by kind plus open/closed state, never by a label of their own. Claimed and deferred mark the card; they never move the placement.
+_Avoid_: phase (a decision ticket has none — placement is derived, not labeled), column (the rendering, not the concept)
+
 **Triage state**:
 The five tracker roles (needs-triage, needs-info, ready-for-agent, ready-for-human, wontfix) plus unlabeled, moved by the triage skill. Distinct from workflow phase.
 _Avoid_: label (the label string is the encoding, not the concept)

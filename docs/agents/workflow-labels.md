@@ -18,7 +18,7 @@ Exactly one `workflow:*` label per issue. **No `workflow:` label means pre-flow*
 
 Developers may hand-move any label at any time. If an issue wears two `workflow:` labels (hand-edit accident), the dashboard resolves to the furthest-along phase in flow order and surfaces a non-blocking warning — it never fails the sync.
 
-**Decision tickets stay phase-free.** Children of a `wayfinder:map` (and the map's decision tickets generally) carry no `workflow:` label; their phase derives from ticket type plus open/closed/claimed state. The map itself carries phase like any issue.
+**Decision tickets stay phase-free.** Children of a `wayfinder:map` (and the map's decision tickets generally) carry no `workflow:` label; the board derives their column from ticket type plus open/closed state — see [Kind](#kind-decision-tickets) — and claiming renders as a chip, never a column move. The map itself carries phase like any issue.
 
 ## Category
 
@@ -49,6 +49,21 @@ Two labels mark a ticket as client-originated — the signal for the client-firs
 ## Kind (decision tickets)
 
 Decision-ticket type is encoded by the `wayfinder:*` labels — see [issue-tracker.md](./issue-tracker.md) under "Wayfinding operations": `wayfinder:map`, `wayfinder:research`, `wayfinder:prototype`, `wayfinder:grilling`, `wayfinder:task`.
+
+### Board placement
+
+Decision tickets carry no `workflow:` label, so the board derives their column from the table below. The placement is a derived column, never a phase: no skill writes it, the record keeps no phase, and time-in-phase never measures it. The map itself is not in this table — it carries phase like any issue.
+
+| Kind                  | Open column | Closed column |
+| --------------------- | ----------- | ------------- |
+| `wayfinder:grilling`  | grilling    | shipped       |
+| `wayfinder:research`  | grilling    | shipped       |
+| `wayfinder:prototype` | prototyping | shipped       |
+| `wayfinder:task`      | ticketed    | shipped       |
+
+Claiming never moves the card — an assignee renders as a claimed chip, the way `deferred` renders as parked. A closed decision ticket sits in shipped and chips by why it closed: resolved (`state_reason: completed`) chips **decided**, the Resolution being the outcome; ruled out of scope (`state_reason: not_planned`) chips **ruled out** — a scope boundary is not a decision.
+
+Research shares the grilling column with grilling: both are decision-conversation work, wayfinder being an on-ramp that merges onto the main flow at grilling. Task is doing-side work that unblocks a decision, so an open task ticket reads as ready (ticketed) work, not implementation.
 
 ## Blocked
 

@@ -5,7 +5,7 @@
 
 ## TL;DR
 
-**Verdict:** do **not** run `to-spec` on issue #1. Issue #1 already *is* a `to-spec` artifact — its body matches the skill's template section for section, and it wears the label `to-spec` writes (`workflow:specced`, per `docs/agents/workflow-labels.md:13`). More importantly, the spec's stage 1 was implemented the same evening it was published (commit `1aefe81`, 2026-09-02, closing tickets #2 and #3), and it has since grown well past its original scope. The only material drift is that one spec decision — pinning Effect to the stable v3 line — was deliberately overturned two days later by accepted [ADR 0003](../adr/0003-alchemy-and-effect-v4-rc.md): the repo now runs `effect 4.0.0-rc.112`. The gap is not a missing spec; it is stale tracker state — the parent spec issue was never advanced or closed after its tickets shipped. Recommended action: relabel (`needs-triage` → `ready-for-agent`, `workflow:specced` → `workflow:shipped`), close #1 as completed with a pointer to `1aefe81` and ADR 0003.
+**Verdict:** do **not** run `to-spec` on issue #1. Issue #1 already _is_ a `to-spec` artifact — its body matches the skill's template section for section, and it wears the label `to-spec` writes (`workflow:specced`, per `docs/agents/workflow-labels.md:13`). More importantly, the spec's stage 1 was implemented the same evening it was published (commit `1aefe81`, 2026-09-02, closing tickets #2 and #3), and it has since grown well past its original scope. The only material drift is that one spec decision — pinning Effect to the stable v3 line — was deliberately overturned two days later by accepted [ADR 0003](../adr/0003-alchemy-and-effect-v4-rc.md): the repo now runs `effect 4.0.0-rc.112`. The gap is not a missing spec; it is stale tracker state — the parent spec issue was never advanced or closed after its tickets shipped. Recommended action: relabel (`needs-triage` → `ready-for-agent`, `workflow:specced` → `workflow:shipped`), close #1 as completed with a pointer to `1aefe81` and ADR 0003.
 
 ---
 
@@ -15,16 +15,16 @@ Issue #1 — "Adopt Effect — runtime validation of generated overview data (st
 
 Its timeline (`gh api repos/Quick-Release/workbench/issues/1/timeline` and `/events`) tells the rest of the story:
 
-| When (UTC) | Event |
-| --- | --- |
-| 2026-09-02 21:35:50 | Created, labeled `ready-for-agent` (the label `to-spec` applies — SKILL.md step 3) |
-| 2026-09-02 21:39:32 | Cross-referenced by #2 — "Tracer: fail-loud data boundary with Effect Schema (top level + tickets)" (`Parent: #1`) |
-| 2026-09-02 21:39:46 | Cross-referenced by #3 — "Complete Effect Schema coverage: all record families + rejection matrix" (`Parent: #1`, `Blocked by: #2`) |
-| 2026-09-02 22:11:05 | Commit `1aefe81` referenced from #1 — "feat: validate generated overview data with Effect Schema … Closes #2, closes #3. Spec: #1." |
-| 2026-09-02 22:05 | #2 and #3 closed, `state_reason: completed` |
-| 2026-09-02 23:24:51 | `ready-for-agent` removed, `needs-triage` applied (by `vvaz`) |
+| When (UTC)          | Event                                                                                                                                                           |
+| ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 2026-09-02 21:35:50 | Created, labeled `ready-for-agent` (the label `to-spec` applies — SKILL.md step 3)                                                                              |
+| 2026-09-02 21:39:32 | Cross-referenced by #2 — "Tracer: fail-loud data boundary with Effect Schema (top level + tickets)" (`Parent: #1`)                                              |
+| 2026-09-02 21:39:46 | Cross-referenced by #3 — "Complete Effect Schema coverage: all record families + rejection matrix" (`Parent: #1`, `Blocked by: #2`)                             |
+| 2026-09-02 22:11:05 | Commit `1aefe81` referenced from #1 — "feat: validate generated overview data with Effect Schema … Closes #2, closes #3. Spec: #1."                             |
+| 2026-09-02 22:05    | #2 and #3 closed, `state_reason: completed`                                                                                                                     |
+| 2026-09-02 23:24:51 | `ready-for-agent` removed, `needs-triage` applied (by `vvaz`)                                                                                                   |
 | 2026-09-04 18:41:33 | Renamed from "Spec: Adopt Effect — …" to "Adopt Effect — …" and labeled `workflow:specced` (the ADR 0007 label migration, which retired `Spec:` title prefixes) |
-| 2026-09-04 18:42:21 | Cross-referenced by #46 ("How the tracker encodes phase and kind", closed, resolved by ADR 0007) |
+| 2026-09-04 18:42:21 | Cross-referenced by #46 ("How the tracker encodes phase and kind", closed, resolved by ADR 0007)                                                                |
 
 The issue has zero comments. It remains **open** with labels `needs-triage` + `workflow:specced` (verified via `gh api repos/Quick-Release/workbench/issues/1`, `updated_at` 2026-09-04).
 
@@ -56,7 +56,7 @@ The spec's central version decision — "Single new runtime dependency: `effect`
 - Commit `9604f0f` (2026-09-04), "feat: deploy telemetry worker with Alchemy, move to Effect v4 RC", moved `effect` and `@effect/platform-node` to `4.0.0-rc.112` and migrated `src/schema.ts` to the v4 API (`Schema.Literals`, `onExcessProperty` — visible at `src/schema.ts:25,409-412`).
 - [ADR 0003](../adr/0003-alchemy-and-effect-v4-rc.md) (accepted, commit `766355e`) documents this explicitly: "The app is pinned to the Effect v4 RC (`4.0.0-rc.112`), **overriding the v3 recommendation**; RC breaking changes land as normal code changes in this repo. `src/schema.ts` already uses the v4 API (`Schema.Literals`)" (ADR 0003, Consequences, line 17). The stated reason: `alchemy` peer-depends on `effect >=4.0.0-rc.112`, so the versions cannot be split (ADR 0003, "Considered options").
 
-So the spec is not wrong so much as *superseded on one axis* — by a decision recorded in the proper home (an ADR), which is exactly where the spec's own user story 18 said v4 planning should live ("a note that v4 relocates Schema to an unstable import path, so that the eventual upgrade is planned rather than surprising"). The team chose to skip the interim instead.
+So the spec is not wrong so much as _superseded on one axis_ — by a decision recorded in the proper home (an ADR), which is exactly where the spec's own user story 18 said v4 planning should live ("a note that v4 relocates Schema to an unstable import path, so that the eventual upgrade is planned rather than surprising"). The team chose to skip the interim instead.
 
 ## 5. Research-doc claims re-verified (2026-09-07)
 
