@@ -3,16 +3,23 @@ import { useState } from "react";
 import { parseSyncTriggerResult } from "../schema";
 import { setWorkflowState } from "./use-workflow-state";
 
-// The manual sync trigger's one runner (GH-145): the header trigger and the
-// overview's sync section share one pending/message/warnings shell, post the
-// empty sync request through the seam, and push the re-read state into the
-// shared atom — a completed run refreshes stamp, warnings, and state together.
+// The manual sync trigger's runner (GH-145): the header trigger and the
+// overview's sync section post the same empty sync request through the seam
+// and push the re-read state into the shared workflow atom — a completed run
+// refreshes stamp, warnings, and state everywhere the atom is read. The
+// pending/message/warnings display stays per surface; what every trigger
+// shares is the module-level in-flight guard: one sync at a time, whichever
+// trigger started it.
+let inFlight = false;
+
 export const useSyncTrigger = () => {
   const [pending, setPending] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [warnings, setWarnings] = useState<readonly string[]>([]);
 
   const sync = async () => {
+    if (inFlight) return;
+    inFlight = true;
     setPending(true);
     setMessage(null);
     setWarnings([]);
@@ -35,6 +42,7 @@ export const useSyncTrigger = () => {
     } catch {
       setMessage("The sync did not go through — the dev server API is not reachable.");
     } finally {
+      inFlight = false;
       setPending(false);
     }
   };

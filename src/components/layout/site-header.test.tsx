@@ -67,7 +67,7 @@ describe("SiteHeader", () => {
   // The theme is the app's concern; the header only reads the name and repo.
   const meta = {
     projectName: "workbench",
-    theme: {},
+    theme: {} as OverviewData["meta"]["theme"],
     services: [],
     snapshot: "2026-09-05T12:00:00+01:00",
     branch: "main",
@@ -76,7 +76,7 @@ describe("SiteHeader", () => {
     repositoryUrl: "https://github.com/Quick-Release/workbench",
     docsRoot: "docs",
     sources: [],
-  } as unknown as OverviewData["meta"];
+  } satisfies OverviewData["meta"];
   const payloadWith = (syncedAt?: string): WorkflowStatePayload => ({
     workItems: [],
     maps: [],

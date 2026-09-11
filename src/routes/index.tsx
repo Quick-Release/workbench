@@ -30,8 +30,9 @@ function WorkbenchRoute() {
   // this page read one state, so syncs and panel actions update both.
   const state = useWorkflowState();
   const mode = useWorkflowMode();
-  // GH-145: the header's trigger and this page's sync section share one
-  // runner, so a sync from either refreshes both.
+  // GH-145: the header's trigger and this page's sync section run the same
+  // request through one runner shape; the workflow atom is what they share —
+  // a run from either refreshes stamp and state everywhere.
   const {
     pending: syncPending,
     message: syncMessage,

@@ -123,7 +123,7 @@ export function FreshnessChip({
         ago.stale ? "text-amber" : "text-muted-foreground"
       }`}
     >
-      synced <b className={ago.stale ? "text-foreground" : "text-foreground"}>{ago.text}</b>
+      synced <b className="text-foreground">{ago.text}</b>
     </span>
   );
 }

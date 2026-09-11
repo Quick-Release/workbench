@@ -9,6 +9,7 @@ import {
 } from "@tanstack/react-router";
 import { describe, expect, it } from "vite-plus/test";
 import type { OverviewData } from "../../types";
+import { setWorkflowState } from "../../hooks/use-workflow-state";
 
 import { AppShell } from "./app-shell";
 
@@ -78,13 +79,25 @@ describe("app shell (shadcn dashboard frame)", () => {
   });
 
   it("shows the brand, project name, freshness chip, posture badge, and both header links", async () => {
+    // GH-145: the header freshness line reads the shared atom, not the meta
+    // prop — seed it so the assertion is hermetic against whatever the
+    // generated snapshot carries.
+    setWorkflowState({
+      workItems: [],
+      maps: [],
+      blockerEdges: [],
+      decisions: [],
+      artifacts: [],
+      meta: {
+        snapshot: meta.snapshot,
+        repo: meta.repo,
+        syncedAt: "2026-08-29T15:11:41+01:00",
+      },
+    });
     const html = await renderShellAt("/");
     expect(html).toContain("work");
     expect(html).toContain("bench");
     expect(html).toContain("banquinha");
-    // GH-145: the header freshness line reads the atom's snapshot stamp —
-    // every sync stamps syncedAt, so the chip replaces the LOCAL SNAPSHOT
-    // line whenever a current snapshot is served.
     expect(html).toContain('data-slot="freshness-chip"');
     expect(html).toContain("synced");
     expect(html).toContain("control surface / localhost");

@@ -19,8 +19,10 @@ export const workflowStateFrom = (
   meta: {
     snapshot: snapshot.meta.snapshot,
     repo: snapshot.meta.repo,
+    // GH-145: rides only when the snapshot carries it.
     ...(snapshot.meta.syncedAt ? { syncedAt: snapshot.meta.syncedAt } : {}),
   },
+  // GH-145: the sync warnings channel, live reads only.
   ...(warnings && warnings.length > 0 ? { warnings } : {}),
   // GH-136: spread so an older snapshot without the field serializes without
   // the key instead of an undefined value.
