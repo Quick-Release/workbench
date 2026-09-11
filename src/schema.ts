@@ -202,6 +202,9 @@ export const PullRequestRecordSchema = Schema.Struct({
 export const WorkflowStateMetaSchema = Schema.Struct({
   snapshot: Schema.String,
   repo: Schema.String,
+  // GH-145: rides only when the snapshot carries it; absence is the fallback
+  // path for snapshots an older sync generated.
+  syncedAt: Schema.optional(Schema.String),
 });
 
 export const WorkflowStatePayloadSchema = Schema.Struct({
@@ -211,6 +214,7 @@ export const WorkflowStatePayloadSchema = Schema.Struct({
   decisions: Schema.Array(DecisionRecordSchema),
   artifacts: Schema.Array(ArtifactRecordSchema),
   meta: WorkflowStateMetaSchema,
+  warnings: Schema.optional(Schema.Array(Schema.String)),
   clientCoverage: Schema.optional(ClientTicketCoverageSchema),
 });
 
@@ -502,6 +506,7 @@ export const OverviewDataSchema = Schema.Struct({
     theme: WorkbenchThemeSchema,
     services: Schema.Array(ExternalServiceStatusSchema),
     snapshot: Schema.String,
+    syncedAt: Schema.optional(Schema.String),
     branch: Schema.String,
     commit: Schema.String,
     repo: Schema.String,

@@ -279,6 +279,9 @@ const main = async () => {
       theme: config.theme,
       services: serviceStatuses,
       snapshot,
+      // GH-145: when this snapshot was generated — freshness means sync
+      // completion, not the host repo's HEAD commit time.
+      syncedAt: new Date().toISOString(),
       branch,
       commit,
       repo,

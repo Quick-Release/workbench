@@ -64,6 +64,10 @@ const withSnapshot = async (data, warnings = []) => {
   return directory;
 };
 
+// A snapshot carrying the GH-145 freshness stamp.
+const withFreshSnapshot = async (data, syncedAt, warnings = []) =>
+  withSnapshot({ ...data, meta: { ...data.meta, syncedAt } }, warnings);
+
 // A stubbed `gh`: every invocation is recorded, and the nth call resolves
 // from `responses` (a string rejects with it as the tool's stderr, an object
 // with a `stdout` key passes through verbatim, anything else is served the
@@ -147,6 +151,69 @@ test("loadWorkflowState projects the joined payload with provenance", async () =
     artifacts,
     meta: { snapshot: "2026-09-05T12:00:00+01:00", repo: REPO },
   });
+});
+
+test("loadWorkflowState projects the freshness stamp and warnings channel", async () => {
+  const syncedAt = "2026-09-11T09:30:00.000Z";
+  const directory = await withFreshSnapshot(snapshot([workItem(7)]), syncedAt, [
+    'GH-9: unknown workflow label "workflow:shelved"; treated as pre-flow',
+  ]);
+  const state = await loadWorkflowState(directory);
+  deepStrictEqual(state, {
+    workItems: [workItem(7)],
+    maps: [],
+    blockerEdges: [],
+    decisions: [],
+    artifacts: [],
+    meta: { snapshot: "2026-09-05T12:00:00+01:00", repo: REPO, syncedAt },
+    warnings: ['GH-9: unknown workflow label "workflow:shelved"; treated as pre-flow'],
+  });
+});
+
+test("the read endpoint serves the freshness stamp and warnings channel", async () => {
+  const syncedAt = "2026-09-11T09:30:00.000Z";
+  const directory = await withFreshSnapshot(snapshot([workItem(7, "needs-triage")]), syncedAt, [
+    'GH-7: multiple triage labels "needs-triage", "ready-for-agent"; used "needs-triage"',
+  ]);
+  const handled = await handleWorkflowApi({
+    method: "GET",
+    pathname: "/api/workflow",
+    appDirectory: directory,
+  });
+  strictEqual(handled.status, 200);
+  strictEqual(handled.json.meta.syncedAt, syncedAt);
+  deepStrictEqual(handled.json.warnings, [
+    'GH-7: multiple triage labels "needs-triage", "ready-for-agent"; used "needs-triage"',
+  ]);
+});
+
+test("the sync trigger returns the re-read state with its freshness stamp", async () => {
+  const directory = await withSnapshot(snapshot([workItem(7)]));
+  const warnings = ['GH-9: unknown workflow label "workflow:shelved"; treated as pre-flow'];
+  const syncedAt = "2026-09-11T10:00:00.000Z";
+  const run = async () => {
+    // A sync rewrites the snapshot; the returned state must carry the fresh
+    // stamp and the warnings channel together — one read, all three refreshed.
+    await writeFile(
+      join(directory, "src", "data.generated.ts"),
+      generatedModule(
+        { ...snapshot([workItem(9, "needs-triage")]), meta: { ...snapshot().meta, syncedAt } },
+        warnings,
+      ),
+    );
+    return { stdout: "Synced 3 tickets.\n" };
+  };
+  const handled = await handleWorkflowApi({
+    method: "POST",
+    pathname: "/api/workflow/sync",
+    body: "{}",
+    appDirectory: directory,
+    hostRoot: HOST_ROOT,
+    run,
+  });
+  strictEqual(handled.status, 200);
+  strictEqual(handled.json.state.meta.syncedAt, syncedAt);
+  deepStrictEqual(handled.json.state.warnings, warnings);
 });
 
 test("the read endpoint serves the joined records schema-validated", async () => {
