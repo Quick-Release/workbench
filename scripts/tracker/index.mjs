@@ -8,12 +8,16 @@ import {
   fetchIssueComments,
   fetchMapIssues,
   fetchOpenIssues,
+  fetchOpenIssuesByLabel,
   fetchSubIssues,
 } from "./issues.mjs";
 import { lineEdgesForBody, mergeBlockerEdges } from "./edges.mjs";
 import { resolutionDecisionFromIssue, sortDecisions, specDecisionFromIssue } from "./decisions.mjs";
 import { fetchOpenPullRequests } from "./pulls.mjs";
 import { deriveWorkItem, loadWorkflowVocabulary } from "./labels.mjs";
+import { clientBugKind, clientFeedbackKind } from "../../src/lib/client-priority.ts";
+
+const CLIENT_TICKET_LABELS = [clientBugKind, clientFeedbackKind];
 
 const execFileAsync = promisify(execFile);
 
@@ -50,12 +54,20 @@ export const collectTrackerState = async ({
 }) => {
   // Every record family the sync merge iterates rides even the degraded
   // returns — a missing decisions array crashes the sort, not a warning.
+  // Client coverage degrades with them: uncollected tracker state is unknown
+  // client state, never "no client tickets" (GH-136).
   const empty = {
     workItems: [],
     maps: [],
     blockerEdges: [],
     decisions: [],
     pullRequests: [],
+    clientCoverage: {
+      labels: CLIENT_TICKET_LABELS,
+      checkedAt: new Date().toISOString(),
+      complete: false,
+      reasons: ["tracker-unavailable"],
+    },
     warnings: [],
   };
   if (!REPO_PATTERN.test(repo ?? ""))
@@ -111,6 +123,43 @@ export const collectTrackerState = async ({
   const knownNumbers = new Set(sweep.issues.map((entry) => entry.number));
   collectRecords(sweep.issues);
   collectRecords(mapIssues.issues);
+
+  // GH-136: client tickets are discovered by bounded, label-specific paginated
+  // reads — the OR of the two client labels, so an issue wearing both is found
+  // by either query — unioned into the records the sweep and maps already
+  // hold. The pass reports explicit coverage: a capped or failed read is
+  // unknown client state, never "no client tickets".
+  const clientCheckedAt = new Date().toISOString();
+  const clientIssues = new Map();
+  const coverageReasons = [];
+  let clientComplete = true;
+  for (const label of CLIENT_TICKET_LABELS) {
+    const pass = await fetchOpenIssuesByLabel({
+      repo,
+      token,
+      apiBase,
+      fetchImpl,
+      label,
+      maxPages,
+    });
+    warnings.push(...pass.warnings.map((warning) => `tracker: client discovery: ${warning}`));
+    for (const clientIssue of pass.issues) clientIssues.set(clientIssue.number, clientIssue);
+    if (pass.capped) {
+      clientComplete = false;
+      coverageReasons.push(`page-cap:${label}`);
+    }
+    if (pass.failed) {
+      clientComplete = false;
+      coverageReasons.push(`read-failed:${label}`);
+    }
+  }
+  collectRecords([...clientIssues.values()]);
+  const clientCoverage = {
+    labels: CLIENT_TICKET_LABELS,
+    checkedAt: clientCheckedAt,
+    complete: clientComplete,
+    reasons: coverageReasons,
+  };
 
   const maps = [];
   // ADR 0009: resolution records ride the same membership enumeration —
@@ -287,6 +336,7 @@ export const collectTrackerState = async ({
     blockerEdges: merged.edges,
     decisions: sortDecisions([...resolutions, ...specBundles]),
     pullRequests: [...openPulls.pulls].sort((left, right) => left.number - right.number),
+    clientCoverage,
     warnings,
   };
 };

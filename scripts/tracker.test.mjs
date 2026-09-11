@@ -30,11 +30,12 @@ const issue = (number, overrides = {}) => ({
   ...overrides,
 });
 
-// Routes the tracker's read shapes: the open-issue sweep, the wayfinder:map
-// query, per-issue sub_issues lists, targeted single reads, and the
-// open-pull-requests walk.
+// Routes the tracker's read shapes: the open-issue sweep, any label-filtered
+// query (wayfinder:map, the two client labels), per-issue sub_issues lists,
+// targeted single reads, and the open-pull-requests walk.
 const routeFetch = ({
   openPages = [[]],
+  labelPages = {},
   maps = [],
   subIssues = {},
   singles = {},
@@ -43,10 +44,18 @@ const routeFetch = ({
 }) => {
   const calls = [];
   let sweepPage = 0;
+  const labelSeen = {};
   const fetchImpl = async (url) => {
     const u = new URL(url);
     calls.push(u);
-    if (u.searchParams.get("labels") === "wayfinder:map") return jsonResponse(maps, status);
+    const label = u.searchParams.get("labels");
+    if (label === "wayfinder:map") return jsonResponse(maps, status);
+    if (label !== null) {
+      const pages = labelPages[label] ?? [];
+      const index = Math.min(labelSeen[label] ?? 0, pages.length - 1);
+      labelSeen[label] = index + 1;
+      return jsonResponse(pages[index] ?? [], status);
+    }
     if (u.pathname.endsWith("/pulls")) return jsonResponse(pulls, status);
     if (u.pathname.endsWith("/sub_issues")) {
       const number = u.pathname.match(/\/issues\/(\d+)\/sub_issues$/)[1];
@@ -166,6 +175,109 @@ test("sub-issues are membership only; an issue with children but no map label is
   ok(calls.every((u) => !u.pathname.endsWith("/sub_issues")));
 });
 
+test("a full page mixing issues and pull requests does not stop the sweep early (GH-136)", async () => {
+  const fullPage = [
+    ...Array.from({ length: 99 }, (_, index) => issue(index + 1)),
+    issue(500, { pull_request: { url: "https://api.github.com/repos/example/project/pulls/500" } }),
+  ];
+  const { fetchImpl, calls } = routeFetch({
+    openPages: [fullPage, [issue(200), issue(201), issue(202)]],
+  });
+
+  const { workItems, warnings } = await collect({ fetchImpl });
+
+  deepStrictEqual(warnings, []);
+  strictEqual(workItems.length, 102);
+  ok(workItems.some((item) => item.id === "GH-202"));
+  ok(!workItems.some((item) => item.id === "GH-500"));
+  const sweepCalls = calls.filter(
+    (u) =>
+      u.searchParams.get("state") === "open" &&
+      u.searchParams.get("labels") === null &&
+      !u.pathname.endsWith("/pulls"),
+  );
+  strictEqual(sweepCalls.length, 2);
+});
+
+test("client tickets are discovered by bounded label reads and carry source metadata", async () => {
+  const { fetchImpl } = routeFetch({
+    openPages: [[]],
+    labelPages: {
+      "client-bug": [
+        [
+          issue(300, {
+            title: "Checkout charges twice",
+            labels: [{ name: "client-bug" }],
+            created_at: "2026-09-01T10:00:00Z",
+            updated_at: "2026-09-02T11:00:00Z",
+          }),
+        ],
+      ],
+      "client-feedback": [
+        [issue(301, { labels: [{ name: "client-feedback" }, { name: "enhancement" }] })],
+      ],
+    },
+  });
+
+  const { workItems, clientCoverage, warnings } = await collect({ fetchImpl });
+
+  deepStrictEqual(warnings, []);
+  const bug = workItems.find((item) => item.id === "GH-300");
+  strictEqual(bug.state, "open");
+  deepStrictEqual(bug.labels, ["client-bug"]);
+  strictEqual(bug.createdAt, "2026-09-01T10:00:00Z");
+  strictEqual(bug.updatedAt, "2026-09-02T11:00:00Z");
+  const feedback = workItems.find((item) => item.id === "GH-301");
+  deepStrictEqual(feedback.labels, ["client-feedback", "enhancement"]);
+  strictEqual(clientCoverage.complete, true);
+  deepStrictEqual(clientCoverage.reasons, []);
+  deepStrictEqual(clientCoverage.labels, ["client-bug", "client-feedback"]);
+  match(clientCoverage.checkedAt, /^\d{4}-\d{2}-\d{2}T/);
+});
+
+test("an issue wearing both client labels is discovered and stored once", async () => {
+  const bothLabels = [{ name: "client-bug" }, { name: "client-feedback" }];
+  const { fetchImpl } = routeFetch({
+    labelPages: {
+      "client-bug": [[issue(305, { labels: bothLabels })]],
+      "client-feedback": [[issue(305, { labels: bothLabels })]],
+    },
+  });
+
+  const { workItems, warnings } = await collect({ fetchImpl });
+
+  deepStrictEqual(warnings, []);
+  deepStrictEqual(workItems.filter((item) => item.id === "GH-305").length, 1);
+});
+
+test("a capped client read is unknown coverage, never zero client tickets", async () => {
+  const fullClientPage = Array.from({ length: 100 }, (_, index) =>
+    issue(1000 + index, { labels: [{ name: "client-bug" }] }),
+  );
+  const { fetchImpl } = routeFetch({
+    openPages: [[]],
+    labelPages: { "client-bug": [fullClientPage] },
+  });
+
+  const { clientCoverage, warnings } = await collect({ fetchImpl, maxPages: 1 });
+
+  strictEqual(clientCoverage.complete, false);
+  deepStrictEqual(clientCoverage.reasons, ["page-cap:client-bug"]);
+  match(warnings.join("\n"), /client discovery/);
+});
+
+test("a failed client read degrades coverage fail-closed", async () => {
+  const { fetchImpl } = routeFetch({ status: 500 });
+
+  const { clientCoverage } = await collect({ fetchImpl });
+
+  strictEqual(clientCoverage.complete, false);
+  deepStrictEqual(clientCoverage.reasons, [
+    "read-failed:client-bug",
+    "read-failed:client-feedback",
+  ]);
+});
+
 test("label-encoded fields derive per ADR 0007, including deferred and wayfinder kind", () => {
   const { record, warnings } = deriveWorkItem(
     issue(9, {
@@ -176,6 +288,8 @@ test("label-encoded fields derive per ADR 0007, including deferred and wayfinder
         { name: "bug" },
         { name: "wayfinder:prototype" },
       ],
+      created_at: "2026-08-30T09:00:00Z",
+      updated_at: "2026-09-01T09:00:00Z",
     }),
     DEFAULT_WORKFLOW_VOCABULARY,
   );
@@ -186,6 +300,16 @@ test("label-encoded fields derive per ADR 0007, including deferred and wayfinder
   strictEqual(record.deferred, true);
   strictEqual(record.category, "bug");
   strictEqual(record.kind, "prototype");
+  // GH-136: source labels and timestamps ride for the shared client policy.
+  deepStrictEqual(record.labels, [
+    "workflow:implementing",
+    "needs-info",
+    "deferred",
+    "bug",
+    "wayfinder:prototype",
+  ]);
+  strictEqual(record.createdAt, "2026-08-30T09:00:00Z");
+  strictEqual(record.updatedAt, "2026-09-01T09:00:00Z");
 });
 
 test("an issue with no labels is pre-flow, unlabeled, and unparked", () => {
@@ -270,7 +394,7 @@ test("a host repo with no issues syncs to empty arrays without warnings", async 
 test("missing credentials degrade to empty arrays with a warning", async () => {
   const { fetchImpl } = routeFetch({});
 
-  const { workItems, maps, decisions, warnings } = await collect({
+  const { workItems, maps, decisions, clientCoverage, warnings } = await collect({
     fetchImpl,
     env: {},
     ghToken: async () => "",
@@ -281,6 +405,10 @@ test("missing credentials degrade to empty arrays with a warning", async () => {
   // The degraded shape must carry every record family the sync merge
   // iterates — the decisions collector rides the same early return (#70).
   deepStrictEqual(decisions, []);
+  // Uncollected tracker state is unknown client state, never "no client
+  // tickets" (GH-136).
+  strictEqual(clientCoverage.complete, false);
+  deepStrictEqual(clientCoverage.reasons, ["tracker-unavailable"]);
   strictEqual(warnings.length, 1);
   match(warnings[0], /GITHUB_TOKEN/);
 });

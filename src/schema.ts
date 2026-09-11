@@ -14,6 +14,7 @@ import type {
 import {
   artifactKinds,
   blockerEdgeSources,
+  clientTicketKinds,
   decisionSources,
   decisionStatuses,
   engines,
@@ -105,6 +106,22 @@ export const WorkItemRecordSchema = Schema.Struct({
   category: TrackerCategorySchema,
   kind: WayfinderKindSchema,
   summary: Schema.String,
+  // GH-136 source metadata: absent on older snapshots, which is unknown and
+  // treated fail-closed — never read as "not a client ticket".
+  labels: Schema.optional(Schema.Array(Schema.String)),
+  createdAt: Schema.optional(Schema.String),
+  updatedAt: Schema.optional(Schema.String),
+});
+
+export const ClientTicketKindSchema = Schema.Literals(clientTicketKinds);
+
+// GH-136: how completely the last client-ticket pass read GitHub. A capped or
+// failed pass is unknown client state, never "no client tickets".
+export const ClientTicketCoverageSchema = Schema.Struct({
+  labels: Schema.Array(Schema.String),
+  checkedAt: Schema.String,
+  complete: Schema.Boolean,
+  reasons: Schema.Array(Schema.String),
 });
 
 // ADR 0009: one decision record per source conclusion — `statement` carries
@@ -171,6 +188,7 @@ export const WorkflowStatePayloadSchema = Schema.Struct({
   decisions: Schema.Array(DecisionRecordSchema),
   artifacts: Schema.Array(ArtifactRecordSchema),
   meta: WorkflowStateMetaSchema,
+  clientCoverage: Schema.optional(ClientTicketCoverageSchema),
 });
 
 export const TriageMoveRequestSchema = Schema.Struct({
@@ -478,6 +496,7 @@ export const OverviewDataSchema = Schema.Struct({
   skillInstalls: Schema.Array(Schema.String),
   sessions: SessionUsageSchema,
   highlights: Schema.Array(CommitCandidateSchema),
+  clientCoverage: Schema.optional(ClientTicketCoverageSchema),
 });
 
 // Annotating the decoded output with the domain type is the compile-time check

@@ -28,11 +28,16 @@ const isIssue = (entry) =>
   entry && typeof entry === "object" && typeof entry.number === "number" && !entry.pull_request;
 
 // Shared paged walk for issue-list reads: stops when a short page arrives or
-// the cap is reached, and reports which. Never throws on a failed page — a
-// failed page degrades to what was collected plus a warning.
+// the cap is reached, and reports which. Continuation counts the *raw* page —
+// the issue-list endpoint mixes pull requests into its responses, so the
+// filtered issue count on a full page would stop the walk early (GH-136).
+// Never throws on a failed page — a failed page degrades to what was
+// collected plus a warning, and reports itself through `failed`.
 const pagedIssues = async ({ fetchImpl, token, urlFor, maxPages, what }) => {
   const issues = [];
   const warnings = [];
+  let capped = false;
+  let failed = false;
   for (let page = 1, hasMore = true; hasMore && page <= maxPages; page += 1) {
     let payload;
     try {
@@ -43,23 +48,26 @@ const pagedIssues = async ({ fetchImpl, token, urlFor, maxPages, what }) => {
         "tracker",
       );
     } catch (error) {
+      failed = true;
       warnings.push(
         issues.length === 0
           ? `${what} unavailable (${error instanceof Error ? error.message : "read failed"}); no ${what} collected`
           : `${what} unavailable (${error instanceof Error ? error.message : "read failed"}); collected the first ${issues.length}`,
       );
-      return { issues, warnings };
+      return { issues, warnings, capped, failed };
     }
-    const returned = Array.isArray(payload) ? payload.filter(isIssue) : [];
-    issues.push(...returned);
-    hasMore = returned.length === PER_PAGE;
+    const entries = Array.isArray(payload) ? payload : [];
+    issues.push(...entries.filter(isIssue));
+    hasMore = entries.length === PER_PAGE;
     if (!hasMore) break;
-    if (page === maxPages)
+    if (page === maxPages) {
+      capped = true;
       warnings.push(
         `${what} stopped at the ${maxPages}-page cap; showing the first ${issues.length}`,
       );
+    }
   }
-  return { issues, warnings };
+  return { issues, warnings, capped, failed };
 };
 
 export const fetchOpenIssues = async ({ repo, token, apiBase, fetchImpl, maxPages }) =>
@@ -87,6 +95,26 @@ export const fetchMapIssues = async ({ repo, token, apiBase, fetchImpl, maxPages
         per_page: PER_PAGE,
         page,
       }),
+  });
+
+// Client tickets (GH-136) are discovered by an open, label-filtered walk —
+// one read per client label, the OR of the two — bounded by the label like
+// map discovery, never a sweep.
+export const fetchOpenIssuesByLabel = async ({
+  repo,
+  token,
+  apiBase,
+  fetchImpl,
+  label,
+  maxPages,
+}) =>
+  pagedIssues({
+    fetchImpl,
+    token,
+    maxPages,
+    what: `open "${label}" issues`,
+    urlFor: (page) =>
+      issuesUrl(apiBase, repo, "", { state: "open", labels: label, per_page: PER_PAGE, page }),
   });
 
 export const fetchSubIssues = async ({ repo, token, apiBase, issueNumber, fetchImpl, maxPages }) =>
@@ -163,13 +191,14 @@ export const fetchIssueComments = async ({
       );
       return { comments, warnings };
     }
-    const returned = Array.isArray(payload)
-      ? payload.filter(
-          (entry) => entry && typeof entry === "object" && typeof entry.body === "string",
-        )
-      : [];
+    const entries = Array.isArray(payload) ? payload : [];
+    const returned = entries.filter(
+      (entry) => entry && typeof entry === "object" && typeof entry.body === "string",
+    );
     comments.push(...returned);
-    hasMore = returned.length === PER_PAGE;
+    // Same raw-page continuation rule as the issue lists: a malformed entry
+    // on a full page must not stop the walk (GH-136).
+    hasMore = entries.length === PER_PAGE;
     if (!hasMore) break;
     if (page === maxPages)
       warnings.push(
