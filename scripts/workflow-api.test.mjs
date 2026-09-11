@@ -949,3 +949,96 @@ test("a failed sync run is a 502 carrying the tool's stderr", async () => {
   strictEqual(handled.status, 502);
   ok(/missing \.env/.test(handled.json.message), handled.json.message);
 });
+
+// The closed lens (GH-136): the label-filtered history read behind
+// /api/client-tickets/closed, served with explicit coverage.
+const closedIssue = (number, overrides = {}) => ({
+  number,
+  title: `Client bug ${number}`,
+  state: "closed",
+  state_reason: "completed",
+  labels: [{ name: "client-bug" }],
+  html_url: `https://github.com/${REPO}/issues/${number}`,
+  assignees: [],
+  body: "",
+  created_at: "2026-08-01T00:00:00Z",
+  updated_at: `2026-09-01T00:00:${String(number % 60).padStart(2, "0")}Z`,
+  ...overrides,
+});
+
+const labelFetch = (pages) => async (url) => {
+  const u = new URL(url);
+  const label = u.searchParams.get("labels");
+  const body = (pages[label] ?? []).shift() ?? [];
+  return { ok: true, status: 200, json: async () => body };
+};
+
+test("the closed lens serves bounded label-specific history with coverage", async () => {
+  const directory = await withSnapshot(snapshot([]));
+  const fetchImpl = labelFetch({
+    "client-bug": [[closedIssue(12)]],
+    "client-feedback": [
+      [
+        closedIssue(13, {
+          labels: [{ name: "client-feedback" }],
+          state_reason: "not_planned",
+        }),
+      ],
+    ],
+  });
+  const handled = await handleWorkflowApi({
+    method: "GET",
+    pathname: "/api/client-tickets/closed",
+    appDirectory: directory,
+    fetchImpl,
+    env: { GITHUB_TOKEN: "secret" },
+    ghToken: async () => "",
+  });
+  strictEqual(handled.status, 200);
+  deepStrictEqual(
+    handled.json.tickets.map((ticket) => ticket.id),
+    ["GH-13", "GH-12"],
+  );
+  strictEqual(handled.json.tickets[0].stateReason, "not_planned");
+  strictEqual(handled.json.tickets[1].stateReason, "completed");
+  strictEqual(handled.json.coverage.complete, true);
+  ok(fetchImpl.calls ?? true);
+});
+
+test("the closed lens is a typed 503 without credentials", async () => {
+  const directory = await withSnapshot(snapshot([]));
+  let fetched = false;
+  const denied = await handleWorkflowApi({
+    method: "GET",
+    pathname: "/api/client-tickets/closed",
+    appDirectory: directory,
+    fetchImpl: async () => {
+      fetched = true;
+      return { ok: true, status: 200, json: async () => [] };
+    },
+    env: {},
+    ghToken: async () => "",
+  });
+  strictEqual(denied.status, 503);
+  ok(String(denied.json.message).includes("GITHUB_TOKEN"));
+  strictEqual(fetched, false);
+});
+
+test("a failed closed-lens read answers 200 with incomplete coverage, never a quiet zero", async () => {
+  const directory = await withSnapshot(snapshot([]));
+  const handled = await handleWorkflowApi({
+    method: "GET",
+    pathname: "/api/client-tickets/closed",
+    appDirectory: directory,
+    fetchImpl: async () => ({ ok: false, status: 500, json: async () => ({}) }),
+    env: { GITHUB_TOKEN: "secret" },
+    ghToken: async () => "",
+  });
+  strictEqual(handled.status, 200);
+  deepStrictEqual(handled.json.tickets, []);
+  strictEqual(handled.json.coverage.complete, false);
+  deepStrictEqual(handled.json.coverage.reasons, [
+    "read-failed:client-bug",
+    "read-failed:client-feedback",
+  ]);
+});

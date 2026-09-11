@@ -1,5 +1,6 @@
 import type { TriageState, TrackerMapRecord, WorkItemRecord } from "../types";
-import { byIssueNumber, workItemIdNumberText } from "./work-item-id";
+import { compareByClientTier } from "./client-priority";
+import { workItemIdNumberText } from "./work-item-id";
 
 // The triage view's lanes (ticket #59): an Intake lane — the triage skill's
 // surface of unlabeled ∪ needs-triage issues with map children excluded — and
@@ -41,11 +42,12 @@ export const triageLanes = (
     else if (item.deferred) lanes.waiting.parked.push(item);
     else if (inIntake && !isMapChild(item, maps)) lanes.intake.push(item);
   }
-  lanes.intake.sort(byIssueNumber);
-  lanes.waiting.reporter.sort(byIssueNumber);
-  lanes.waiting.human.sort(byIssueNumber);
-  lanes.waiting.parked.sort(byIssueNumber);
-  lanes.refused.sort(byIssueNumber);
+  // Client tickets head every lane (tier order, ADR 0012), then issue number.
+  lanes.intake.sort(compareByClientTier);
+  lanes.waiting.reporter.sort(compareByClientTier);
+  lanes.waiting.human.sort(compareByClientTier);
+  lanes.waiting.parked.sort(compareByClientTier);
+  lanes.refused.sort(compareByClientTier);
   return lanes;
 };
 

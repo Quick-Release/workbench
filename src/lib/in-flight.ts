@@ -1,6 +1,6 @@
 import type { WorkItemRecord } from "../types";
+import { compareByClientTier } from "./client-priority";
 import { deriveDisplayState } from "./display-state";
-import { byIssueNumber } from "./work-item-id";
 
 // The in-flight bucket (ticket #62): the assigned work a Developer resumes
 // before grabbing anything new, in priority order — reviewing, then
@@ -33,8 +33,9 @@ export const inFlightBuckets = (workItems: readonly WorkItemRecord[]): InFlightB
     else if (display.phase === "implementing") buckets.implementing.push(record);
     else buckets.notStarted.push(record);
   }
-  buckets.reviewing.sort(byIssueNumber);
-  buckets.implementing.sort(byIssueNumber);
-  buckets.notStarted.sort(byIssueNumber);
+  // Client tickets head each bucket (tier order, ADR 0012), then issue number.
+  buckets.reviewing.sort(compareByClientTier);
+  buckets.implementing.sort(compareByClientTier);
+  buckets.notStarted.sort(compareByClientTier);
   return buckets;
 };

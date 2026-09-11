@@ -8,22 +8,19 @@ import {
   fetchIssueComments,
   fetchMapIssues,
   fetchOpenIssues,
-  fetchOpenIssuesByLabel,
   fetchSubIssues,
 } from "./issues.mjs";
+import { CLIENT_TICKET_LABELS, collectClientTickets } from "./client-tickets.mjs";
 import { lineEdgesForBody, mergeBlockerEdges } from "./edges.mjs";
 import { resolutionDecisionFromIssue, sortDecisions, specDecisionFromIssue } from "./decisions.mjs";
 import { fetchOpenPullRequests } from "./pulls.mjs";
 import { deriveWorkItem, loadWorkflowVocabulary } from "./labels.mjs";
-import { clientBugKind, clientFeedbackKind } from "../../src/lib/client-priority.ts";
-
-const CLIENT_TICKET_LABELS = [clientBugKind, clientFeedbackKind];
 
 const execFileAsync = promisify(execFile);
 
 // The gh CLI is this tracker's canonical client, so an authenticated `gh`
 // login can stand in for exporting the token environment variable.
-const tokenFromGhCli = async () => {
+export const tokenFromGhCli = async () => {
   try {
     const { stdout } = await execFileAsync("gh", ["auth", "token"], {
       stdio: ["ignore", "pipe", "ignore"],
@@ -129,37 +126,10 @@ export const collectTrackerState = async ({
   // by either query — unioned into the records the sweep and maps already
   // hold. The pass reports explicit coverage: a capped or failed read is
   // unknown client state, never "no client tickets".
-  const clientCheckedAt = new Date().toISOString();
-  const clientIssues = new Map();
-  const coverageReasons = [];
-  let clientComplete = true;
-  for (const label of CLIENT_TICKET_LABELS) {
-    const pass = await fetchOpenIssuesByLabel({
-      repo,
-      token,
-      apiBase,
-      fetchImpl,
-      label,
-      maxPages,
-    });
-    warnings.push(...pass.warnings.map((warning) => `tracker: client discovery: ${warning}`));
-    for (const clientIssue of pass.issues) clientIssues.set(clientIssue.number, clientIssue);
-    if (pass.capped) {
-      clientComplete = false;
-      coverageReasons.push(`page-cap:${label}`);
-    }
-    if (pass.failed) {
-      clientComplete = false;
-      coverageReasons.push(`read-failed:${label}`);
-    }
-  }
-  collectRecords([...clientIssues.values()]);
-  const clientCoverage = {
-    labels: CLIENT_TICKET_LABELS,
-    checkedAt: clientCheckedAt,
-    complete: clientComplete,
-    reasons: coverageReasons,
-  };
+  const clientPass = await collectClientTickets({ repo, token, apiBase, fetchImpl, maxPages });
+  warnings.push(...clientPass.warnings);
+  collectRecords(clientPass.issues);
+  const clientCoverage = clientPass.coverage;
 
   const maps = [];
   // ADR 0009: resolution records ride the same membership enumeration —

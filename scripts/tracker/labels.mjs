@@ -186,6 +186,12 @@ export const deriveWorkItem = (issue, vocabulary = DEFAULT_WORKFLOW_VOCABULARY) 
       labels,
       createdAt: issue.created_at ?? undefined,
       updatedAt: issue.updated_at ?? undefined,
+      // Why GitHub says it closed — completed vs not_planned render honestly
+      // in the client lens instead of every closure posing as a delivered fix.
+      stateReason:
+        issue.state_reason === "completed" || issue.state_reason === "not_planned"
+          ? issue.state_reason
+          : undefined,
     },
     warnings: [
       ...withPrefix(phase.warning),

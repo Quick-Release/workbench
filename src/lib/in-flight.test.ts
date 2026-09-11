@@ -75,3 +75,16 @@ describe("in-flight buckets", () => {
     expect(buckets.implementing).toEqual([]);
   });
 });
+
+describe("client tier ordering (ADR 0012)", () => {
+  it("heads in-flight buckets with client tickets, then issue number", () => {
+    const buckets = inFlightBuckets([
+      item(71, { assignees: ["vvaz"], phase: "reviewing" }),
+      item(9, { labels: ["client-bug"], assignees: ["vvaz"], phase: "reviewing" }),
+      item(24, { labels: ["client-feedback"], assignees: ["vvaz"], phase: "implementing" }),
+      item(30, { assignees: ["vvaz"], phase: "implementing" }),
+    ]);
+    expect(ids(buckets.reviewing)).toEqual(["GH-9", "GH-71"]);
+    expect(ids(buckets.implementing)).toEqual(["GH-24", "GH-30"]);
+  });
+});

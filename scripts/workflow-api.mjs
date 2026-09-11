@@ -19,10 +19,14 @@ import {
   parseTriageMoveRequest,
   parseTriageMoveResult,
   parseWorkflowStatePayload,
+  parseClosedClientTickets,
 } from "../src/schema.ts";
 import { workflowStateFrom } from "../src/lib/workflow-state.ts";
 import { byIssueNumber, workItemIdNumber } from "../src/lib/work-item-id.ts";
 import { deriveWorkItem } from "./tracker/labels.mjs";
+import { collectClientTickets } from "./tracker/client-tickets.mjs";
+import { tokenFromGhCli } from "./tracker/index.mjs";
+import { GITHUB_API } from "./tracker/issues.mjs";
 import { guardedApi, sendJson } from "./api-shared.mjs";
 
 const execFileAsync = promisify(execFile);
@@ -33,6 +37,7 @@ const execFileAsync = promisify(execFile);
 const APP_DIRECTORY = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 const WORKFLOW_ROUTE = /^\/api\/workflow\/?$/;
+const CLIENT_CLOSED_ROUTE = /^\/api\/client-tickets\/closed\/?$/;
 const TRIAGE_ROUTE = /^\/api\/workflow\/triage\/?$/;
 const ISSUE_EDIT_ROUTE = /^\/api\/workflow\/issue\/edit\/?$/;
 const ISSUE_COMMENT_ROUTE = /^\/api\/workflow\/issue\/comment\/?$/;
@@ -573,7 +578,9 @@ const POST_ROUTES = [
 ];
 
 // The seam handler behind the dev-server middleware: pure enough to test
-// without vite, returning null for routes it does not own.
+// without vite, returning null for routes it does not own. `fetchImpl`
+// overrides the GitHub reads (the closed lens) in tests; `env`/`ghToken`
+// mirror the tracker collector's credential injection.
 export const handleWorkflowApi = async ({
   method,
   pathname,
@@ -581,6 +588,9 @@ export const handleWorkflowApi = async ({
   appDirectory = APP_DIRECTORY,
   hostRoot = APP_DIRECTORY,
   run = runGh,
+  fetchImpl,
+  env = process.env,
+  ghToken = tokenFromGhCli,
 }) => {
   if (method === "GET" && WORKFLOW_ROUTE.test(pathname)) {
     try {
@@ -593,6 +603,50 @@ export const handleWorkflowApi = async ({
         status: 500,
         json: {
           message: `workflow state unavailable (${messageFrom(error)}); the dashboard falls back to its bundled snapshot`,
+        },
+      };
+    }
+  }
+
+  if (method === "GET" && CLIENT_CLOSED_ROUTE.test(pathname)) {
+    // The closed lens (GH-136): a bounded, label-specific history read — one
+    // page per client label, most recently updated first — so the open
+    // snapshot never has to pretend it contains closed history. Coverage
+    // rides the answer; a failed or capped read is a visible warning, and a
+    // missing token is a typed 503, never an empty "no tickets".
+    try {
+      const state = parseWorkflowStatePayload(await loadWorkflowState(appDirectory));
+      const fromEnv = typeof env.GITHUB_TOKEN === "string" ? env.GITHUB_TOKEN.trim() : "";
+      const token = fromEnv || (await ghToken());
+      if (!token)
+        return {
+          status: 503,
+          json: {
+            message:
+              "closed client tickets unavailable: missing GITHUB_TOKEN (set it, or authenticate the gh CLI)",
+          },
+        };
+      const pass = await collectClientTickets({
+        repo: state.meta.repo,
+        token,
+        apiBase: GITHUB_API,
+        fetchImpl: fetchImpl ?? globalThis.fetch,
+        maxPages: 1,
+        state: "closed",
+        sort: "updated",
+      });
+      const tickets = pass.issues
+        .map((issue) => deriveWorkItem(issue).record)
+        .sort((left, right) => workItemIdNumber(right.id) - workItemIdNumber(left.id));
+      return {
+        status: 200,
+        json: parseClosedClientTickets({ tickets, coverage: pass.coverage }),
+      };
+    } catch (error) {
+      return {
+        status: 502,
+        json: {
+          message: `closed client tickets unavailable (${messageFrom(error)}); the closed lens stays empty rather than guessing`,
         },
       };
     }
@@ -645,6 +699,7 @@ const readBody = (request) =>
 
 const isWorkflowRoute = (pathname) =>
   WORKFLOW_ROUTE.test(pathname) ||
+  CLIENT_CLOSED_ROUTE.test(pathname) ||
   SYNC_ROUTE.test(pathname) ||
   POST_ROUTES.some((action) => action.route.test(pathname));
 

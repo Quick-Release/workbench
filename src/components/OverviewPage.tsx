@@ -2,6 +2,8 @@ import { useMemo } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { ClientCoverageNote, ClientTicketRow } from "@/components/ClientTicketList";
+import { clientAttention } from "@/lib/client-priority";
 import { deriveDisplayState } from "@/lib/display-state";
 import { inFlightBuckets } from "@/lib/in-flight";
 import {
@@ -42,6 +44,8 @@ export function OverviewPage({
       <section aria-label="Next action">
         <RecommendationHero recommendation={recommendation} onOpenIssue={onOpenIssue} />
       </section>
+
+      <ClientAttentionSection state={state} onOpenIssue={onOpenIssue} />
 
       <section aria-label="Repo-wide frontier">
         <FrontierStripSection strip={strip} onOpenIssue={onOpenIssue} />
@@ -135,6 +139,58 @@ function RecommendationHero({
         </p>
       )}
     </Card>
+  );
+}
+
+// The Overview's Client attention section (GH-136, ADR 0012): every open
+// client ticket — bugs first, feedback next, with ownership and the
+// waiting/blocked reason — above ordinary work. Attention is not
+// executability, so unassigned, untriaged, deferred, and waiting tickets all
+// appear here; the section also renders when coverage is unknown or
+// incomplete, because "no known client tickets" must never quietly pose as
+// "no client tickets".
+function ClientAttentionSection({
+  state,
+  onOpenIssue,
+}: Readonly<{
+  state: WorkflowStatePayload;
+  onOpenIssue: (issueId: string) => void;
+}>) {
+  const { bugs, feedback } = clientAttention(state.workItems);
+  const coverage = state.clientCoverage;
+  if (bugs.length === 0 && feedback.length === 0 && (!coverage || coverage.complete)) return null;
+  return (
+    <section aria-label="Client attention">
+      <Card
+        data-slot="client-attention"
+        className="gap-3 rounded-none border-amber/40 bg-panel/90 p-4 shadow-none"
+      >
+        <div className="flex flex-wrap items-baseline gap-x-3">
+          <p className="section-kicker">Client attention — bugs first</p>
+          <span className="text-xs text-muted-foreground" data-slot="client-attention-counts">
+            {bugs.length} open {bugs.length === 1 ? "bug" : "bugs"} · {feedback.length} open{" "}
+            {feedback.length === 1 ? "request" : "requests"}
+          </span>
+          <a href="/client-tickets" className="ml-auto text-xs underline hover:text-acid">
+            All client tickets →
+          </a>
+        </div>
+        <ClientCoverageNote coverage={coverage} />
+        {bugs.length + feedback.length > 0 && (
+          <ul data-slot="client-attention-list" className="flex flex-col">
+            {[...bugs, ...feedback].map((record) => (
+              <ClientTicketRow
+                key={record.id}
+                record={record}
+                workItems={state.workItems}
+                blockerEdges={state.blockerEdges}
+                onOpenIssue={onOpenIssue}
+              />
+            ))}
+          </ul>
+        )}
+      </Card>
+    </section>
   );
 }
 

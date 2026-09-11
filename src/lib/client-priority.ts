@@ -1,7 +1,13 @@
-// The value import keeps the explicit extension so the tracker scripts and
+// The value imports keep the explicit extensions so the tracker scripts and
 // the seam — plain Node ESM importing src TS directly — can share this
 // module; the type imports erase.
-import { clientTicketKinds, type ClientTicketKind, type WorkItemRecord } from "../types.ts";
+import {
+  clientTicketKinds,
+  type BlockerEdgeRecord,
+  type ClientTicketKind,
+  type WorkItemRecord,
+} from "../types.ts";
+import { workItemIdNumber } from "./work-item-id.ts";
 
 // The canonical label names, exported for readers that walk GitHub by label
 // (the tracker's client discovery) — always from here, never re-declared.
@@ -58,10 +64,7 @@ export const clientTierFor = (record: {
   return kind === "client-feedback" ? 1 : 2;
 };
 
-const issueNumberOf = (record: { id: string }): number => {
-  const number = Number(record.id.slice(3));
-  return Number.isFinite(number) ? number : Number.MAX_SAFE_INTEGER;
-};
+const issueNumberOf = (record: { id: string }): number => workItemIdNumber(record.id);
 
 // Tier order first, deterministic issue-number fallback; a stable sort in the
 // caller keeps the existing readiness/map-order rules inside each tier.
@@ -100,6 +103,38 @@ export const openClientBugs = (workItems: readonly WorkItemRecord[]): ClientGate
     .filter((record) => record.state === "open" && clientKindFor(record) === "client-bug")
     .map((record) => ({ id: record.id, title: record.title, url: record.url }))
     .sort((left, right) => issueNumberOf(left) - issueNumberOf(right));
+
+// The row's waiting/blocked explanation, computed from blocker edges and the
+// record's own state — never a stored status. Blocked outranks parked, which
+// outranks the explicit waiting states; an actionable ticket explains nothing
+// and renders no excuse (GH-136).
+export const clientWaitingReason = (
+  record: WorkItemRecord,
+  workItems: readonly WorkItemRecord[],
+  blockerEdges: readonly BlockerEdgeRecord[],
+): string | null => {
+  const stateById = new Map(workItems.map((item) => [item.id, item]));
+  const openBlockers = blockerEdges
+    .filter((edge) => edge.blockedId === record.id)
+    .map((edge) => edge.blockerId)
+    .filter((id) => stateById.get(id)?.state === "open")
+    .sort((left, right) => issueNumberOf({ id: left }) - issueNumberOf({ id: right }));
+  if (openBlockers.length > 0) return `blocked by ${openBlockers.join(", ")}`;
+  if (record.deferred) return "parked (deferred)";
+  switch (record.triageState) {
+    case "needs-info":
+      return "waiting on information";
+    case "ready-for-human":
+      return "waiting on a human";
+    case "wontfix":
+      return "refused (wontfix)";
+    case "needs-triage":
+    case "unlabeled":
+      return "awaiting triage";
+    default:
+      return null;
+  }
+};
 
 export type ClientGateDenialReason =
   | "target_not_open"
