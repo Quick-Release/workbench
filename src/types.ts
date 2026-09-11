@@ -135,6 +135,17 @@ export type WorkItemRecord = {
   labels?: readonly string[];
   createdAt?: string;
   updatedAt?: string;
+  // Why GitHub says it closed — `completed` (a delivered fix) or `not_planned`
+  // (closed without one) — so closure reasons render honestly (GH-136).
+  stateReason?: "completed" | "not_planned";
+};
+
+// The closed lens' bounded, label-specific history read (GH-136): recent
+// closed client tickets with the coverage of the fetch that produced them.
+// The open snapshot never pretends to contain closed history.
+export type ClosedClientTickets = {
+  tickets: readonly WorkItemRecord[];
+  coverage: ClientTicketCoverage;
 };
 
 export type TrackerMapRecord = {

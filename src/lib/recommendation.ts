@@ -4,6 +4,7 @@ import type {
   WorkflowStatePayload,
   WorkItemRecord,
 } from "../types";
+import { clientKindFor, compareByClientTier } from "./client-priority";
 import { deriveDisplayState } from "./display-state";
 import { frontier, frontierItemFromWorkItem } from "./frontier";
 import { inFlightBuckets } from "./in-flight";
@@ -11,12 +12,15 @@ import { byMapOrderThenNumber, mapOrderIndex } from "./map-order";
 import { triageLanes } from "./triage";
 import { workItemIdLabel } from "./work-item-id";
 
-// The ordered priority table (spec #54, "Derivation"): the recommendation
-// engine is a pure function over the snapshot, layering readiness filters on
-// the structural frontier and reading the buckets below in order — the
-// global recommendation is the head of the first non-empty bucket. There is
-// no to-spec row: grilling completion is not machine-detectable.
+// The ordered priority table (spec #54, "Derivation", extended by ADR 0012):
+// the recommendation engine is a pure function over the snapshot, layering
+// readiness filters on the structural frontier and reading the buckets below
+// in order — the global recommendation is the head of the first non-empty
+// bucket. Client actions come first (client bugs, then client feedback,
+// outrank all internal work); there is no to-spec row: grilling completion is
+// not machine-detectable.
 export const recommendationBuckets = [
+  "client-action",
   "in-flight",
   "implementation-frontier",
   "map-frontier",
@@ -43,6 +47,60 @@ export type Recommendation = {
 // number ascending — the shared comparator (map-order).
 const compareInMapOrder = (maps: readonly TrackerMapRecord[]) =>
   byMapOrderThenNumber(mapOrderIndex(maps));
+
+// The client tier (ADR 0012): the allowed actions a client ticket justifies —
+// remediation for one that is grabbable, ticketed, and ready-for-agent, and
+// triage for one still awaiting labels. Waiting client work (needs-info,
+// ready-for-human, wontfix, deferred) is attention, not an allowed action, so
+// it never appears here — the banner and the Client Tickets page carry it.
+// Remediation outranks triage; inside each group, map order then number.
+const clientActionBucket = (state: WorkflowStatePayload): Recommendation[] => {
+  const compare = compareInMapOrder(state.maps);
+  const remediation: Recommendation[] = [];
+  for (const record of grabbableRecords(state)) {
+    const kind = clientKindFor(record);
+    if (kind === null) continue;
+    const display = deriveDisplayState(record, false);
+    if (
+      display.phase !== "ticketed" ||
+      display.triageState !== "ready-for-agent" ||
+      display.deferred
+    )
+      continue;
+    remediation.push({
+      bucket: "client-action",
+      issueId: record.id,
+      title: record.title,
+      command: "/implement",
+      primary: `/implement ${workItemIdLabel(record.id)}`,
+      reason:
+        kind === "client-bug"
+          ? "client bug — grabbable, ticketed, ready-for-agent; client bugs come before internal work"
+          : "client feedback — grabbable, ticketed, ready-for-agent; client work comes before internal work",
+    });
+  }
+  const { intake } = triageLanes(state.workItems, state.maps);
+  const triageRows = intake
+    .filter((record) => clientKindFor(record) !== null)
+    .map((record) => {
+      const kind = clientKindFor(record);
+      return {
+        bucket: "client-action" as const,
+        issueId: record.id,
+        title: record.title,
+        command: "/triage",
+        primary: `/triage ${workItemIdLabel(record.id)}`,
+        reason:
+          kind === "client-bug"
+            ? "client bug awaiting triage — triage it before any internal work"
+            : "client feedback awaiting triage — triage it before any internal work",
+      };
+    });
+  return [
+    ...remediation.sort((left, right) => compare(left.issueId, right.issueId)),
+    ...triageRows.sort((left, right) => compare(left.issueId, right.issueId)),
+  ];
+};
 
 const inFlightBucket = (state: WorkflowStatePayload): Recommendation[] => {
   const buckets = inFlightBuckets(state.workItems);
@@ -210,6 +268,7 @@ const triageIntakeBucket = (state: WorkflowStatePayload): Recommendation[] => {
 };
 
 const BUCKETS: readonly ((state: WorkflowStatePayload) => Recommendation[])[] = [
+  clientActionBucket,
   inFlightBucket,
   implementationFrontierBucket,
   mapFrontierBucket,
@@ -226,10 +285,10 @@ export const recommendNextAction = (state: WorkflowStatePayload): Recommendation
 };
 
 // The repo-wide frontier strip: each map's grabbable head in map order, plus
-// the unmapped grabbable issues with no ordering pretense — ascending issue
-// number, deterministically, claiming no priority. Both halves are the
-// structural frontier (open ∧ unassigned ∧ all blockers closed, unknown
-// references fail closed).
+// the unmapped grabbable issues — client tickets head the list (tier order,
+// ADR 0012), the rest ascending issue number, deterministically. Both halves
+// are the structural frontier (open ∧ unassigned ∧ all blockers closed,
+// unknown references fail closed).
 export type FrontierStripMap = {
   map: TrackerMapRecord;
   head: WorkItemRecord | null;
@@ -250,8 +309,8 @@ export const frontierStrip = (state: WorkflowStatePayload): FrontierStrip => {
       const headId = map.ticketIds.find((id) => grabbableIds.has(id));
       return { map, head: headId ? recordFor(headId) : null };
     }),
-    unmapped: grabbableRecords(state).filter(
-      (record) => !mapped.has(record.id) && !mapIds.has(record.id),
-    ),
+    unmapped: grabbableRecords(state)
+      .filter((record) => !mapped.has(record.id) && !mapIds.has(record.id))
+      .sort(compareByClientTier),
   };
 };

@@ -1,6 +1,7 @@
 import { Schema } from "effect";
 
 import type {
+  ClosedClientTickets,
   OverviewData,
   ReviewCommentRequest,
   ReviewCommentResult,
@@ -111,6 +112,8 @@ export const WorkItemRecordSchema = Schema.Struct({
   labels: Schema.optional(Schema.Array(Schema.String)),
   createdAt: Schema.optional(Schema.String),
   updatedAt: Schema.optional(Schema.String),
+  // Why GitHub says it closed — rendered honestly, never assumed delivered.
+  stateReason: Schema.optional(Schema.Literals(["completed", "not_planned"])),
 });
 
 export const ClientTicketKindSchema = Schema.Literals(clientTicketKinds);
@@ -122,6 +125,13 @@ export const ClientTicketCoverageSchema = Schema.Struct({
   checkedAt: Schema.String,
   complete: Schema.Boolean,
   reasons: Schema.Array(Schema.String),
+});
+
+// The closed lens' bounded history read (GH-136): recent closed client
+// tickets with the coverage of the fetch that produced them.
+export const ClosedClientTicketsSchema = Schema.Struct({
+  tickets: Schema.Array(WorkItemRecordSchema),
+  coverage: ClientTicketCoverageSchema,
 });
 
 // ADR 0009: one decision record per source conclusion — `statement` carries
@@ -579,6 +589,10 @@ export const parsePullRequestRecord: (input: unknown) => {
 export const parseWorkflowStatePayload = Schema.decodeUnknownSync(WorkflowStatePayloadSchema, {
   onExcessProperty: "error",
 });
+
+// The closed lens' response, validated at the seam boundary like every read.
+export const parseClosedClientTickets: (input: unknown) => ClosedClientTickets =
+  Schema.decodeUnknownSync(ClosedClientTicketsSchema, { onExcessProperty: "error" });
 
 export const parseTriageMoveRequest = Schema.decodeUnknownSync(TriageMoveRequestSchema, {
   onExcessProperty: "error",

@@ -97,24 +97,34 @@ export const fetchMapIssues = async ({ repo, token, apiBase, fetchImpl, maxPages
       }),
   });
 
-// Client tickets (GH-136) are discovered by an open, label-filtered walk —
-// one read per client label, the OR of the two — bounded by the label like
-// map discovery, never a sweep.
-export const fetchOpenIssuesByLabel = async ({
+// Client tickets (GH-136) are discovered by a label-filtered walk — one read
+// per client label, the OR of the two — bounded by the label like map
+// discovery, never a sweep. Open discovery sorts by number; the closed lens
+// sorts by last update so the bound keeps the most recently active history.
+export const fetchIssuesByLabel = async ({
   repo,
   token,
   apiBase,
   fetchImpl,
   label,
+  state = "open",
+  sort,
+  direction = "desc",
   maxPages,
 }) =>
   pagedIssues({
     fetchImpl,
     token,
     maxPages,
-    what: `open "${label}" issues`,
+    what: `${state} "${label}" issues`,
     urlFor: (page) =>
-      issuesUrl(apiBase, repo, "", { state: "open", labels: label, per_page: PER_PAGE, page }),
+      issuesUrl(apiBase, repo, "", {
+        state,
+        labels: label,
+        per_page: PER_PAGE,
+        page,
+        ...(sort ? { sort, direction } : {}),
+      }),
   });
 
 export const fetchSubIssues = async ({ repo, token, apiBase, issueNumber, fetchImpl, maxPages }) =>

@@ -352,3 +352,63 @@ describe("the repo-wide frontier strip", () => {
     expect(strip.unmapped).toEqual([]);
   });
 });
+
+describe("client-action bucket (ADR 0012)", () => {
+  const bug = (number: number, overrides: Partial<WorkItemRecord> = {}) =>
+    item(number, { labels: ["client-bug"], ...overrides });
+
+  it("reads the client bucket first: a grabbable client bug beats in-flight and frontier work", () => {
+    const recommendation = recommendNextAction(
+      state([
+        bug(9, { phase: "ticketed", triageState: "ready-for-agent" }),
+        item(10, { assignees: ["vvaz"], phase: "reviewing" }),
+        item(11, { phase: "ticketed", triageState: "ready-for-agent" }),
+      ]),
+    );
+    expect(recommendation?.bucket).toBe("client-action");
+    expect(recommendation?.issueId).toBe("GH-9");
+    expect(recommendation?.command).toBe("/implement");
+    expect(recommendation?.reason).toContain("client bugs come before internal work");
+  });
+
+  it("ranks remediation above triage for client work, and still names triage when nothing is grabbable", () => {
+    const withBoth = recommendNextAction(
+      state([
+        bug(9, { phase: "ticketed", triageState: "ready-for-agent" }),
+        bug(4, { triageState: "needs-triage" }),
+      ]),
+    );
+    expect(withBoth?.issueId).toBe("GH-9");
+
+    const triageOnly = recommendNextAction(state([bug(4, { triageState: "needs-triage" })]));
+    expect(triageOnly?.bucket).toBe("client-action");
+    expect(triageOnly?.command).toBe("/triage");
+    expect(triageOnly?.reason).toContain("awaiting triage");
+  });
+
+  it("never recommends waiting client work — attention is not an allowed action", () => {
+    const recommendation = recommendNextAction(
+      state([
+        bug(4, { triageState: "needs-info" }),
+        item(8, { phase: "ticketed", triageState: "ready-for-agent" }),
+      ]),
+    );
+    expect(recommendation?.bucket).toBe("implementation-frontier");
+    expect(recommendation?.issueId).toBe("GH-8");
+  });
+
+  it("heads the unmapped strip with client tickets in tier order", () => {
+    const strip = frontierStrip(
+      state([
+        item(20, { phase: "ticketed", triageState: "ready-for-agent" }),
+        item(30, {
+          labels: ["client-feedback"],
+          phase: "ticketed",
+          triageState: "ready-for-agent",
+        }),
+        item(10, { labels: ["client-bug"], phase: "ticketed", triageState: "ready-for-agent" }),
+      ]),
+    );
+    expect(strip.unmapped.map((record) => record.id)).toEqual(["GH-10", "GH-30", "GH-20"]);
+  });
+});

@@ -1,11 +1,12 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import type { WorkItemRecord } from "../types";
+import type { BlockerEdgeRecord, WorkItemRecord } from "../types";
 import {
   classifyClientTicket,
   clientAttention,
   clientKindFor,
   clientTierFor,
+  clientWaitingReason,
   compareByClientTier,
   evaluateClientGate,
   openClientBugs,
@@ -229,5 +230,41 @@ describe("evaluateClientGate", () => {
     });
     expect(verdict.allowed).toBe(false);
     expect(verdict.reason).toBe("client_bugs_open");
+  });
+});
+
+describe("clientWaitingReason", () => {
+  const edge = (blocked: number, blocker: number): BlockerEdgeRecord => ({
+    blockedId: `GH-${blocked}`,
+    blockerId: `GH-${blocker}`,
+    source: "github-native",
+    sourceRef: `https://github.com/example/project/issues/${blocked}`,
+  });
+
+  it("names open blockers first — closed blockers are satisfied, not blocking", () => {
+    const items = [item(5, { labels: ["client-bug"] }), item(6), item(7, { state: "closed" })];
+    expect(clientWaitingReason(items[0], items, [edge(5, 6), edge(5, 7)])).toBe("blocked by GH-6");
+  });
+
+  it("explains parked and the explicit waiting states", () => {
+    const items = [item(5)];
+    expect(clientWaitingReason(item(5, { deferred: true }), items, [])).toBe("parked (deferred)");
+    expect(clientWaitingReason(item(5, { triageState: "needs-info" }), items, [])).toBe(
+      "waiting on information",
+    );
+    expect(clientWaitingReason(item(5, { triageState: "ready-for-human" }), items, [])).toBe(
+      "waiting on a human",
+    );
+    expect(clientWaitingReason(item(5, { triageState: "wontfix" }), items, [])).toBe(
+      "refused (wontfix)",
+    );
+    expect(clientWaitingReason(item(5, { triageState: "needs-triage" }), items, [])).toBe(
+      "awaiting triage",
+    );
+  });
+
+  it("an actionable ticket explains nothing", () => {
+    const ready = item(5, { triageState: "ready-for-agent", phase: "ticketed" });
+    expect(clientWaitingReason(ready, [ready], [])).toBeNull();
   });
 });

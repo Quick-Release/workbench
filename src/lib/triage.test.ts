@@ -144,3 +144,19 @@ describe("map membership", () => {
     expect(isMapChild(item(8), maps)).toBe(false);
   });
 });
+
+describe("client tier ordering (ADR 0012)", () => {
+  it("heads every lane with client tickets — bugs, then feedback, then number", () => {
+    const lanes = triageLanes(
+      [
+        item(12, { triageState: "needs-triage" }),
+        item(3, { labels: ["client-bug"], triageState: "needs-triage" }),
+        item(7, { labels: ["client-feedback"], triageState: "needs-triage" }),
+        item(9, { labels: ["client-bug"], triageState: "needs-triage" }),
+      ],
+      maps,
+    );
+    expect(lanes.intake.map((row) => row.id)).toEqual(["GH-3", "GH-9", "GH-7", "GH-12"]);
+    expect(lanes.intake[3]?.triageState).toBe("needs-triage");
+  });
+});
