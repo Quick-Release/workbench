@@ -29,6 +29,7 @@ import { collectClientTickets } from "./tracker/client-tickets.mjs";
 import { tokenFromGhCli } from "./tracker/index.mjs";
 import { GITHUB_API } from "./tracker/issues.mjs";
 import { guardedApi, sendJson } from "./api-shared.mjs";
+import { createAutoSync } from "./auto-sync.mjs";
 
 const execFileAsync = promisify(execFile);
 
@@ -560,7 +561,10 @@ const POST_ROUTES = [
 // The seam handler behind the dev-server middleware: pure enough to test
 // without vite, returning null for routes it does not own. `fetchImpl`
 // overrides the GitHub reads (the closed lens) in tests; `env`/`ghToken`
-// mirror the tracker collector's credential injection.
+// mirror the tracker collector's credential injection. `onSeamRead` observes
+// the reads the auto-sync leg counts as browser presence (GH-147): a GET the
+// handler owns — the polling live read or the closed lens — is a browser
+// reading the seam right now.
 export const handleWorkflowApi = async ({
   method,
   pathname,
@@ -571,7 +575,11 @@ export const handleWorkflowApi = async ({
   fetchImpl,
   env = process.env,
   ghToken = tokenFromGhCli,
+  onSeamRead,
 }) => {
+  if (method === "GET" && (WORKFLOW_ROUTE.test(pathname) || CLIENT_CLOSED_ROUTE.test(pathname)))
+    onSeamRead?.(pathname);
+
   if (method === "GET" && WORKFLOW_ROUTE.test(pathname)) {
     try {
       return {
@@ -683,9 +691,38 @@ const isWorkflowRoute = (pathname) =>
   SYNC_ROUTE.test(pathname) ||
   POST_ROUTES.some((action) => action.route.test(pathname));
 
+// The generated snapshot is written under the dashboard's src/ by every sync
+// (manual or auto-sync). Verified live (GH-147): vite has no accepted HMR
+// boundary for it, so a rewrite bubbles to a full page reload. The watcher
+// must not see it — the client polling lifecycle is the only refresh path a
+// sync may take, or every auto-sync would hard-reload the open board.
+const SNAPSHOT_WATCH_IGNORE = "**/src/data.generated.ts";
+
 export const workflowApiPlugin = () => ({
   name: "workbench-workflow-api",
+  config: () => ({
+    server: { watch: { ignored: [SNAPSHOT_WATCH_IGNORE] } },
+  }),
   configureServer(server) {
+    // The auto-sync leg (GH-147) reuses the sync-trigger action end to end,
+    // so a tick's sync carries the same warnings channel, freshness stamp,
+    // and telemetry as a manual Run sync. The repo name resolves at tick
+    // time — the same mtime-cached read the GET route serves from. The leg
+    // lives per server (not per plugin factory): vite restarts create the
+    // new server before closing the old one, and a shared leg would let the
+    // old server's close cancel the new one's timer.
+    const autoSync = createAutoSync({
+      appDirectory: APP_DIRECTORY,
+      resolveRepo: async () => {
+        const state = await loadWorkflowState(APP_DIRECTORY);
+        return state.meta.repo;
+      },
+      applySync: applySyncTrigger,
+      run: runGh,
+      ghToken: tokenFromGhCli,
+    });
+    autoSync.start();
+    server.httpServer?.once("close", () => autoSync.stop());
     server.middlewares.use(
       guardedApi(async (request, response, next, url) => {
         if (!isWorkflowRoute(url.pathname)) return next();
@@ -696,6 +733,7 @@ export const workflowApiPlugin = () => ({
           pathname: url.pathname,
           body,
           hostRoot,
+          onSeamRead: () => autoSync.noteSeamRead(),
         });
         if (!handled) return next();
         sendJson(response, handled.status, handled.json);
