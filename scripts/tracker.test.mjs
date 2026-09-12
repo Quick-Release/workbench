@@ -790,7 +790,42 @@ test("a failed events read leaves the clock null with a warning; the sync still 
   const { workItems, warnings } = await collect({ fetchImpl });
 
   strictEqual(workItems[0].phaseSince, undefined);
-  match(warnings.join("\n"), /GH-7: GH-7 events unavailable \(.*\); phase clock not collected/);
+  match(warnings.join("\n"), /GH-7: events unavailable \(.*\); phase clock not collected/);
+});
+
+test("a failure mid-walk discards the truncated history instead of clocking it", async () => {
+  // Page 1 answers with a full page whose newest event already matches the
+  // phase; page 2 fails. A clock from that prefix could name an older stay,
+  // so the whole read degrades to null.
+  const eventsSeen = [];
+  const fullFirstPage = Array.from({ length: 100 }, () => ({
+    event: "labeled",
+    label: { name: "workflow:implementing" },
+    created_at: "2026-09-09T09:00:00.000Z",
+  }));
+  const fetchImpl = async (url) => {
+    const u = new URL(url);
+    if (u.pathname.endsWith("/events")) {
+      eventsSeen.push(u);
+      if (eventsSeen.length === 1) return jsonResponse(fullFirstPage);
+      return { ok: false, status: 500, json: async () => ({ message: "boom" }) };
+    }
+    if (u.searchParams.get("labels") === "wayfinder:map") return jsonResponse([]);
+    if (u.searchParams.get("labels")) return jsonResponse([]);
+    if (u.pathname.endsWith("/pulls")) return jsonResponse([]);
+    return jsonResponse([
+      issue(7, {
+        labels: [{ name: "workflow:implementing" }],
+        updated_at: "2026-09-10T09:00:00.000Z",
+      }),
+    ]);
+  };
+
+  const { workItems, warnings } = await collect({ fetchImpl });
+
+  strictEqual(eventsSeen.length, 2);
+  strictEqual(workItems[0].phaseSince, undefined);
+  match(warnings.join("\n"), /GH-7: events unavailable \(.*\); phase clock not collected/);
 });
 
 test("an events walk stopped at the page cap leaves the clock null", async () => {
@@ -816,10 +851,7 @@ test("an events walk stopped at the page cap leaves the clock null", async () =>
   // Even a matching event in the collected prefix stays unclocked: a capped
   // read is incomplete history, and incomplete history never poses as truth.
   strictEqual(workItems[0].phaseSince, undefined);
-  match(
-    warnings.join("\n"),
-    /GH-7: GH-7 events stopped at the 1-page cap; phase clock not collected/,
-  );
+  match(warnings.join("\n"), /GH-7: events stopped at the 1-page cap; phase clock not collected/);
   strictEqual(calls.filter((call) => call.pathname.endsWith("/events")).length, 1);
 });
 

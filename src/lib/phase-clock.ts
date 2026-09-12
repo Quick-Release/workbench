@@ -45,9 +45,16 @@ const durationText = (age: number) => {
   return `${Math.floor(age / 86_400_000)}d`;
 };
 
+// Which records a clock may exist for at all (docs/agents/workflow-labels.md):
+// decision tickets place by the board-placement table and carry no phase —
+// only a map or a plain work item with a resolved phase can be clocked. The
+// collector walks exactly these records and the display rule reads the same
+// predicate, so the rule has one home.
+export const phaseClockable = (record: WorkItemRecord): boolean =>
+  (record.kind === null || record.kind === "map") && record.phase !== null;
+
 export const phaseClockLine = (record: WorkItemRecord, now: number): PhaseClockLine | null => {
-  if (record.kind !== null && record.kind !== "map") return null;
-  if (record.phase === null) return null;
+  if (!phaseClockable(record)) return null;
   const since = record.phaseSince === undefined ? NaN : Date.parse(record.phaseSince);
   if (!Number.isNaN(since))
     return {

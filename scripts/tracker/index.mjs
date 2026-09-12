@@ -12,7 +12,8 @@ import {
   fetchOpenIssues,
   fetchSubIssues,
 } from "./issues.mjs";
-import { phaseSinceFromEvents } from "../../src/lib/phase-clock.ts";
+import { phaseClockable, phaseSinceFromEvents } from "../../src/lib/phase-clock.ts";
+import { workItemIdNumber } from "../../src/lib/work-item-id.ts";
 import { CLIENT_TICKET_LABELS, collectClientTickets } from "./client-tickets.mjs";
 import { lineEdgesForBody, mergeBlockerEdges } from "./edges.mjs";
 import { resolutionDecisionFromIssue, sortDecisions, specDecisionFromIssue } from "./decisions.mjs";
@@ -365,20 +366,19 @@ export const collectTrackerState = async ({
   const byNumberDesc = (left, right) => byNumber(right, left);
   recentlyShipped.sort(byNumberDesc);
 
-  // GH-149: the time-in-phase clock. Each phase-labelled, non-decision-ticket
-  // record clocks from its label-event history — the latest `labeled` event
-  // for the phase's label, so re-entry resets. Decision tickets place by the
-  // board-placement table and never wear a clock; pre-flow items have no
-  // phase to clock. An issue whose `updatedAt` is unchanged reuses the
-  // previous sync's clock at zero events cost; a failed or capped read leaves
-  // the clock null with a warning — unknown, never zero time. The budget is
-  // the events walks' own, so clocks degrade before any other family does.
+  // GH-149: the time-in-phase clock. Each clockable record (a resolved phase,
+  // and no decision-ticket kind — phaseClockable is the display rule's own
+  // predicate) clocks from its label-event history — the latest `labeled`
+  // event for the phase's label, so re-entry resets. An issue whose
+  // `updatedAt` is unchanged reuses the previous sync's clock at zero events
+  // cost; a failed or capped read leaves the clock null with a warning —
+  // unknown, never zero time. The budget is the events walks' own, so clocks
+  // degrade before any other family does.
   const labelForPhase = (phase) => phaseVocabulary.find((entry) => entry.phase === phase)?.label;
   let eventReads = 0;
   let cappedClocks = 0;
   for (const record of [...workItems, ...recentlyShipped]) {
-    if (record.kind !== null && record.kind !== "map") continue;
-    if (record.phase === null) continue;
+    if (!phaseClockable(record)) continue;
     const label = labelForPhase(record.phase);
     if (!label) continue;
     const cached = phaseClocks.get(record.id);
@@ -395,16 +395,19 @@ export const collectTrackerState = async ({
       events,
       warnings: eventWarnings,
       capped,
+      failed,
     } = await fetchIssueEvents({
       repo,
       token,
       apiBase,
-      issueNumber: Number(record.id.slice(3)),
+      issueNumber: workItemIdNumber(record.id),
       fetchImpl,
       maxPages,
     });
     warnings.push(...eventWarnings.map((warning) => `${record.id}: ${warning}`));
-    if (capped) continue;
+    // An incomplete history (mid-walk failure included) never clocks: a
+    // truncated prefix could name an older stay.
+    if (capped || failed) continue;
     record.phaseSince = phaseSinceFromEvents(events, label) ?? undefined;
   }
   if (cappedClocks > 0)

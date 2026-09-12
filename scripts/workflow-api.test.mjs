@@ -751,6 +751,31 @@ test("an issue edit keeps the clock running", async () => {
   strictEqual(handled.json.state.workItems[0].phaseSince, "2026-09-01T09:00:00.000Z");
 });
 
+test("a comment write keeps the clock running — the record is never rewritten", async () => {
+  const clocked = workItem(7, "needs-triage", {
+    phase: "implementing",
+    labels: ["needs-triage", "workflow:implementing"],
+    phaseSince: "2026-09-01T09:00:00.000Z",
+  });
+  const directory = await withSnapshot(snapshot([clocked]));
+  const { run } = runStub([{ stdout: `https://github.com/${REPO}/issues/7#issuecomment-1` }]);
+  const handled = await handleWorkflowApi({
+    method: "POST",
+    pathname: "/api/workflow/issue/comment",
+    body: JSON.stringify({ issueId: "GH-7", body: "A comment." }),
+    appDirectory: directory,
+    hostRoot: HOST_ROOT,
+    run,
+  });
+  strictEqual(handled.status, 200);
+  strictEqual(handled.json.issueId, "GH-7");
+  // The served answer carries no state: commenting rewrites no record, so
+  // the clock it answered with is the snapshot's own.
+  strictEqual(handled.json.state, undefined);
+  const after = await loadWorkflowState(directory);
+  deepStrictEqual(after.workItems, [clocked]);
+});
+
 test("a phase move body failing the schema is rejected naming the path", async () => {
   const directory = await withSnapshot(snapshot([workItem(7)]));
   const cases = [
