@@ -16,7 +16,7 @@
   ],
   "type": "module",
   "publishConfig": {
-    "registry": "https://npm.pkg.github.com"
+    "access": "public"
   },
   "scripts": {
     "dev": "pnpm sync && dotenvx run -- vp dev --port 4051 --strictPort",
