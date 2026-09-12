@@ -275,3 +275,16 @@ describe("card order", () => {
     expect(idsIn("implementing", columns)).toEqual(["GH-7", "GH-9"]);
   });
 });
+
+describe("the client-side placement fallback", () => {
+  it("mirrors the tracker's default — one table, two readers, no drift", async () => {
+    // The doc home is parsed at sync (scripts/tracker/labels.mjs); the client
+    // fallback only covers snapshots that predate the table riding the
+    // payload. Equality is pinned here so the two readers cannot drift.
+    const { DEFAULT_DECISION_PLACEMENT: trackerDefault } = await import(
+      // @ts-expect-error scripts/*.mjs carry no type declarations
+      "../../scripts/tracker/labels.mjs"
+    );
+    expect(trackerDefault).toEqual(DEFAULT_DECISION_PLACEMENT);
+  });
+});

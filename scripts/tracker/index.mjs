@@ -341,10 +341,11 @@ export const collectTrackerState = async ({
     recordsById.set(record.id, record);
     warnings.push(...itemWarnings);
   }
-  recentlyShipped.sort((left, right) => Number(right.id.slice(3)) - Number(left.id.slice(3)));
+  const byNumber = (left, right) => Number(left.id.slice(3)) - Number(right.id.slice(3));
+  const byNumberDesc = (left, right) => byNumber(right, left);
+  recentlyShipped.sort(byNumberDesc);
 
-  const byNumberAsc = (left, right) => Number(left.id.slice(3)) - Number(right.id.slice(3));
-  workItems.sort(byNumberAsc);
+  workItems.sort(byNumber);
   return {
     workItems,
     maps,
