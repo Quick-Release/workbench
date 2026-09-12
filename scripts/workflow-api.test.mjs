@@ -521,6 +521,179 @@ test("a move on a non-issue namespaced id is rejected", async () => {
   strictEqual(calls.length, 0);
 });
 
+test("a phase move adds the target phase label and strips the worn one", async () => {
+  const directory = await withSnapshot(
+    snapshot([
+      workItem(7, "needs-triage", {
+        phase: "implementing",
+        labels: ["needs-triage", "workflow:implementing"],
+      }),
+    ]),
+  );
+  const { calls, run } = runStub([
+    {},
+    ghIssueView({ labels: [{ name: "workflow:reviewing" }, { name: "needs-triage" }] }),
+  ]);
+  const handled = await handleWorkflowApi({
+    method: "POST",
+    pathname: "/api/workflow/phase",
+    body: JSON.stringify({ issueId: "GH-7", phase: "reviewing" }),
+    appDirectory: directory,
+    hostRoot: HOST_ROOT,
+    run,
+  });
+  strictEqual(handled.status, 200);
+  deepStrictEqual(calls[0].args.slice(2), [
+    "7",
+    "--repo",
+    REPO,
+    "--add-label",
+    "workflow:reviewing",
+    "--remove-label",
+    "workflow:implementing",
+  ]);
+  strictEqual(handled.json.message, "GH-7 moved to reviewing.");
+  strictEqual(handled.json.phase, "reviewing");
+  strictEqual(handled.json.state.workItems[0].phase, "reviewing");
+});
+
+test("moving to pre-flow removes every phase label and adds none", async () => {
+  const directory = await withSnapshot(
+    snapshot([
+      workItem(7, "needs-triage", {
+        phase: "ticketed",
+        labels: ["needs-triage", "workflow:ticketed"],
+      }),
+    ]),
+  );
+  const { calls, run } = runStub([{}, ghIssueView({ labels: [{ name: "needs-triage" }] })]);
+  const handled = await handleWorkflowApi({
+    method: "POST",
+    pathname: "/api/workflow/phase",
+    body: JSON.stringify({ issueId: "GH-7", phase: "pre-flow" }),
+    appDirectory: directory,
+    hostRoot: HOST_ROOT,
+    run,
+  });
+  strictEqual(handled.status, 200);
+  deepStrictEqual(calls[0].args.slice(2), [
+    "7",
+    "--repo",
+    REPO,
+    "--remove-label",
+    "workflow:ticketed",
+  ]);
+  ok(!calls[0].args.includes("--add-label"), `expected no --add-label in ${calls[0].args}`);
+  strictEqual(handled.json.message, "GH-7 moved to pre-flow.");
+  strictEqual(handled.json.state.workItems[0].phase, null);
+});
+
+test("moving off a hand-edit double-label leaves exactly the target phase label", async () => {
+  const directory = await withSnapshot(
+    snapshot([
+      workItem(7, "unlabeled", {
+        phase: "reviewing",
+        labels: ["workflow:implementing", "workflow:reviewing"],
+      }),
+    ]),
+  );
+  const { calls, run } = runStub([{}, ghIssueView({ labels: [{ name: "workflow:ticketed" }] })]);
+  const handled = await handleWorkflowApi({
+    method: "POST",
+    pathname: "/api/workflow/phase",
+    body: JSON.stringify({ issueId: "GH-7", phase: "ticketed" }),
+    appDirectory: directory,
+    hostRoot: HOST_ROOT,
+    run,
+  });
+  strictEqual(handled.status, 200);
+  deepStrictEqual(calls[0].args.slice(5), [
+    "--add-label",
+    "workflow:ticketed",
+    "--remove-label",
+    "workflow:implementing",
+    "--remove-label",
+    "workflow:reviewing",
+  ]);
+  strictEqual(handled.json.state.workItems[0].phase, "ticketed");
+});
+
+test("a move falls back to the resolved phase's label when raw labels do not ride", async () => {
+  const directory = await withSnapshot(
+    snapshot([workItem(7, "unlabeled", { phase: "implementing", labels: undefined })]),
+  );
+  const { calls, run } = runStub([{}, ghIssueView({ labels: [{ name: "workflow:reviewing" }] })]);
+  const handled = await handleWorkflowApi({
+    method: "POST",
+    pathname: "/api/workflow/phase",
+    body: JSON.stringify({ issueId: "GH-7", phase: "reviewing" }),
+    appDirectory: directory,
+    hostRoot: HOST_ROOT,
+    run,
+  });
+  strictEqual(handled.status, 200);
+  deepStrictEqual(calls[0].args.slice(5), [
+    "--add-label",
+    "workflow:reviewing",
+    "--remove-label",
+    "workflow:implementing",
+  ]);
+});
+
+test("a phase move body failing the schema is rejected naming the path", async () => {
+  const directory = await withSnapshot(snapshot([workItem(7)]));
+  const cases = [
+    [{ issueId: "GH-7", phase: "archived" }, /phase/],
+    [{ issueId: "GH-7", phase: "pre-flow", confirm: true }, /confirm/],
+    [{ phase: "pre-flow" }, /issueId/],
+    ["{not json", /json/i],
+  ];
+  for (const [body, pattern] of cases) {
+    const { run } = runStub();
+    const handled = await handleWorkflowApi({
+      method: "POST",
+      pathname: "/api/workflow/phase",
+      body: typeof body === "string" ? body : JSON.stringify(body),
+      appDirectory: directory,
+      hostRoot: HOST_ROOT,
+      run,
+    });
+    strictEqual(handled.status, 400);
+    ok(pattern.test(handled.json.message), `expected ${handled.json.message} to match ${pattern}`);
+  }
+});
+
+test("a failed phase write surfaces the tool's message with a 502", async () => {
+  const directory = await withSnapshot(snapshot([workItem(7, "unlabeled", { phase: "ticketed" })]));
+  const { calls, run } = runStub(["label not found"]);
+  const handled = await handleWorkflowApi({
+    method: "POST",
+    pathname: "/api/workflow/phase",
+    body: JSON.stringify({ issueId: "GH-7", phase: "reviewing" }),
+    appDirectory: directory,
+    hostRoot: HOST_ROOT,
+    run,
+  });
+  strictEqual(handled.status, 502);
+  ok(/label not found/.test(handled.json.message), handled.json.message);
+  strictEqual(calls.length, 1);
+});
+
+test("a phase move on a non-issue namespaced id is rejected", async () => {
+  const directory = await withSnapshot(snapshot([]));
+  const { calls, run } = runStub();
+  const handled = await handleWorkflowApi({
+    method: "POST",
+    pathname: "/api/workflow/phase",
+    body: JSON.stringify({ issueId: "BQ-12", phase: "pre-flow" }),
+    appDirectory: directory,
+    hostRoot: HOST_ROOT,
+    run,
+  });
+  strictEqual(handled.status, 400);
+  strictEqual(calls.length, 0);
+});
+
 test("an issue comment shells out to gh and answers the comment url", async () => {
   const directory = await withSnapshot(snapshot([workItem(7)]));
   const commentUrl = `https://github.com/${REPO}/issues/7#issuecomment-311`;

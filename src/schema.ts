@@ -30,6 +30,7 @@ import {
   triageStates,
   wayfinderKinds,
   workflowPhases,
+  phaseMoveTargets,
 } from "./types.ts";
 export const ServiceStatusSchema = Schema.Literals(serviceStatuses);
 
@@ -250,6 +251,23 @@ export const TriageMoveResultSchema = Schema.Struct({
   message: Schema.String,
   issueId: Schema.String,
   triageState: TriageStateSchema,
+  state: WorkflowStatePayloadSchema,
+});
+
+// The phase move (ticket #148): one work item, one board column — the
+// request's `phase` speaks the board's column vocabulary (pre-flow included),
+// not the record's nullable phase.
+export const PhaseMoveTargetSchema = Schema.Literals(phaseMoveTargets);
+
+export const PhaseMoveRequestSchema = Schema.Struct({
+  issueId: Schema.String,
+  phase: PhaseMoveTargetSchema,
+});
+
+export const PhaseMoveResultSchema = Schema.Struct({
+  message: Schema.String,
+  issueId: Schema.String,
+  phase: PhaseMoveTargetSchema,
   state: WorkflowStatePayloadSchema,
 });
 
@@ -648,6 +666,14 @@ export const parseTriageMoveRequest = Schema.decodeUnknownSync(TriageMoveRequest
 });
 
 export const parseTriageMoveResult = Schema.decodeUnknownSync(TriageMoveResultSchema, {
+  onExcessProperty: "error",
+});
+
+export const parsePhaseMoveRequest = Schema.decodeUnknownSync(PhaseMoveRequestSchema, {
+  onExcessProperty: "error",
+});
+
+export const parsePhaseMoveResult = Schema.decodeUnknownSync(PhaseMoveResultSchema, {
   onExcessProperty: "error",
 });
 

@@ -77,6 +77,14 @@ export const workflowPhases = [
 
 export type WorkflowPhase = (typeof workflowPhases)[number];
 
+// The phase move's target vocabulary (ticket #148): the board's columns —
+// the seven canonical phases plus pre-flow. Pre-flow is the no-phase
+// destination, not a phase (ADR 0007): a move there strips every `workflow:`
+// label and adds none.
+export const phaseMoveTargets = ["pre-flow", ...workflowPhases] as const;
+
+export type PhaseMoveTarget = (typeof phaseMoveTargets)[number];
+
 export const triageStates = [
   "needs-triage",
   "needs-info",
@@ -247,6 +255,21 @@ export type TriageMoveResult = {
   message: string;
   issueId: string;
   triageState: TriageState;
+  state: WorkflowStatePayload;
+};
+
+// The phase move's contract (ticket #148, ADR 0005): one work item, one board
+// column, fired directly — no confirm beat, GitHub history is the audit log,
+// and a hand move starts no implement session.
+export type PhaseMoveRequest = {
+  issueId: string;
+  phase: PhaseMoveTarget;
+};
+
+export type PhaseMoveResult = {
+  message: string;
+  issueId: string;
+  phase: PhaseMoveTarget;
   state: WorkflowStatePayload;
 };
 

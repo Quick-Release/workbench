@@ -4,18 +4,20 @@ import { ExternalLink, Network, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { PhaseMoveSelect } from "@/components/PhaseMoveSelect";
 import { deriveDisplayState } from "@/lib/display-state";
 import { indexWorkItems, mapFor, openBlockers } from "@/lib/frontier";
 import { workItemIdNumberText } from "@/lib/work-item-id";
 import { cn } from "@/lib/utils";
-import type { WorkflowStatePayload } from "../types";
+import type { PhaseMoveTarget, WorkflowStatePayload } from "../types";
 
 export type IssuePanelAction =
   | { kind: "create"; title: string; body: string }
   | { kind: "edit"; issueId: string; title: string; body: string; confirm: boolean }
   | { kind: "comment"; issueId: string; body: string }
   | { kind: "edge-add"; blockedId: string; blockerId: string }
-  | { kind: "edge-remove"; blockedId: string; blockerId: string; confirm: boolean };
+  | { kind: "edge-remove"; blockedId: string; blockerId: string; confirm: boolean }
+  | { kind: "phase-move"; issueId: string; phase: PhaseMoveTarget };
 
 type IssueDetailPanelProps = {
   issueId: string | null;
@@ -191,6 +193,19 @@ function IssueRecordSections({
             open on GitHub
           </a>
         </div>
+      </section>
+
+      <section data-slot="panel-phase-move" className="flex flex-col gap-2">
+        <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
+          Phase move
+        </p>
+        <PhaseMoveSelect
+          record={record}
+          current={record.phase ?? "pre-flow"}
+          mode={mode}
+          pending={pending === "phase-move"}
+          onMove={(phase) => onAction({ kind: "phase-move", issueId: record.id, phase })}
+        />
       </section>
 
       <BlockerEdgesSection

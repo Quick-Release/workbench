@@ -14,6 +14,8 @@ import {
   parseIssueCreateResult,
   parseIssueEditRequest,
   parseIssueEditResult,
+  parsePhaseMoveRequest,
+  parsePhaseMoveResult,
   parseSyncTriggerRequest,
   parseSyncTriggerResult,
   parseTriageMoveRequest,
@@ -41,6 +43,7 @@ const APP_DIRECTORY = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const WORKFLOW_ROUTE = /^\/api\/workflow\/?$/;
 const CLIENT_CLOSED_ROUTE = /^\/api\/client-tickets\/closed\/?$/;
 const TRIAGE_ROUTE = /^\/api\/workflow\/triage\/?$/;
+const PHASE_MOVE_ROUTE = /^\/api\/workflow\/phase\/?$/;
 const ISSUE_EDIT_ROUTE = /^\/api\/workflow\/issue\/edit\/?$/;
 const ISSUE_COMMENT_ROUTE = /^\/api\/workflow\/issue\/comment\/?$/;
 const ISSUE_CREATE_ROUTE = /^\/api\/workflow\/issue\/create\/?$/;
@@ -160,6 +163,52 @@ export const applyTriageMove = async ({ issueId, triageState, confirm, state, ru
       message: `${issueId} moved to ${triageState}.`,
       issueId,
       triageState,
+      state: upsertRecord(state, back.record),
+    },
+  };
+};
+
+// The phase move (ticket #148, ADR 0005): a hand move fires directly — no
+// confirm beat, GitHub history is the audit log, and a hand move starts no
+// implement session (the skills re-write labels on their next run). Pre-flow
+// is the no-phase destination: it removes every `workflow:` label and adds
+// none. The record carries only the resolved phase, but its raw source labels
+// ride (GH-136), so every worn `workflow:` label comes off and a hand-edit
+// double-label cannot survive a move.
+export const applyPhaseMove = async ({ issueId, phase, state, run, cwd }) => {
+  const number = issueNumberFrom(issueId);
+  if (!number)
+    return {
+      ok: false,
+      status: 400,
+      message: `"${issueId}" is not a tracker issue id; only GH-numbered items move here`,
+    };
+  const existing = state.workItems.find((item) => item.id === issueId);
+  // A record from an older snapshot can lack the raw labels; the resolved
+  // phase's label is then the one worn label the state can vouch for.
+  const worn = (existing?.labels ?? (existing?.phase ? [`workflow:${existing.phase}`] : [])).filter(
+    (label) => label.startsWith("workflow:") && label !== `workflow:${phase}`,
+  );
+  try {
+    const args = ["issue", "edit", number, "--repo", state.meta.repo];
+    if (phase !== "pre-flow") args.push("--add-label", `workflow:${phase}`);
+    for (const label of worn) args.push("--remove-label", label);
+    await run("gh", args, cwd);
+  } catch (error) {
+    return {
+      ok: false,
+      status: 502,
+      message: `gh label write failed for ${issueId}: ${messageFrom(error)}`,
+    };
+  }
+  const back = await readBackOrFail(issueId, number, state, run, cwd, "label write");
+  if (back.failure) return back.failure;
+  return {
+    ok: true,
+    result: {
+      message: `${issueId} moved to ${phase}.`,
+      issueId,
+      phase,
       state: upsertRecord(state, back.record),
     },
   };
@@ -525,6 +574,12 @@ const POST_ROUTES = [
     parseRequest: parseTriageMoveRequest,
     encode: parseTriageMoveResult,
     apply: applyTriageMove,
+  },
+  {
+    route: PHASE_MOVE_ROUTE,
+    parseRequest: parsePhaseMoveRequest,
+    encode: parsePhaseMoveResult,
+    apply: applyPhaseMove,
   },
   {
     route: ISSUE_EDIT_ROUTE,
