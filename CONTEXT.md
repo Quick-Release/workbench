@@ -1,6 +1,6 @@
 # Workbench
 
-An internal local dashboard that renders a host repo's planning and development work live and starts actions on it through the execution seam. Because it is an internal company tool, its two reporting flows have different consent postures and must never be conflated.
+A local dashboard that renders a host repo's planning and development work live and starts actions on it through the execution seam. It ships in two postures — the company's internal installs, and public installs, where every company-reporting flow is dormant because it is never provisioned (ADR 0013). Its two reporting flows have different consent postures and must never be conflated.
 
 ## Language
 
@@ -11,7 +11,7 @@ The repository workbench is installed in and renders. A workbench install serves
 _Avoid_: target repo, project (ambiguous)
 
 **Developer**:
-An employee running workbench against a host repo. Telemetry identifies the Developer, not the install.
+A person running workbench against a host repo — an employee on an internal install, anyone at all on a public one. Telemetry identifies the Developer, not the install.
 _Avoid_: user (ambiguous between Developer and marketing-blog reader)
 
 **Control surface**:
@@ -29,7 +29,7 @@ _Avoid_: project data (vague)
 ### Reporting
 
 **Telemetry**:
-Usage events (agent usage, outcomes, health) collected from every Developer without an opt-out and reported to the company. Numbers about activity, never content.
+Usage events (agent usage, outcomes, health) collected from every Developer on an internal install without an opt-out and reported to the company; a public install holds no endpoint and reports nothing (ADR 0013). Numbers about activity, never content.
 _Avoid_: analytics (too vague), tracking (implies stealth)
 
 **Content sourcing**:

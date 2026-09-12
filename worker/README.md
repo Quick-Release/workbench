@@ -56,9 +56,11 @@ Set `TELEMETRY_INGEST_URL` and `TELEMETRY_INGEST_TOKEN` in the workbench
 
 Both POST routes require `Authorization: Bearer <token>`; the token is the
 shared ingest secret (set as the `TELEMETRY_INGEST_TOKEN` secret here and
-baked into the workbench package, whose GitHub Packages registry is the
-company boundary). The agent route requires the same token — agent
-endpoints are never a wider surface than the ingest API.
+provisioned into internal installs' `.env` — never committed and never
+shipped in the package). The token itself is the company boundary
+(ADR 0013): knowing the URL grants nothing without it. The agent route
+requires the same token — agent endpoints are never a wider surface than
+the ingest API.
 
 ## Deploy (Alchemy, from the repo root)
 
@@ -68,8 +70,8 @@ The Worker and its D1 store are defined in `alchemy.run.ts`
 `.alchemy/` (gitignored) locally.
 
 - Routine prod deploy (needs `TELEMETRY_INGEST_TOKEN` in the environment —
-  the same value baked into the package, so the secret reconciles
-  unchanged): `pnpm worker:deploy`
+  the same value provisioned into internal installs, so the secret
+  reconciles unchanged): `pnpm worker:deploy`
 - Local dev Worker (workerd + local D1 simulator, hot reload):
   `pnpm worker:dev`
 - Tail prod logs (replaces `wrangler tail`): `pnpm worker:tail`
@@ -112,11 +114,11 @@ in `wrangler.jsonc` to keep the escape hatch deployable (ADR 0003).
    `database_id` into `wrangler.jsonc`.
 2. `npx wrangler d1 execute workbench-telemetry --remote --file migrations/0001_init.sql`
 3. `npx wrangler secret put TELEMETRY_INGEST_TOKEN` — generate a long
-   random value; the same value is baked into the package by the
-   Telemetry collector.
+   random value; the same value is provisioned into internal installs'
+   `.env` (ADR 0013).
 4. `npx wrangler deploy`
 
 Verify with `curl https://workbench-telemetry.<account>.workers.dev/healthz`.
 
-The endpoint URL and token become the client-side constants when the
-Telemetry collector (#14) lands.
+The endpoint URL and token are the internal install's `.env` values
+(`TELEMETRY_INGEST_URL`, `TELEMETRY_INGEST_TOKEN`).
