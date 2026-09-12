@@ -221,3 +221,51 @@ export const fetchIssueComments = async ({
 };
 
 export const apiBaseFrom = (apiBaseUrl) => (httpUrl(apiBaseUrl) || GITHUB_API).replace(/\/+$/, "");
+
+// GH-149: the label-event history of one issue — the time-in-phase clock's
+// only source. Same paged walk and degradation as the issue lists; the
+// wording names the clock, because a failed or capped walk is reported as a
+// missing clock (null), never as zero time in phase.
+export const fetchIssueEvents = async ({
+  repo,
+  token,
+  apiBase,
+  issueNumber,
+  fetchImpl,
+  maxPages,
+}) => {
+  const events = [];
+  const warnings = [];
+  let capped = false;
+  for (let page = 1, hasMore = true; hasMore && page <= maxPages; page += 1) {
+    let payload;
+    try {
+      payload = await requestJson(
+        fetchImpl,
+        issuesUrl(apiBase, repo, `/${issueNumber}/events`, { per_page: PER_PAGE, page }),
+        { headers: githubHeaders(token) },
+        "tracker",
+      );
+    } catch (error) {
+      warnings.push(
+        `GH-${issueNumber} events unavailable (${error instanceof Error ? error.message : "read failed"}); phase clock not collected`,
+      );
+      return { events, warnings, capped };
+    }
+    const entries = Array.isArray(payload) ? payload : [];
+    events.push(
+      ...entries.filter(
+        (entry) => entry && typeof entry === "object" && typeof entry.event === "string",
+      ),
+    );
+    hasMore = entries.length === PER_PAGE;
+    if (!hasMore) break;
+    if (page === maxPages) {
+      capped = true;
+      warnings.push(
+        `GH-${issueNumber} events stopped at the ${maxPages}-page cap; phase clock not collected`,
+      );
+    }
+  }
+  return { events, warnings, capped };
+};

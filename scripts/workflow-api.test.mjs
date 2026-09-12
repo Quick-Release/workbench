@@ -640,6 +640,117 @@ test("a move falls back to the resolved phase's label when raw labels do not rid
   ]);
 });
 
+// GH-149: the clock rides the seam. A phase move stamps the write time as
+// the new clock (moving to pre-flow leaves nothing to clock); every other
+// write carries the previous clock over untouched, so an edit never
+// silently resets a stay.
+test("a phase move stamps the write time as the new clock", async () => {
+  const directory = await withSnapshot(
+    snapshot([
+      workItem(7, "needs-triage", {
+        phase: "implementing",
+        labels: ["needs-triage", "workflow:implementing"],
+        phaseSince: "2026-09-01T09:00:00.000Z",
+      }),
+    ]),
+  );
+  const { run } = runStub([
+    {},
+    ghIssueView({ labels: [{ name: "workflow:reviewing" }, { name: "needs-triage" }] }),
+  ]);
+  const handled = await handleWorkflowApi({
+    method: "POST",
+    pathname: "/api/workflow/phase",
+    body: JSON.stringify({ issueId: "GH-7", phase: "reviewing" }),
+    appDirectory: directory,
+    hostRoot: HOST_ROOT,
+    run,
+  });
+  strictEqual(handled.status, 200);
+  const stamped = Date.parse(handled.json.state.workItems[0].phaseSince);
+  ok(
+    Number.isFinite(stamped),
+    `expected a stamped clock, got ${handled.json.state.workItems[0].phaseSince}`,
+  );
+  ok(Math.abs(Date.now() - stamped) < 60_000, `expected the write time, got ${stamped}`);
+});
+
+test("moving to pre-flow leaves no clock to run", async () => {
+  const directory = await withSnapshot(
+    snapshot([
+      workItem(7, "needs-triage", {
+        phase: "ticketed",
+        labels: ["needs-triage", "workflow:ticketed"],
+        phaseSince: "2026-09-01T09:00:00.000Z",
+      }),
+    ]),
+  );
+  const { run } = runStub([{}, ghIssueView({ labels: [{ name: "needs-triage" }] })]);
+  const handled = await handleWorkflowApi({
+    method: "POST",
+    pathname: "/api/workflow/phase",
+    body: JSON.stringify({ issueId: "GH-7", phase: "pre-flow" }),
+    appDirectory: directory,
+    hostRoot: HOST_ROOT,
+    run,
+  });
+  strictEqual(handled.status, 200);
+  strictEqual(handled.json.state.workItems[0].phase, null);
+  strictEqual(handled.json.state.workItems[0].phaseSince, undefined);
+});
+
+test("a triage move keeps the clock running", async () => {
+  const directory = await withSnapshot(
+    snapshot([
+      workItem(7, "needs-triage", {
+        phase: "implementing",
+        labels: ["needs-triage", "workflow:implementing"],
+        phaseSince: "2026-09-01T09:00:00.000Z",
+      }),
+    ]),
+  );
+  const { run } = runStub([
+    {},
+    ghIssueView({ labels: [{ name: "ready-for-agent" }, { name: "workflow:implementing" }] }),
+  ]);
+  const handled = await handleWorkflowApi({
+    method: "POST",
+    pathname: "/api/workflow/triage",
+    body: JSON.stringify({ issueId: "GH-7", triageState: "ready-for-agent" }),
+    appDirectory: directory,
+    hostRoot: HOST_ROOT,
+    run,
+  });
+  strictEqual(handled.status, 200);
+  strictEqual(handled.json.state.workItems[0].phaseSince, "2026-09-01T09:00:00.000Z");
+});
+
+test("an issue edit keeps the clock running", async () => {
+  const directory = await withSnapshot(
+    snapshot([
+      workItem(7, "needs-triage", {
+        phase: "implementing",
+        labels: ["needs-triage", "workflow:implementing"],
+        phaseSince: "2026-09-01T09:00:00.000Z",
+      }),
+    ]),
+  );
+  const { run } = runStub([
+    {},
+    ghIssueView({ labels: [{ name: "needs-triage" }, { name: "workflow:implementing" }] }),
+  ]);
+  const handled = await handleWorkflowApi({
+    method: "POST",
+    pathname: "/api/workflow/issue/edit",
+    body: JSON.stringify({ issueId: "GH-7", title: "A better title", confirm: true }),
+    appDirectory: directory,
+    hostRoot: HOST_ROOT,
+    run,
+  });
+  strictEqual(handled.status, 200);
+  strictEqual(handled.json.state.workItems[0].phaseSince, "2026-09-01T09:00:00.000Z");
+});
+
 test("a phase move body failing the schema is rejected naming the path", async () => {
   const directory = await withSnapshot(snapshot([workItem(7)]));
   const cases = [

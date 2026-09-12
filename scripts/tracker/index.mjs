@@ -6,11 +6,13 @@ import {
   fetchBlockedBy,
   fetchIssue,
   fetchIssueComments,
+  fetchIssueEvents,
   fetchIssuesByLabel,
   fetchMapIssues,
   fetchOpenIssues,
   fetchSubIssues,
 } from "./issues.mjs";
+import { phaseSinceFromEvents } from "../../src/lib/phase-clock.ts";
 import { CLIENT_TICKET_LABELS, collectClientTickets } from "./client-tickets.mjs";
 import { lineEdgesForBody, mergeBlockerEdges } from "./edges.mjs";
 import { resolutionDecisionFromIssue, sortDecisions, specDecisionFromIssue } from "./decisions.mjs";
@@ -50,6 +52,10 @@ export const resolveGhToken = async ({
 
 const REPO_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.-]*\/[A-Za-z0-9][A-Za-z0-9_.-]*$/;
 const MAX_ISSUE_READS = 250;
+// GH-149: the label-event reads carry their own budget, independent of the
+// targeted-issue and resolution budgets — a clock degrades before any of
+// those ever do.
+const MAX_EVENT_READS = 250;
 
 // ADR 0008: the host repo's tracker state collected as first-class records —
 // work items for every issue the targeted reads reach, map membership (never
@@ -65,6 +71,10 @@ export const collectTrackerState = async ({
   maxPages = 10,
   vocabulary,
   vocabularyPath = "",
+  // GH-149: the previous snapshot's clocks, keyed by record id — an entry
+  // whose `updatedAt` still matches the issue's costs zero events calls, and
+  // carries its `phaseSince` over untouched.
+  phaseClocks = new Map(),
 }) => {
   // Every record family the sync merge iterates rides even the degraded
   // returns — a missing decisions array crashes the sort, not a warning.
@@ -354,6 +364,53 @@ export const collectTrackerState = async ({
   const byNumber = (left, right) => Number(left.id.slice(3)) - Number(right.id.slice(3));
   const byNumberDesc = (left, right) => byNumber(right, left);
   recentlyShipped.sort(byNumberDesc);
+
+  // GH-149: the time-in-phase clock. Each phase-labelled, non-decision-ticket
+  // record clocks from its label-event history — the latest `labeled` event
+  // for the phase's label, so re-entry resets. Decision tickets place by the
+  // board-placement table and never wear a clock; pre-flow items have no
+  // phase to clock. An issue whose `updatedAt` is unchanged reuses the
+  // previous sync's clock at zero events cost; a failed or capped read leaves
+  // the clock null with a warning — unknown, never zero time. The budget is
+  // the events walks' own, so clocks degrade before any other family does.
+  const labelForPhase = (phase) => phaseVocabulary.find((entry) => entry.phase === phase)?.label;
+  let eventReads = 0;
+  let cappedClocks = 0;
+  for (const record of [...workItems, ...recentlyShipped]) {
+    if (record.kind !== null && record.kind !== "map") continue;
+    if (record.phase === null) continue;
+    const label = labelForPhase(record.phase);
+    if (!label) continue;
+    const cached = phaseClocks.get(record.id);
+    if (cached && record.updatedAt !== undefined && cached.updatedAt === record.updatedAt) {
+      record.phaseSince = cached.phaseSince;
+      continue;
+    }
+    if (eventReads >= MAX_EVENT_READS) {
+      cappedClocks += 1;
+      continue;
+    }
+    eventReads += 1;
+    const {
+      events,
+      warnings: eventWarnings,
+      capped,
+    } = await fetchIssueEvents({
+      repo,
+      token,
+      apiBase,
+      issueNumber: Number(record.id.slice(3)),
+      fetchImpl,
+      maxPages,
+    });
+    warnings.push(...eventWarnings.map((warning) => `${record.id}: ${warning}`));
+    if (capped) continue;
+    record.phaseSince = phaseSinceFromEvents(events, label) ?? undefined;
+  }
+  if (cappedClocks > 0)
+    warnings.push(
+      `tracker: event reads stopped at the ${MAX_EVENT_READS} cap; ${cappedClocks} phase clocks not collected`,
+    );
 
   workItems.sort(byNumber);
   return {

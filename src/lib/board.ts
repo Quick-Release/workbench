@@ -7,6 +7,7 @@ import type {
 import { phaseMoveTargets } from "../types";
 import { deriveDisplayState, type DisplayCaveat } from "./display-state";
 import { frontier, frontierItemFromWorkItem, indexWorkItems, openBlockers } from "./frontier";
+import { phaseClockLine, type PhaseClockLine } from "./phase-clock";
 import { byIssueNumber } from "./work-item-id";
 
 // The flow board's derivation (ticket #146, the read-only board): pure over
@@ -47,6 +48,10 @@ export type BoardCard = {
   column: BoardColumn;
   chips: BoardCardChips;
   caveats: DisplayCaveat[];
+  // GH-149: the card's clock line — time in phase where the event-derived
+  // clock exists, last-touched where it doesn't, null for decision tickets
+  // and pre-flow items.
+  clock: PhaseClockLine | null;
   // The sync warnings addressed to this card (issue-id-prefixed lines of the
   // payload's warnings channel — the double-label resolutions live here),
   // never re-derived from labels.
@@ -67,6 +72,9 @@ export type BoardInput = {
   maps: readonly TrackerMapRecord[];
   decisionPlacement?: readonly DecisionPlacementRow[];
   warnings?: readonly string[];
+  // GH-149: the instant the clock lines are computed against. Tests pin it;
+  // live callers pass the read time.
+  now?: number;
   // The deferred lens: parked work renders in place only behind it, never as
   // a ninth column.
   deferredLens?: boolean;
@@ -123,6 +131,7 @@ export const board = (input: BoardInput): BoardColumnView[] => {
       return {
         record,
         column: boardColumnFor(record, placement),
+        clock: phaseClockLine(record, input.now ?? Date.now()),
         chips: {
           blocked,
           grabbable: grabbableIds.has(record.id),

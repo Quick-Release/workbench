@@ -20,7 +20,7 @@ type BoardCardProps = {
 };
 
 function BoardCardView({ card, mode, pending, onMovePhase, onOpenIssue }: BoardCardProps) {
-  const { record, column, chips, caveats, warnings } = card;
+  const { record, column, chips, caveats, clock, warnings } = card;
   return (
     <article
       data-slot="board-card"
@@ -80,6 +80,11 @@ function BoardCardView({ card, mode, pending, onMovePhase, onOpenIssue }: BoardC
           {caveat.message}
         </p>
       ))}
+      {clock && (
+        <p data-slot="board-clock" className="font-mono text-xs text-muted-foreground">
+          {clock.text}
+        </p>
+      )}
       {warnings.map((warning) => (
         <p key={warning} data-slot="board-card-warning" className="text-xs text-amber">
           {warning}

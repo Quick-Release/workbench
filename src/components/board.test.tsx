@@ -185,3 +185,31 @@ describe("the board page", () => {
     expect(html).toContain("place by the placement table");
   });
 });
+
+describe("the board's time-in-phase lines (#149)", () => {
+  const now = Date.parse("2026-09-12T12:00:00.000Z");
+
+  it("renders the time in phase on a clocked card", () => {
+    const columns = columnsOf({
+      workItems: [item(8, { phase: "implementing", phaseSince: "2026-09-08T12:00:00.000Z" })],
+      now,
+    });
+    const html = withoutComments(renderPage(columns));
+    expect(html).toContain('data-slot="board-clock"');
+    expect(html).toContain("4d in implementing");
+  });
+
+  it("renders the last-touched fallback and no clock for decision tickets or pre-flow", () => {
+    const columns = columnsOf({
+      workItems: [
+        item(9, { phase: "ticketed", updatedAt: "2026-09-12T09:00:00.000Z" }),
+        item(70, { kind: "task" }),
+        item(11, {}),
+      ],
+      now,
+    });
+    const html = withoutComments(renderPage(columns));
+    expect(html).toContain("last touched 3h ago");
+    expect(html.match(/data-slot="board-clock"/g)?.length).toBe(1);
+  });
+});

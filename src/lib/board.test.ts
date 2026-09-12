@@ -288,3 +288,44 @@ describe("the client-side placement fallback", () => {
     expect(trackerDefault).toEqual(DEFAULT_DECISION_PLACEMENT);
   });
 });
+
+describe("the time-in-phase clock (#149)", () => {
+  const now = Date.parse("2026-09-12T12:00:00.000Z");
+
+  it("clocks a phase-labelled card's stay and resets on re-entry via the events", () => {
+    const card = cardFor(
+      "GH-8",
+      boardOf([item(8, { phase: "implementing", phaseSince: "2026-09-08T12:00:00.000Z" })], {
+        now,
+      }),
+    );
+    expect(card.clock).toEqual({ text: "4d in implementing", source: "phase" });
+  });
+
+  it("falls back to last-touched where no clock exists, and stays silent without either", () => {
+    const columns = boardOf(
+      [
+        item(9, { phase: "ticketed", updatedAt: "2026-09-12T09:00:00.000Z" }),
+        item(10, { phase: "reviewing" }),
+      ],
+      { now },
+    );
+    expect(cardFor("GH-9", columns).clock).toEqual({
+      text: "last touched 3h ago",
+      source: "last-touched",
+    });
+    expect(cardFor("GH-10", columns).clock).toBeNull();
+  });
+
+  it("never clocks decision tickets or pre-flow items", () => {
+    const columns = boardOf(
+      [
+        item(70, { kind: "task", phase: "ticketed", phaseSince: "2026-09-08T12:00:00.000Z" }),
+        item(11, { phase: null, phaseSince: "2026-09-08T12:00:00.000Z" }),
+      ],
+      { now },
+    );
+    expect(cardFor("GH-70", columns).clock).toBeNull();
+    expect(cardFor("GH-11", columns).clock).toBeNull();
+  });
+});

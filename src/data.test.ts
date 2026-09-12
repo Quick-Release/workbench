@@ -356,6 +356,15 @@ describe("tracker work item boundary", () => {
     const { summary: _omitted, ...incomplete } = workItem;
     expect(() => parseWorkItemRecord(incomplete)).toThrow(/summary/);
   });
+
+  it("round-trips the time-in-phase clock and stays absent without one (#149)", () => {
+    const clocked = { ...workItem, phaseSince: "2026-09-08T12:00:00.000Z" };
+    expect(parseWorkItemRecord(clocked)).toEqual(clocked);
+    // Older snapshots serialize without the key — absence is unknown, never
+    // zero time in phase.
+    expect(parseWorkItemRecord(workItem)).not.toHaveProperty("phaseSince");
+    expect(() => parseWorkItemRecord({ ...workItem, phaseSince: 12 })).toThrow(/phaseSince/);
+  });
 });
 
 describe("tracker map boundary", () => {

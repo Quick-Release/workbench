@@ -134,6 +134,10 @@ export const WorkItemRecordSchema = Schema.Struct({
   updatedAt: Schema.optional(Schema.String),
   // Why GitHub says it closed — rendered honestly, never assumed delivered.
   stateReason: Schema.optional(Schema.Literals(["completed", "not_planned"])),
+  // GH-149: the time-in-phase clock — the phase label's latest `labeled`
+  // event. Optional like the other GH-136 metadata: an older snapshot's
+  // absence is unknown, never zero time in phase.
+  phaseSince: Schema.optional(Schema.String),
 });
 
 export const ClientTicketKindSchema = Schema.Literals(clientTicketKinds);

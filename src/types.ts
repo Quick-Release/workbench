@@ -179,6 +179,11 @@ export type WorkItemRecord = {
   // Why GitHub says it closed — `completed` (a delivered fix) or `not_planned`
   // (closed without one) — so closure reasons render honestly (GH-136).
   stateReason?: "completed" | "not_planned";
+  // GH-149: when the record entered its resolved phase — the latest `labeled`
+  // event for the phase's label, so re-entry resets. Absent for pre-flow
+  // items and decision tickets, and wherever the events read failed or was
+  // capped: unknown, never zero time. The display falls back to `updatedAt`.
+  phaseSince?: string;
 };
 
 // The closed lens' bounded, label-specific history read (GH-136): recent
