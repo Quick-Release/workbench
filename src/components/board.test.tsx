@@ -177,4 +177,11 @@ describe("the board page", () => {
     expect(html).toContain("Moving");
     expect(html).not.toContain('aria-label="Move GH-8"');
   });
+
+  it("offers no phase move on a decision ticket — placement is the table's, not labels'", () => {
+    const columns = columnsOf({ workItems: [item(70, { kind: "task" })] });
+    const html = withoutComments(renderPage(columns));
+    expect(html).not.toContain('aria-label="Move GH-70"');
+    expect(html).toContain("place by the placement table");
+  });
 });

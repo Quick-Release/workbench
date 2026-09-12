@@ -694,6 +694,24 @@ test("a phase move on a non-issue namespaced id is rejected", async () => {
   strictEqual(calls.length, 0);
 });
 
+test("a phase move on a decision ticket is refused without shelling out", async () => {
+  const directory = await withSnapshot(
+    snapshot([workItem(7, "unlabeled", { kind: "task", labels: ["wayfinder:task"] })]),
+  );
+  const { calls, run } = runStub();
+  const handled = await handleWorkflowApi({
+    method: "POST",
+    pathname: "/api/workflow/phase",
+    body: JSON.stringify({ issueId: "GH-7", phase: "ticketed" }),
+    appDirectory: directory,
+    hostRoot: HOST_ROOT,
+    run,
+  });
+  strictEqual(handled.status, 400);
+  ok(/decision ticket/i.test(handled.json.message), handled.json.message);
+  strictEqual(calls.length, 0);
+});
+
 test("an issue comment shells out to gh and answers the comment url", async () => {
   const directory = await withSnapshot(snapshot([workItem(7)]));
   const commentUrl = `https://github.com/${REPO}/issues/7#issuecomment-311`;

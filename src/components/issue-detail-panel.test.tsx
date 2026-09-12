@@ -219,6 +219,13 @@ describe("the panel's phase move (ticket #148)", () => {
     expect(html).toContain('aria-label="Compose a move command for GH-7"');
     expect(html).not.toContain('aria-label="Move GH-7"');
   });
+
+  it("offers no phase move on a decision ticket", () => {
+    const html = renderPanel({ issueId: "GH-42" });
+    expect(html).not.toContain('aria-label="Move GH-42"');
+    expect(html).not.toContain('aria-label="Compose a move command for GH-42"');
+    expect(html).toContain("place by the placement table");
+  });
 });
 
 describe("create mode and unknown references", () => {

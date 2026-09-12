@@ -25,6 +25,16 @@ type PhaseMoveSelectProps = {
 export function PhaseMoveSelect({ record, current, mode, pending, onMove }: PhaseMoveSelectProps) {
   const [staticTarget, setStaticTarget] = useState<PhaseMoveTarget | null>(null);
 
+  // A decision ticket places by the board-placement table, not labels (the
+  // seam refuses the write for the same reason) — no affordance rather than
+  // a move that could never move the card.
+  if (record.kind !== null && record.kind !== "map")
+    return (
+      <p data-slot="phase-move-unavailable" className="text-xs text-muted-foreground">
+        Decision tickets place by the placement table — no phase labels to move.
+      </p>
+    );
+
   const options = (
     <>
       <option value="">Move to…</option>

@@ -184,6 +184,15 @@ export const applyPhaseMove = async ({ issueId, phase, state, run, cwd }) => {
       message: `"${issueId}" is not a tracker issue id; only GH-numbered items move here`,
     };
   const existing = state.workItems.find((item) => item.id === issueId);
+  // A decision ticket places by the board-placement table (kind + open/closed
+  // state), never by labels (docs/agents/workflow-labels.md): a phase label
+  // on one would be a stray the board ignores, so the move refuses.
+  if (existing && existing.kind !== null && existing.kind !== "map")
+    return {
+      ok: false,
+      status: 400,
+      message: `${issueId} is a decision ticket — it places by the placement table and carries no phase labels`,
+    };
   // A record from an older snapshot can lack the raw labels; the resolved
   // phase's label is then the one worn label the state can vouch for.
   const worn = (existing?.labels ?? (existing?.phase ? [`workflow:${existing.phase}`] : [])).filter(
