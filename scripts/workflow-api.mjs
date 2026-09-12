@@ -26,7 +26,7 @@ import { byIssueNumber, workItemIdNumber } from "../src/lib/work-item-id.ts";
 import { deriveWorkItem } from "./tracker/labels.mjs";
 import { ghIssueRecord } from "./tracker/gh-view.mjs";
 import { collectClientTickets } from "./tracker/client-tickets.mjs";
-import { tokenFromGhCli } from "./tracker/index.mjs";
+import { resolveGhToken, tokenFromGhCli } from "./tracker/index.mjs";
 import { GITHUB_API } from "./tracker/issues.mjs";
 import { guardedApi, sendJson } from "./api-shared.mjs";
 import { createAutoSync } from "./auto-sync.mjs";
@@ -604,8 +604,7 @@ export const handleWorkflowApi = async ({
     // missing token is a typed 503, never an empty "no tickets".
     try {
       const state = parseWorkflowStatePayload(await loadWorkflowState(appDirectory));
-      const fromEnv = typeof env.GITHUB_TOKEN === "string" ? env.GITHUB_TOKEN.trim() : "";
-      const token = fromEnv || (await ghToken());
+      const token = await resolveGhToken({ env, ghToken });
       if (!token)
         return {
           status: 503,

@@ -26,23 +26,38 @@ const syncTriggered = () => ({
   result: { message: "Synced, no warnings.", warnings: [], state: {} },
 });
 
-test("a tick with no browser presence probes nothing and syncs nothing", async () => {
-  const fetches = [];
+// A leg over the common harness: a token in the env, a fixed clock, and a
+// sync stub that records its calls. Tests override what they observe — most
+// often `fetchImpl`, which they record themselves.
+const makeLeg = (overrides = {}) => {
   const syncs = [];
   const leg = createAutoSync({
     appDirectory: "/tmp/app",
     resolveRepo: async () => REPO,
-    applySync: async ({ run }) => {
-      syncs.push(run);
-      return { ok: true, result: { message: "Synced, no warnings.", warnings: [], state: {} } };
+    applySync: async () => {
+      syncs.push(true);
+      return syncTriggered();
     },
     run: async () => {},
-    fetchImpl: async (...args) => {
-      fetches.push(args);
-      return probeResponse(304, '"etag-1"');
-    },
     env: { GITHUB_TOKEN: "test-token" },
     now: () => 1_000,
+    ...overrides,
+  });
+  return { leg, syncs };
+};
+
+// A recording fetch stub that answers each tick from `answers` in order.
+const scriptedFetch =
+  (answers, fetches = []) =>
+  async (url, options) => {
+    fetches.push({ url: String(url), options });
+    return answers[fetches.length - 1];
+  };
+
+test("a tick with no browser presence probes nothing and syncs nothing", async () => {
+  const fetches = [];
+  const { leg, syncs } = makeLeg({
+    fetchImpl: scriptedFetch([probeResponse(200, '"etag-1"')], fetches),
   });
 
   await leg.tick();
@@ -55,20 +70,13 @@ test("a recent seam read plus a changed probe runs the sync trigger", async () =
   const fetches = [];
   const syncs = [];
   const run = async () => {};
-  const leg = createAutoSync({
-    appDirectory: "/tmp/app",
-    resolveRepo: async () => REPO,
+  const { leg } = makeLeg({
+    run,
     applySync: async ({ appDirectory: directory, run: runner }) => {
       syncs.push({ appDirectory: directory, run: runner });
-      return { ok: true, result: { message: "Synced, no warnings.", warnings: [], state: {} } };
+      return syncTriggered();
     },
-    run,
-    fetchImpl: async (url, options) => {
-      fetches.push({ url: String(url), options });
-      return probeResponse(200, '"etag-1"');
-    },
-    env: { GITHUB_TOKEN: "test-token" },
-    now: () => 1_000,
+    fetchImpl: scriptedFetch([probeResponse(200, '"etag-1"')], fetches),
   });
 
   leg.noteSeamRead();
@@ -85,22 +93,8 @@ test("a recent seam read plus a changed probe runs the sync trigger", async () =
 
 test("a 304 probe rides If-None-Match and skips the sync at no rate cost", async () => {
   const fetches = [];
-  const syncs = [];
-  const answers = [probeResponse(200, '"etag-1"'), probeResponse(304)];
-  const leg = createAutoSync({
-    appDirectory: "/tmp/app",
-    resolveRepo: async () => REPO,
-    applySync: async () => {
-      syncs.push(true);
-      return { ok: true, result: { message: "Synced, no warnings.", warnings: [], state: {} } };
-    },
-    run: async () => {},
-    fetchImpl: async (url, options) => {
-      fetches.push({ url: String(url), options });
-      return answers[fetches.length - 1];
-    },
-    env: { GITHUB_TOKEN: "test-token" },
-    now: () => 1_000,
+  const { leg, syncs } = makeLeg({
+    fetchImpl: scriptedFetch([probeResponse(200, '"etag-1"'), probeResponse(304)], fetches),
   });
 
   leg.noteSeamRead();
@@ -113,22 +107,10 @@ test("a 304 probe rides If-None-Match and skips the sync at no rate cost", async
 
 test("a seam read older than the presence window keeps the leg asleep", async () => {
   const fetches = [];
-  const syncs = [];
   let clock = 1_000;
-  const leg = createAutoSync({
-    appDirectory: "/tmp/app",
-    resolveRepo: async () => REPO,
-    applySync: async () => {
-      syncs.push(true);
-      return { ok: true, result: { message: "Synced, no warnings.", warnings: [], state: {} } };
-    },
-    run: async () => {},
-    fetchImpl: async (url, options) => {
-      fetches.push({ url: String(url), options });
-      return probeResponse(200, '"etag-1"');
-    },
-    env: { GITHUB_TOKEN: "test-token" },
+  const { leg, syncs } = makeLeg({
     now: () => clock,
+    fetchImpl: scriptedFetch([probeResponse(200, '"etag-1"')], fetches),
   });
 
   leg.noteSeamRead();
@@ -141,22 +123,10 @@ test("a seam read older than the presence window keeps the leg asleep", async ()
 
 test("a fresh seam read inside the window returns the leg to service", async () => {
   const fetches = [];
-  const syncs = [];
   let clock = 1_000;
-  const leg = createAutoSync({
-    appDirectory: "/tmp/app",
-    resolveRepo: async () => REPO,
-    applySync: async () => {
-      syncs.push(true);
-      return { ok: true, result: { message: "Synced, no warnings.", warnings: [], state: {} } };
-    },
-    run: async () => {},
-    fetchImpl: async (url, options) => {
-      fetches.push({ url: String(url), options });
-      return probeResponse(200, '"etag-1"');
-    },
-    env: { GITHUB_TOKEN: "test-token" },
+  const { leg, syncs } = makeLeg({
     now: () => clock,
+    fetchImpl: scriptedFetch([probeResponse(200, '"etag-1"')], fetches),
   });
 
   leg.noteSeamRead();
@@ -174,13 +144,7 @@ test("a tick never stacks a sync onto a sync that is still running", async () =>
   const fetches = [];
   const syncs = [];
   let releaseSync;
-  const syncResult = {
-    ok: true,
-    result: { message: "Synced, no warnings.", warnings: [], state: {} },
-  };
-  const leg = createAutoSync({
-    appDirectory: "/tmp/app",
-    resolveRepo: async () => REPO,
+  const { leg } = makeLeg({
     applySync: async () => {
       syncs.push(true);
       // Only the first sync is held open; a stacked call would sail through.
@@ -188,22 +152,16 @@ test("a tick never stacks a sync onto a sync that is still running", async () =>
         return new Promise((resolve) => {
           releaseSync = resolve;
         });
-      return syncResult;
+      return syncTriggered();
     },
-    run: async () => {},
-    fetchImpl: async (url, options) => {
-      fetches.push({ url: String(url), options });
-      return probeResponse(200, '"etag-1"');
-    },
-    env: { GITHUB_TOKEN: "test-token" },
-    now: () => 1_000,
+    fetchImpl: scriptedFetch([probeResponse(200, '"etag-1"')], fetches),
   });
 
   leg.noteSeamRead();
   const first = leg.tick();
   await new Promise((resolve) => setTimeout(resolve, 0));
   ok(!(await leg.tick()));
-  releaseSync(syncResult);
+  releaseSync(syncTriggered());
   ok(await first);
 
   strictEqual(syncs.length, 1, "the overlapping tick must not start a second sync");
@@ -212,22 +170,10 @@ test("a tick never stacks a sync onto a sync that is still running", async () =>
 
 test("a missing GitHub token skips the probe without syncing", async () => {
   const fetches = [];
-  const syncs = [];
-  const leg = createAutoSync({
-    appDirectory: "/tmp/app",
-    resolveRepo: async () => REPO,
-    applySync: async () => {
-      syncs.push(true);
-      return syncTriggered();
-    },
-    run: async () => {},
-    fetchImpl: async (url, options) => {
-      fetches.push({ url: String(url), options });
-      return probeResponse(200, '"etag-1"');
-    },
+  const { leg, syncs } = makeLeg({
     env: {},
     ghToken: async () => "",
-    now: () => 1_000,
+    fetchImpl: scriptedFetch([probeResponse(200, '"etag-1"')], fetches),
   });
 
   leg.noteSeamRead();
@@ -238,20 +184,10 @@ test("a missing GitHub token skips the probe without syncing", async () => {
 });
 
 test("a failed probe skips the tick without throwing", async () => {
-  const syncs = [];
-  const leg = createAutoSync({
-    appDirectory: "/tmp/app",
-    resolveRepo: async () => REPO,
-    applySync: async () => {
-      syncs.push(true);
-      return syncTriggered();
-    },
-    run: async () => {},
+  const { leg, syncs } = makeLeg({
     fetchImpl: async () => {
       throw new Error("network down");
     },
-    env: { GITHUB_TOKEN: "test-token" },
-    now: () => 1_000,
   });
 
   leg.noteSeamRead();
@@ -263,12 +199,7 @@ test("a failed probe skips the tick without throwing", async () => {
 test("start schedules the tick at the fixed cadence once; stop cancels it", () => {
   const scheduled = [];
   const cancelled = [];
-  const leg = createAutoSync({
-    appDirectory: "/tmp/app",
-    resolveRepo: async () => REPO,
-    applySync: async () => syncTriggered(),
-    run: async () => {},
-    env: { GITHUB_TOKEN: "test-token" },
+  const { leg } = makeLeg({
     schedule: (fn, ms) => {
       scheduled.push({ fn, ms });
       return `timer-${scheduled.length}`;
@@ -287,14 +218,10 @@ test("start schedules the tick at the fixed cadence once; stop cancels it", () =
 
 test("the scheduled tick swallows a throwing leg so the interval never rejects", async () => {
   let scheduledFn;
-  const leg = createAutoSync({
-    appDirectory: "/tmp/app",
+  const { leg } = makeLeg({
     resolveRepo: async () => {
       throw new Error("broken snapshot");
     },
-    applySync: async () => syncTriggered(),
-    run: async () => {},
-    env: { GITHUB_TOKEN: "test-token" },
     schedule: (fn) => {
       scheduledFn = fn;
       return "timer-1";
@@ -309,27 +236,16 @@ test("the scheduled tick swallows a throwing leg so the interval never rejects",
 
 test("a changed probe after a 304 re-syncs and refreshes the stored etag", async () => {
   const fetches = [];
-  const syncs = [];
-  const answers = [
-    probeResponse(200, '"etag-1"'),
-    probeResponse(304),
-    probeResponse(200, '"etag-2"'),
-    probeResponse(304),
-  ];
-  const leg = createAutoSync({
-    appDirectory: "/tmp/app",
-    resolveRepo: async () => REPO,
-    applySync: async () => {
-      syncs.push(true);
-      return { ok: true, result: { message: "Synced, no warnings.", warnings: [], state: {} } };
-    },
-    run: async () => {},
-    fetchImpl: async (url, options) => {
-      fetches.push({ url: String(url), options });
-      return answers[fetches.length - 1];
-    },
-    env: { GITHUB_TOKEN: "test-token" },
-    now: () => 1_000,
+  const { leg, syncs } = makeLeg({
+    fetchImpl: scriptedFetch(
+      [
+        probeResponse(200, '"etag-1"'),
+        probeResponse(304),
+        probeResponse(200, '"etag-2"'),
+        probeResponse(304),
+      ],
+      fetches,
+    ),
   });
 
   leg.noteSeamRead();

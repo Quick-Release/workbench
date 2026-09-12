@@ -8,7 +8,8 @@
 // unread board burns no quota.
 import { LIVE_REFRESH_MAX_MS } from "../src/lib/live-refresh.ts";
 
-import { GITHUB_API, githubHeaders } from "./tracker/issues.mjs";
+import { GITHUB_API, PER_PAGE, githubHeaders, issuesUrl } from "./tracker/issues.mjs";
+import { resolveGhToken } from "./tracker/index.mjs";
 
 export const AUTO_SYNC_CADENCE_MS = 90_000;
 
@@ -25,7 +26,6 @@ export const createAutoSync = ({
   fetchImpl = globalThis.fetch,
   env = process.env,
   ghToken = async () => "",
-  apiBase = GITHUB_API,
   now = Date.now,
   schedule = (fn, ms) => {
     const timer = setInterval(() => fn(), ms);
@@ -38,24 +38,22 @@ export const createAutoSync = ({
   let probeEtag = null;
   let syncing = false;
 
-  const probeToken = async () => {
-    const fromEnv = typeof env.GITHUB_TOKEN === "string" ? env.GITHUB_TOKEN.trim() : "";
-    return fromEnv || (await ghToken());
-  };
-
   const tick = async () => {
-    // The mutex answers the tick before it probes: a long sync is never
-    // stacked onto itself, and never even double-probed.
+    // The mutex answers the tick before it probes: while a sync runs, later
+    // ticks neither probe nor stack a second sync.
     if (syncing) return false;
     if (now() - lastSeamReadAt >= PRESENCE_WINDOW_MS) return false;
-    const token = await probeToken();
+    const token = await resolveGhToken({ env, ghToken });
     if (!token) return false;
     const repo = await resolveRepo();
     if (!repo) return false;
-    const url = new URL(`${apiBase}/repos/${repo}/issues`);
-    url.searchParams.set("state", "open");
-    url.searchParams.set("per_page", "100");
-    url.searchParams.set("page", "1");
+    // The probe makes the sync sweep's own first-page request, so its ETag
+    // speaks for exactly the list the sweep reads first.
+    const url = issuesUrl(GITHUB_API, repo, "", {
+      state: "open",
+      per_page: PER_PAGE,
+      page: 1,
+    });
     try {
       const response = await fetchImpl(url, {
         headers: {

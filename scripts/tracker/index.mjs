@@ -31,6 +31,17 @@ export const tokenFromGhCli = async () => {
   }
 };
 
+// The tracker credential chain, shared by every raw GitHub read: an explicit
+// token environment variable wins, and an authenticated `gh` login stands in.
+export const resolveGhToken = async ({
+  env = process.env,
+  ghToken = tokenFromGhCli,
+  tokenEnv = "GITHUB_TOKEN",
+}) => {
+  const fromEnv = typeof env[tokenEnv] === "string" ? env[tokenEnv].trim() : "";
+  return fromEnv || (await ghToken());
+};
+
 const REPO_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.-]*\/[A-Za-z0-9][A-Za-z0-9_.-]*$/;
 const MAX_ISSUE_READS = 250;
 
@@ -75,8 +86,7 @@ export const collectTrackerState = async ({
       ],
     };
 
-  const fromEnv = typeof env[tokenEnv] === "string" ? env[tokenEnv].trim() : "";
-  const token = fromEnv || (await ghToken());
+  const token = await resolveGhToken({ env, ghToken, tokenEnv });
   if (!token)
     return {
       ...empty,
