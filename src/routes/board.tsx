@@ -76,6 +76,9 @@ function BoardRoute() {
         decisionPlacement: state.decisionPlacement,
         warnings: state.warnings,
         deferredLens: search.lens === "deferred",
+        // The clock lines read against this render's time; the next live read
+        // or state change re-derives them.
+        now: Date.now(),
       }),
     [state, search.lens],
   );

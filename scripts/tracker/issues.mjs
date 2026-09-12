@@ -221,3 +221,53 @@ export const fetchIssueComments = async ({
 };
 
 export const apiBaseFrom = (apiBaseUrl) => (httpUrl(apiBaseUrl) || GITHUB_API).replace(/\/+$/, "");
+
+// GH-149: the label-event history of one issue — the time-in-phase clock's
+// only source. Same paged walk and degradation as the issue lists, `failed`
+// and `capped` both meaning the history is incomplete; the wording names the
+// clock, because an incomplete read is reported as a missing clock (null),
+// never as zero time in phase. Messages carry no id prefix — the collector
+// addresses them to the record, keeping the warnings channel single-prefixed.
+export const fetchIssueEvents = async ({
+  repo,
+  token,
+  apiBase,
+  issueNumber,
+  fetchImpl,
+  maxPages,
+}) => {
+  const events = [];
+  const warnings = [];
+  let capped = false;
+  let failed = false;
+  for (let page = 1, hasMore = true; hasMore && page <= maxPages; page += 1) {
+    let payload;
+    try {
+      payload = await requestJson(
+        fetchImpl,
+        issuesUrl(apiBase, repo, `/${issueNumber}/events`, { per_page: PER_PAGE, page }),
+        { headers: githubHeaders(token) },
+        "tracker",
+      );
+    } catch (error) {
+      failed = true;
+      warnings.push(
+        `events unavailable (${error instanceof Error ? error.message : "read failed"}); phase clock not collected`,
+      );
+      return { events, warnings, capped, failed };
+    }
+    const entries = Array.isArray(payload) ? payload : [];
+    events.push(
+      ...entries.filter(
+        (entry) => entry && typeof entry === "object" && typeof entry.event === "string",
+      ),
+    );
+    hasMore = entries.length === PER_PAGE;
+    if (!hasMore) break;
+    if (page === maxPages) {
+      capped = true;
+      warnings.push(`events stopped at the ${maxPages}-page cap; phase clock not collected`);
+    }
+  }
+  return { events, warnings, capped, failed };
+};

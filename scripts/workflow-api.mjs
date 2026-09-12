@@ -116,12 +116,19 @@ const readBackOrFail = async (issueId, number, state, run, cwd, verb) => {
   }
 };
 
-const upsertRecord = (state, record) => ({
+// The read-back speaks the `gh issue view` fields, which name no clock; the
+// caller says what happened to the time-in-phase clock (GH-149): every write
+// but a phase move carries the previous clock over untouched, and a phase
+// move passes the stamped write time (or nothing, for pre-flow).
+const upsertRecord = (state, record, phaseSince) => ({
   ...state,
-  workItems: [...state.workItems.filter((item) => item.id !== record.id), record].sort(
-    byIssueNumber,
-  ),
+  workItems: [
+    ...state.workItems.filter((item) => item.id !== record.id),
+    phaseSince === undefined ? record : { ...record, phaseSince },
+  ].sort(byIssueNumber),
 });
+
+const clockOf = (state, issueId) => state.workItems.find((item) => item.id === issueId)?.phaseSince;
 
 export const applyTriageMove = async ({ issueId, triageState, confirm, state, run, cwd }) => {
   if (triageState === "wontfix" && confirm !== true)
@@ -163,7 +170,7 @@ export const applyTriageMove = async ({ issueId, triageState, confirm, state, ru
       message: `${issueId} moved to ${triageState}.`,
       issueId,
       triageState,
-      state: upsertRecord(state, back.record),
+      state: upsertRecord(state, back.record, clockOf(state, issueId)),
     },
   };
 };
@@ -212,13 +219,16 @@ export const applyPhaseMove = async ({ issueId, phase, state, run, cwd }) => {
   }
   const back = await readBackOrFail(issueId, number, state, run, cwd, "label write");
   if (back.failure) return back.failure;
+  // The move re-stamps the stay: the write time is the new clock. Pre-flow
+  // leaves nothing to clock.
+  const phaseSince = phase === "pre-flow" ? undefined : new Date().toISOString();
   return {
     ok: true,
     result: {
       message: `${issueId} moved to ${phase}.`,
       issueId,
       phase,
-      state: upsertRecord(state, back.record),
+      state: upsertRecord(state, back.record, phaseSince),
     },
   };
 };
@@ -262,7 +272,11 @@ export const applyIssueEdit = async ({ issueId, title, body, confirm, state, run
   if (back.failure) return back.failure;
   return {
     ok: true,
-    result: { message: `${issueId} updated.`, issueId, state: upsertRecord(state, back.record) },
+    result: {
+      message: `${issueId} updated.`,
+      issueId,
+      state: upsertRecord(state, back.record, clockOf(state, issueId)),
+    },
   };
 };
 

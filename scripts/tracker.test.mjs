@@ -35,13 +35,15 @@ const issue = (number, overrides = {}) => ({
 
 // Routes the tracker's read shapes: the open-issue sweep, any label-filtered
 // query (wayfinder:map, the two client labels), per-issue sub_issues lists,
-// targeted single reads, and the open-pull-requests walk.
+// per-issue event histories, targeted single reads, and the open-pull-requests
+// walk.
 const routeFetch = ({
   openPages = [[]],
   labelPages = {},
   maps = [],
   subIssues = {},
   singles = {},
+  events = {},
   pulls = [],
   status = 200,
 }) => {
@@ -60,6 +62,10 @@ const routeFetch = ({
       return jsonResponse(pages[index] ?? [], status);
     }
     if (u.pathname.endsWith("/pulls")) return jsonResponse(pulls, status);
+    if (u.pathname.endsWith("/events")) {
+      const number = u.pathname.match(/\/issues\/(\d+)\/events$/)[1];
+      return jsonResponse(events[number] ?? [], status);
+    }
     if (u.pathname.endsWith("/sub_issues")) {
       const number = u.pathname.match(/\/issues\/(\d+)\/sub_issues$/)[1];
       return jsonResponse(subIssues[number] ?? [], status);
@@ -635,4 +641,267 @@ test("the parsed decision-placement table rides the tracker state", async () => 
   const { decisionPlacement } = await collect({ fetchImpl });
 
   deepStrictEqual(decisionPlacement, DEFAULT_DECISION_PLACEMENT);
+});
+
+// GH-149: the time-in-phase clock. Each phase-labelled, non-decision-ticket
+// record's label-event history clocks it; untouched issues ride the cache at
+// zero events cost; failed or capped reads leave the clock null with a
+// warning, never failing the sync.
+test("phase-labelled work items clock from the label-event history; decision tickets and pre-flow never do", async () => {
+  const { fetchImpl, calls } = routeFetch({
+    openPages: [
+      [
+        issue(7, {
+          labels: [{ name: "workflow:implementing" }],
+          updated_at: "2026-09-10T09:00:00.000Z",
+        }),
+        // A stray phase label on a decision ticket is board-ignored, so it
+        // never earns a clock (or an events read).
+        issue(8, { labels: [{ name: "wayfinder:task" }, { name: "workflow:ticketed" }] }),
+        issue(9, {}),
+      ],
+    ],
+    events: {
+      7: [
+        { event: "commented", created_at: "2026-09-11T09:00:00.000Z" },
+        // Re-entry: the later labeled event is the clock, not the first stay.
+        {
+          event: "labeled",
+          label: { name: "workflow:implementing" },
+          created_at: "2026-09-08T12:00:00.000Z",
+        },
+        {
+          event: "labeled",
+          label: { name: "workflow:ticketed" },
+          created_at: "2026-09-01T09:00:00.000Z",
+        },
+        {
+          event: "labeled",
+          label: { name: "workflow:implementing" },
+          created_at: "2026-09-03T09:00:00.000Z",
+        },
+      ],
+    },
+  });
+
+  const { workItems, warnings } = await collect({ fetchImpl });
+
+  deepStrictEqual(warnings, []);
+  const byId = new Map(workItems.map((item) => [item.id, item]));
+  strictEqual(byId.get("GH-7").phaseSince, "2026-09-08T12:00:00.000Z");
+  strictEqual(byId.get("GH-8").phaseSince, undefined);
+  strictEqual(byId.get("GH-9").phaseSince, undefined);
+  const eventNumbers = calls
+    .filter((call) => call.pathname.endsWith("/events"))
+    .map((call) => call.pathname.match(/\/issues\/(\d+)\/events$/)[1]);
+  deepStrictEqual(eventNumbers, ["7"]);
+});
+
+test("the shipped page's records carry clocks too", async () => {
+  const { fetchImpl } = routeFetch({
+    openPages: [[]],
+    labelPages: {
+      "workflow:shipped": [
+        [issue(55, { state: "closed", labels: [{ name: "workflow:shipped" }] })],
+      ],
+    },
+    events: {
+      55: [
+        {
+          event: "labeled",
+          label: { name: "workflow:shipped" },
+          created_at: "2026-09-02T09:00:00.000Z",
+        },
+      ],
+    },
+  });
+
+  const { recentlyShipped } = await collect({ fetchImpl });
+
+  strictEqual(recentlyShipped[0].phaseSince, "2026-09-02T09:00:00.000Z");
+});
+
+test("an issue untouched since the last sync reuses its clock at zero events cost", async () => {
+  const updatedAt = "2026-09-10T09:00:00.000Z";
+  const { fetchImpl, calls } = routeFetch({
+    openPages: [[issue(7, { labels: [{ name: "workflow:implementing" }], updated_at: updatedAt })]],
+  });
+  const phaseClocks = new Map([["GH-7", { updatedAt, phaseSince: "2026-09-01T09:00:00.000Z" }]]);
+
+  const { workItems, warnings } = await collect({ fetchImpl, phaseClocks });
+
+  deepStrictEqual(warnings, []);
+  strictEqual(workItems[0].phaseSince, "2026-09-01T09:00:00.000Z");
+  strictEqual(
+    calls.some((call) => call.pathname.endsWith("/events")),
+    false,
+  );
+});
+
+test("an issue touched since the last sync re-reads its events", async () => {
+  const { fetchImpl, calls } = routeFetch({
+    openPages: [
+      [
+        issue(7, {
+          labels: [{ name: "workflow:implementing" }],
+          updated_at: "2026-09-11T09:00:00.000Z",
+        }),
+      ],
+    ],
+    events: {
+      7: [
+        {
+          event: "labeled",
+          label: { name: "workflow:implementing" },
+          created_at: "2026-09-09T09:00:00.000Z",
+        },
+      ],
+    },
+  });
+  const phaseClocks = new Map([
+    ["GH-7", { updatedAt: "2026-09-10T09:00:00.000Z", phaseSince: "2026-09-01T09:00:00.000Z" }],
+  ]);
+
+  const { workItems } = await collect({ fetchImpl, phaseClocks });
+
+  strictEqual(workItems[0].phaseSince, "2026-09-09T09:00:00.000Z");
+  strictEqual(
+    calls.some((call) => call.pathname.endsWith("/events")),
+    true,
+  );
+});
+
+test("a failed events read leaves the clock null with a warning; the sync still succeeds", async () => {
+  const fetchImpl = async (url) => {
+    const u = new URL(url);
+    if (u.pathname.endsWith("/events"))
+      return { ok: false, status: 500, json: async () => ({ message: "boom" }) };
+    if (u.searchParams.get("labels") === "wayfinder:map") return jsonResponse([]);
+    if (u.searchParams.get("labels")) return jsonResponse([]);
+    if (u.pathname.endsWith("/pulls")) return jsonResponse([]);
+    return jsonResponse([
+      issue(7, {
+        labels: [{ name: "workflow:implementing" }],
+        updated_at: "2026-09-10T09:00:00.000Z",
+      }),
+    ]);
+  };
+
+  const { workItems, warnings } = await collect({ fetchImpl });
+
+  strictEqual(workItems[0].phaseSince, undefined);
+  match(warnings.join("\n"), /GH-7: events unavailable \(.*\); phase clock not collected/);
+});
+
+test("a failure mid-walk discards the truncated history instead of clocking it", async () => {
+  // Page 1 answers with a full page whose newest event already matches the
+  // phase; page 2 fails. A clock from that prefix could name an older stay,
+  // so the whole read degrades to null.
+  const eventsSeen = [];
+  const fullFirstPage = Array.from({ length: 100 }, () => ({
+    event: "labeled",
+    label: { name: "workflow:implementing" },
+    created_at: "2026-09-09T09:00:00.000Z",
+  }));
+  const fetchImpl = async (url) => {
+    const u = new URL(url);
+    if (u.pathname.endsWith("/events")) {
+      eventsSeen.push(u);
+      if (eventsSeen.length === 1) return jsonResponse(fullFirstPage);
+      return { ok: false, status: 500, json: async () => ({ message: "boom" }) };
+    }
+    if (u.searchParams.get("labels") === "wayfinder:map") return jsonResponse([]);
+    if (u.searchParams.get("labels")) return jsonResponse([]);
+    if (u.pathname.endsWith("/pulls")) return jsonResponse([]);
+    return jsonResponse([
+      issue(7, {
+        labels: [{ name: "workflow:implementing" }],
+        updated_at: "2026-09-10T09:00:00.000Z",
+      }),
+    ]);
+  };
+
+  const { workItems, warnings } = await collect({ fetchImpl });
+
+  strictEqual(eventsSeen.length, 2);
+  strictEqual(workItems[0].phaseSince, undefined);
+  match(warnings.join("\n"), /GH-7: events unavailable \(.*\); phase clock not collected/);
+});
+
+test("an events walk stopped at the page cap leaves the clock null", async () => {
+  const fullPage = Array.from({ length: 100 }, (_, index) => ({
+    event: index === 0 ? "labeled" : "commented",
+    label: { name: "workflow:implementing" },
+    created_at: "2026-09-09T09:00:00.000Z",
+  }));
+  const { fetchImpl, calls } = routeFetch({
+    openPages: [
+      [
+        issue(7, {
+          labels: [{ name: "workflow:implementing" }],
+          updated_at: "2026-09-10T09:00:00.000Z",
+        }),
+      ],
+    ],
+    events: { 7: fullPage },
+  });
+
+  const { workItems, warnings } = await collect({ fetchImpl, maxPages: 1 });
+
+  // Even a matching event in the collected prefix stays unclocked: a capped
+  // read is incomplete history, and incomplete history never poses as truth.
+  strictEqual(workItems[0].phaseSince, undefined);
+  match(warnings.join("\n"), /GH-7: events stopped at the 1-page cap; phase clock not collected/);
+  strictEqual(calls.filter((call) => call.pathname.endsWith("/events")).length, 1);
+});
+
+test("the events walk stops at the read budget; capped clocks warn and the sync succeeds", async () => {
+  const numbers = Array.from({ length: 251 }, (_, index) => index + 1);
+  const events = Object.fromEntries(
+    numbers.map((number) => [
+      String(number),
+      [
+        {
+          event: "labeled",
+          label: { name: "workflow:implementing" },
+          created_at: "2026-09-09T09:00:00.000Z",
+        },
+      ],
+    ]),
+  );
+  const { fetchImpl, calls } = routeFetch({
+    openPages: [
+      numbers.slice(0, 100).map((number) =>
+        issue(number, {
+          labels: [{ name: "workflow:implementing" }],
+          updated_at: "2026-09-10T09:00:00.000Z",
+        }),
+      ),
+      numbers.slice(100, 200).map((number) =>
+        issue(number, {
+          labels: [{ name: "workflow:implementing" }],
+          updated_at: "2026-09-10T09:00:00.000Z",
+        }),
+      ),
+      numbers.slice(200).map((number) =>
+        issue(number, {
+          labels: [{ name: "workflow:implementing" }],
+          updated_at: "2026-09-10T09:00:00.000Z",
+        }),
+      ),
+    ],
+    events,
+  });
+
+  const { workItems, warnings } = await collect({ fetchImpl });
+
+  const eventCalls = calls.filter((call) => call.pathname.endsWith("/events")).length;
+  strictEqual(eventCalls, 250);
+  const byId = new Map(workItems.map((item) => [item.id, item]));
+  strictEqual(byId.get("GH-250").phaseSince, "2026-09-09T09:00:00.000Z");
+  strictEqual(byId.get("GH-251").phaseSince, undefined);
+  match(
+    warnings.join("\n"),
+    /tracker: event reads stopped at the 250 cap; 1 phase clocks not collected/,
+  );
 });

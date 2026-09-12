@@ -187,9 +187,23 @@ const main = async () => {
       })
     : sessionUsageDisabled();
 
+  // Last-good skills data and time-in-phase clocks: the committed generated
+  // snapshot from the previous sync. Skills use it when the upstream catalog
+  // fetch fails (ADR 0006 fail-open chain); the clocks keyed by each issue's
+  // last-updated time let untouched issues ride the next sync at zero events
+  // calls (GH-149).
+  const previous = (await previousGeneratedData()) ?? {};
+  const phaseClocks = new Map(
+    [...(previous.workItems ?? []), ...(previous.recentlyShipped ?? [])].map((item) => [
+      item.id,
+      { updatedAt: item.updatedAt, phaseSince: item.phaseSince },
+    ]),
+  );
+
   const tracker = await collectTrackerState({
     repo,
     vocabularyPath: join(rootDirectory, "docs", "agents", "workflow-labels.md"),
+    phaseClocks,
   });
 
   // ADR 0009: decisions and artifacts collect at sync. The tracker-sourced
@@ -206,7 +220,6 @@ const main = async () => {
   const decisions = sortDecisions([...tracker.decisions, ...adrCollection.decisions]);
   const artifacts = researchCollection.artifacts;
 
-  const previous = (await previousGeneratedData()) ?? { skills: [] };
   const skillsCatalog = await collectSkillsCatalog({
     rootDirectory,
     lastGood: Array.isArray(previous.skills) ? previous.skills : [],
