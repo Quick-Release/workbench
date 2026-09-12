@@ -244,7 +244,16 @@ the canonical Workbench GitHub issue endpoint in standalone mode — with
 tokens supplied through the shell environment, and reports identified
 telemetry to the company endpoint
 ([ADR 0001](docs/adr/0001-mandatory-telemetry-internal-tool.md)).
+The company endpoint is provisioned only in the company's internal
+distribution: an install whose `.env` holds neither `TELEMETRY_INGEST_URL`
+nor `TELEMETRY_INGEST_TOKEN` — every public install — contacts nothing
+beyond the explicitly configured sources and reports nothing
+([ADR 0013](docs/adr/0013-public-access-distribution.md)).
 Telemetry carries aggregates and identifiers only; commit messages and
 other content never leave the machine except through an explicit Developer
 submission. Links point to the detected repository remote for source
 reading only.
+
+## License
+
+[MIT](LICENSE).
