@@ -6,6 +6,7 @@ import {
   fetchBlockedBy,
   fetchIssue,
   fetchIssueComments,
+  fetchIssuesByLabel,
   fetchMapIssues,
   fetchOpenIssues,
   fetchSubIssues,
@@ -14,7 +15,12 @@ import { CLIENT_TICKET_LABELS, collectClientTickets } from "./client-tickets.mjs
 import { lineEdgesForBody, mergeBlockerEdges } from "./edges.mjs";
 import { resolutionDecisionFromIssue, sortDecisions, specDecisionFromIssue } from "./decisions.mjs";
 import { fetchOpenPullRequests } from "./pulls.mjs";
-import { deriveWorkItem, loadDecisionPlacement, loadWorkflowVocabulary } from "./labels.mjs";
+import {
+  DEFAULT_DECISION_PLACEMENT,
+  deriveWorkItem,
+  loadDecisionPlacement,
+  loadWorkflowVocabulary,
+} from "./labels.mjs";
 
 const execFileAsync = promisify(execFile);
 
@@ -70,6 +76,10 @@ export const collectTrackerState = async ({
     blockerEdges: [],
     decisions: [],
     pullRequests: [],
+    // Ticket #146: the board's shipped page (never collected here) and the
+    // canonical placement table (the doc home was never read).
+    recentlyShipped: [],
+    decisionPlacement: DEFAULT_DECISION_PLACEMENT,
     clientCoverage: {
       labels: CLIENT_TICKET_LABELS,
       checkedAt: new Date().toISOString(),
@@ -105,6 +115,8 @@ export const collectTrackerState = async ({
   }
   // Validation-only until the board consumes the placement: every sync keeps
   // the doc home honest, dropping malformed rows into the warnings channel.
+  // The parsed table also rides the snapshot — the board reads the doc home
+  // through it instead of hardcoding a second copy (ticket #146).
   const placement = await loadDecisionPlacement(vocabularyPath);
   warnings.push(...placement.warnings);
   const sweep = await fetchOpenIssues({ repo, token, apiBase, fetchImpl, maxPages });
@@ -312,14 +324,46 @@ export const collectTrackerState = async ({
     return bundle ? [bundle] : [];
   });
 
-  const byNumberAsc = (left, right) => Number(left.id.slice(3)) - Number(right.id.slice(3));
-  workItems.sort(byNumberAsc);
+  // Ticket #146: the shipped column's bounded page — closed issues wearing
+  // the shipped label, one page most-recently-updated-first, never a
+  // closed-history sweep. Ids the sweep, maps, client pass, and targeted
+  // reads already hold stay out; the board merges this page with its work
+  // items, so nothing renders twice and closed pages still satisfy gates.
+  const shippedLabel =
+    phaseVocabulary.find((entry) => entry.phase === "shipped")?.label ?? "workflow:shipped";
+  const shippedPage = await fetchIssuesByLabel({
+    repo,
+    token,
+    apiBase,
+    fetchImpl,
+    label: shippedLabel,
+    state: "closed",
+    sort: "updated",
+    direction: "desc",
+    maxPages: 1,
+  });
+  warnings.push(...shippedPage.warnings);
+  const recentlyShipped = [];
+  for (const shipped of shippedPage.issues) {
+    if (recordsById.has(`GH-${shipped.number}`)) continue;
+    const { record, warnings: itemWarnings } = deriveWorkItem(shipped, phaseVocabulary);
+    recentlyShipped.push(record);
+    recordsById.set(record.id, record);
+    warnings.push(...itemWarnings);
+  }
+  const byNumber = (left, right) => Number(left.id.slice(3)) - Number(right.id.slice(3));
+  const byNumberDesc = (left, right) => byNumber(right, left);
+  recentlyShipped.sort(byNumberDesc);
+
+  workItems.sort(byNumber);
   return {
     workItems,
     maps,
     blockerEdges: merged.edges,
     decisions: sortDecisions([...resolutions, ...specBundles]),
     pullRequests: [...openPulls.pulls].sort((left, right) => left.number - right.number),
+    recentlyShipped,
+    decisionPlacement: placement.placement,
     clientCoverage,
     warnings,
   };

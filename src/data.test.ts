@@ -625,6 +625,29 @@ describe("workflow seam payload boundary", () => {
     const drifted: unknown = { ...payload, meta: headless };
     expect(() => parseWorkflowStatePayload(drifted)).toThrow(/snapshot/);
   });
+
+  it("accepts the board's shipped page and placement table when the snapshot carries them", () => {
+    const withBoard = {
+      ...payload,
+      recentlyShipped: [{ ...workItem, id: "GH-65", state: "closed", phase: "shipped" }],
+      decisionPlacement: [{ kind: "research", openColumn: "grilling", closedColumn: "shipped" }],
+    };
+    expect(parseWorkflowStatePayload(withBoard)).toEqual(withBoard);
+  });
+
+  it("accepts a payload without the board keys — an older snapshot serializes without them", () => {
+    const parsed = parseWorkflowStatePayload(payload);
+    expect(parsed).not.toHaveProperty("recentlyShipped");
+    expect(parsed).not.toHaveProperty("decisionPlacement");
+  });
+
+  it("rejects a placement row whose column is not a canonical phase", () => {
+    const drifted: unknown = {
+      ...payload,
+      decisionPlacement: [{ kind: "task", openColumn: "shelved", closedColumn: "shipped" }],
+    };
+    expect(() => parseWorkflowStatePayload(drifted)).toThrow(/openColumn/);
+  });
 });
 
 describe("triage move request boundary", () => {

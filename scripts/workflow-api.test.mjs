@@ -170,6 +170,21 @@ test("loadWorkflowState projects the freshness stamp and warnings channel", asyn
   });
 });
 
+test("loadWorkflowState projects the shipped page and the placement table (#146)", async () => {
+  const directory = await withSnapshot({
+    ...snapshot([workItem(7)]),
+    recentlyShipped: [workItem(65, "unlabeled", { state: "closed", phase: "shipped" })],
+    decisionPlacement: [{ kind: "research", openColumn: "grilling", closedColumn: "shipped" }],
+  });
+  const state = await loadWorkflowState(directory);
+  deepStrictEqual(state.recentlyShipped, [
+    workItem(65, "unlabeled", { state: "closed", phase: "shipped" }),
+  ]);
+  deepStrictEqual(state.decisionPlacement, [
+    { kind: "research", openColumn: "grilling", closedColumn: "shipped" },
+  ]);
+});
+
 test("the read endpoint serves the freshness stamp and warnings channel", async () => {
   const syncedAt = "2026-09-11T09:30:00.000Z";
   const directory = await withFreshSnapshot(snapshot([workItem(7, "needs-triage")]), syncedAt, [

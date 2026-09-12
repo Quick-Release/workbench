@@ -92,6 +92,21 @@ export const wayfinderKinds = ["map", "research", "prototype", "grilling", "task
 
 export type WayfinderKind = (typeof wayfinderKinds)[number];
 
+// Where a decision ticket sits on the flow board, open vs closed — the row
+// grammar of docs/agents/workflow-labels.md's "Board placement" table,
+// parsed at sync (scripts/tracker/labels.mjs) so the doc home stays the one
+// truth the board reads. Placement is derived, never a phase of its own;
+// the map kind cannot appear here (a map carries phase like any work item).
+export const decisionTicketKinds = wayfinderKinds.filter((kind) => kind !== "map");
+
+export type DecisionTicketKind = (typeof decisionTicketKinds)[number];
+
+export type DecisionPlacementRow = {
+  kind: DecisionTicketKind;
+  openColumn: WorkflowPhase;
+  closedColumn: WorkflowPhase;
+};
+
 export const trackerCategories = ["bug", "enhancement"] as const;
 
 export type TrackerCategory = (typeof trackerCategories)[number];
@@ -209,6 +224,13 @@ export type WorkflowStatePayload = {
   // GH-145: the sync warnings channel, live reads only — the bundled static
   // snapshot serializes without the key instead of an empty array.
   warnings?: readonly string[];
+  // Ticket #146 (the read-only board): the bounded recently-shipped page and
+  // the parsed decision-ticket placement table. Both ride only when the
+  // snapshot carries them — an older snapshot serializes without the keys,
+  // and the board falls back to the work items it holds and the canonical
+  // table.
+  recentlyShipped?: readonly WorkItemRecord[];
+  decisionPlacement?: readonly DecisionPlacementRow[];
   clientCoverage?: ClientTicketCoverage;
 };
 
@@ -469,6 +491,12 @@ export type OverviewData = {
   blockerEdges: readonly BlockerEdgeRecord[];
   decisions: readonly DecisionRecord[];
   artifacts: readonly ArtifactRecord[];
+  // Ticket #146: the shipped column's bounded page (closed issues wearing
+  // `workflow:shipped`, newest first) and the parsed board-placement table.
+  // Optional the same way the freshness stamp is — older snapshots serialize
+  // without the keys instead of failing decode.
+  recentlyShipped?: readonly WorkItemRecord[];
+  decisionPlacement?: readonly DecisionPlacementRow[];
   pullRequests: readonly PullRequestRecord[];
   skills: readonly SkillRecord[];
   skillInstalls: readonly string[];

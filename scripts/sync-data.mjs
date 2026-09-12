@@ -291,6 +291,10 @@ const main = async () => {
     },
     workItems: tracker.workItems,
     maps: tracker.maps,
+    // Ticket #146: the board's shipped page and the parsed decision-ticket
+    // placement table, collected at sync so the board reads one truth.
+    recentlyShipped: tracker.recentlyShipped,
+    decisionPlacement: tracker.decisionPlacement,
     blockerEdges: blockerEdges.edges,
     decisions,
     artifacts,

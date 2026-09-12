@@ -1,6 +1,7 @@
 import { Link, linkOptions, useRouterState } from "@tanstack/react-router";
 import {
   Activity,
+  Columns3,
   GitBranch,
   GitPullRequest,
   Inbox,
@@ -43,6 +44,7 @@ const flowLink = linkOptions({
   to: "/flow",
   search: { favorites: false, skill: "" },
 });
+const boardLink = linkOptions({ to: "/board", search: {} });
 const triageLink = linkOptions({ to: "/triage", search: {} });
 const blockersLink = linkOptions({ to: "/blockers", search: {} });
 const inFlightLink = linkOptions({ to: "/in-flight" });
@@ -55,6 +57,7 @@ type NavItem = { title: string; icon: typeof ReceiptText } & (
   | typeof overviewLink
   | typeof clientTicketsLink
   | typeof flowLink
+  | typeof boardLink
   | typeof sessionsLink
   | typeof toolsLink
   | typeof triageLink
@@ -76,6 +79,9 @@ const overviewItems: NavItem[] = [
 
 const workflowItems: NavItem[] = [
   { title: "Skill flow", icon: GitBranch, ...flowLink },
+  // The flow board (ticket #146) sits beside the skill-catalog graph — the
+  // workflow group's two flow views.
+  { title: "Board", icon: Columns3, ...boardLink },
   { title: "Triage", icon: Inbox, ...triageLink },
   { title: "Blockers", icon: Waypoints, ...blockersLink },
   { title: "In flight", icon: Rocket, ...inFlightLink },

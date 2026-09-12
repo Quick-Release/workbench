@@ -559,3 +559,80 @@ test("targeted-read caps warn per map and membership stays complete", async () =
     /GH-100: targeted reads stopped at the 250 cap; 1 member records not collected/,
   );
 });
+
+test("the shipped page is a bounded newest-first label query, deduped against held records", async () => {
+  const { fetchImpl, calls } = routeFetch({
+    openPages: [[issue(54, { labels: [{ name: "workflow:ticketed" }] })]],
+    labelPages: {
+      "workflow:shipped": [
+        [
+          issue(55, { state: "closed", labels: [{ name: "workflow:shipped" }] }),
+          issue(65, { state: "closed", labels: [{ name: "workflow:shipped" }] }),
+          // Already held by the open sweep: the board merges, never duplicates.
+          issue(54, { state: "closed", labels: [{ name: "workflow:shipped" }] }),
+        ],
+      ],
+    },
+  });
+
+  const { recentlyShipped, warnings } = await collect({ fetchImpl });
+
+  deepStrictEqual(warnings, []);
+  deepStrictEqual(
+    recentlyShipped.map((item) => item.id),
+    ["GH-65", "GH-55"],
+  );
+  deepStrictEqual(
+    recentlyShipped.map((item) => item.phase),
+    ["shipped", "shipped"],
+  );
+  const shippedCall = calls.find((call) => call.searchParams.get("labels") === "workflow:shipped");
+  ok(shippedCall);
+  strictEqual(shippedCall.searchParams.get("state"), "closed");
+  strictEqual(shippedCall.searchParams.get("sort"), "updated");
+  strictEqual(shippedCall.searchParams.get("direction"), "desc");
+  strictEqual(shippedCall.searchParams.get("per_page"), "100");
+  strictEqual(shippedCall.searchParams.get("page"), "1");
+});
+
+test("the shipped page stops at one page with a truncation warning", async () => {
+  const fullPage = Array.from({ length: 100 }, (_, index) =>
+    issue(2000 + index, { state: "closed", labels: [{ name: "workflow:shipped" }] }),
+  );
+  const { fetchImpl } = routeFetch({
+    openPages: [[]],
+    labelPages: { "workflow:shipped": [fullPage] },
+  });
+
+  const { recentlyShipped, warnings } = await collect({ fetchImpl, maxPages: 1 });
+
+  strictEqual(recentlyShipped.length, 100);
+  match(warnings.join("\n"), /closed "workflow:shipped" issues stopped at the 1-page cap/);
+});
+
+test("a failed shipped read degrades to an empty page with a warning, never a failed sync", async () => {
+  const calls = [];
+  const fetchImpl = async (url) => {
+    const u = new URL(url);
+    calls.push(u);
+    if (u.searchParams.get("labels") === "workflow:shipped")
+      return { ok: false, status: 500, json: async () => ({ message: "boom" }) };
+    if (u.searchParams.get("labels") === "wayfinder:map") return jsonResponse([]);
+    if (u.searchParams.get("labels")) return jsonResponse([]);
+    if (u.pathname.endsWith("/pulls")) return jsonResponse([]);
+    return jsonResponse([]);
+  };
+
+  const { recentlyShipped, warnings } = await collect({ fetchImpl });
+
+  deepStrictEqual(recentlyShipped, []);
+  match(warnings.join("\n"), /closed "workflow:shipped" issues unavailable/);
+});
+
+test("the parsed decision-placement table rides the tracker state", async () => {
+  const { fetchImpl } = routeFetch({ openPages: [[]] });
+
+  const { decisionPlacement } = await collect({ fetchImpl });
+
+  deepStrictEqual(decisionPlacement, DEFAULT_DECISION_PLACEMENT);
+});
