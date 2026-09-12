@@ -2,21 +2,25 @@ import { Columns3, Eye } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { PhaseMoveSelect } from "@/components/PhaseMoveSelect";
 import type { BoardCard, BoardColumnView } from "@/lib/board";
+import type { PhaseMoveTarget } from "@/types";
 
-// The flow board's surface (ticket #146, the read-only board): one column
-// per pre-flow phase slot, cards placed by the board derivation. Read-only
-// by design — phase moves arrive with their own action ticket — and every
-// card opens the shared issue detail panel through the route's `?issue`
-// param, exactly like triage.
+// The flow board's surface (ticket #146, the read-only board; ticket #148,
+// the moves): one column per pre-flow phase slot, cards placed by the board
+// derivation. Every card carries the phase-move select and opens the shared
+// issue detail panel through the route's `?issue` param, exactly like triage.
 
 type BoardCardProps = {
   card: BoardCard;
+  mode: "live" | "static";
+  pending: boolean;
+  onMovePhase: (issueId: string, phase: PhaseMoveTarget) => void;
   onOpenIssue: (issueId: string) => void;
 };
 
-function BoardCardView({ card, onOpenIssue }: BoardCardProps) {
-  const { record, chips, caveats, warnings } = card;
+function BoardCardView({ card, mode, pending, onMovePhase, onOpenIssue }: BoardCardProps) {
+  const { record, column, chips, caveats, warnings } = card;
   return (
     <article
       data-slot="board-card"
@@ -81,16 +85,26 @@ function BoardCardView({ card, onOpenIssue }: BoardCardProps) {
           {warning}
         </p>
       ))}
+      <PhaseMoveSelect
+        record={record}
+        current={column}
+        mode={mode}
+        pending={pending}
+        onMove={(phase) => onMovePhase(record.id, phase)}
+      />
     </article>
   );
 }
 
 type BoardColumnProps = {
   column: BoardColumnView;
+  mode: "live" | "static";
+  pendingId: string | null;
+  onMovePhase: (issueId: string, phase: PhaseMoveTarget) => void;
   onOpenIssue: (issueId: string) => void;
 };
 
-function BoardColumnView({ column, onOpenIssue }: BoardColumnProps) {
+function BoardColumnView({ column, mode, pendingId, onMovePhase, onOpenIssue }: BoardColumnProps) {
   return (
     <section
       data-slot="board-column"
@@ -103,7 +117,14 @@ function BoardColumnView({ column, onOpenIssue }: BoardColumnProps) {
       </header>
       {column.cards.length > 0 ? (
         column.cards.map((card) => (
-          <BoardCardView key={card.record.id} card={card} onOpenIssue={onOpenIssue} />
+          <BoardCardView
+            key={card.record.id}
+            card={card}
+            mode={mode}
+            pending={pendingId === card.record.id}
+            onMovePhase={onMovePhase}
+            onOpenIssue={onOpenIssue}
+          />
         ))
       ) : (
         <p data-slot="board-empty" className="text-xs text-muted-foreground">
@@ -117,11 +138,24 @@ function BoardColumnView({ column, onOpenIssue }: BoardColumnProps) {
 export type BoardPageProps = {
   columns: readonly BoardColumnView[];
   deferredLens: boolean;
+  mode: "live" | "static";
+  pendingId: string | null;
+  message: string | null;
   onLensChange: (deferred: boolean) => void;
   onOpenIssue: (issueId: string) => void;
+  onMovePhase: (issueId: string, phase: PhaseMoveTarget) => void;
 };
 
-export function BoardPage({ columns, deferredLens, onLensChange, onOpenIssue }: BoardPageProps) {
+export function BoardPage({
+  columns,
+  deferredLens,
+  mode,
+  pendingId,
+  message,
+  onLensChange,
+  onOpenIssue,
+  onMovePhase,
+}: BoardPageProps) {
   const cardCount = columns.reduce((count, column) => count + column.cards.length, 0);
   return (
     <div className="flex flex-col gap-6 p-6">
@@ -142,12 +176,21 @@ export function BoardPage({ columns, deferredLens, onLensChange, onOpenIssue }: 
       </div>
       <p className="max-w-2xl text-sm text-muted-foreground">
         Where work sits on the skill flow: every item places by its resolved phase, decision tickets
-        by the parsed placement table. Read-only for now — phase moves land with their own action.
+        by the parsed placement table. A move fires directly and wears exactly the target phase —
+        GitHub history is the audit log.
       </p>
+      {message && <p className="text-xs text-muted-foreground">{message}</p>}
       {cardCount === 0 && <p className="text-sm text-muted-foreground">Nothing on the board.</p>}
       <div className="flex gap-4 overflow-x-auto pb-4">
         {columns.map((column) => (
-          <BoardColumnView key={column.key} column={column} onOpenIssue={onOpenIssue} />
+          <BoardColumnView
+            key={column.key}
+            column={column}
+            mode={mode}
+            pendingId={pendingId}
+            onMovePhase={onMovePhase}
+            onOpenIssue={onOpenIssue}
+          />
         ))}
       </div>
     </div>

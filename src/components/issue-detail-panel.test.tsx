@@ -199,6 +199,35 @@ describe("static builds degrade the actions to copy-the-command", () => {
   });
 });
 
+describe("the panel's phase move (ticket #148)", () => {
+  it("offers the move select firing directly, without a confirm beat", () => {
+    const html = renderPanel({ issueId: "GH-7" });
+    expect(html).toContain("Phase move");
+    expect(html).toContain('aria-label="Move GH-7"');
+    expect(html).toContain('<option value="pre-flow"');
+    expect(html).not.toContain('<option value="implementing"');
+  });
+
+  it("marks the running move pending", () => {
+    const html = renderPanel({ issueId: "GH-7", pending: "phase-move" });
+    expect(html).toContain("Moving");
+    expect(html).not.toContain('aria-label="Move GH-7"');
+  });
+
+  it("degrades the move to the command composer in static mode", () => {
+    const html = renderPanel({ issueId: "GH-7", mode: "static" });
+    expect(html).toContain('aria-label="Compose a move command for GH-7"');
+    expect(html).not.toContain('aria-label="Move GH-7"');
+  });
+
+  it("offers no phase move on a decision ticket", () => {
+    const html = renderPanel({ issueId: "GH-42" });
+    expect(html).not.toContain('aria-label="Move GH-42"');
+    expect(html).not.toContain('aria-label="Compose a move command for GH-42"');
+    expect(html).toContain("place by the placement table");
+  });
+});
+
 describe("create mode and unknown references", () => {
   it("renders the create form for ?issue=new", () => {
     const html = renderPanel({ issueId: "new" });

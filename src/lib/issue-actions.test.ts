@@ -27,6 +27,16 @@ describe("the panel action wire grammar", () => {
         "edge/remove",
         { blockedId: "GH-66", blockerId: "GH-64", confirm: true },
       ],
+      [
+        { kind: "phase-move", issueId: "GH-8", phase: "reviewing" },
+        "phase",
+        { issueId: "GH-8", phase: "reviewing" },
+      ],
+      [
+        { kind: "phase-move", issueId: "GH-8", phase: "pre-flow" },
+        "phase",
+        { issueId: "GH-8", phase: "pre-flow" },
+      ],
     ];
     for (const [action, route, body] of cases) {
       expect(issueActionRoute(action)).toBe(route);
@@ -59,5 +69,26 @@ describe("the panel action wire grammar", () => {
     expect(() => parseIssueActionResult("edge-remove", { message: "nope", undo: true })).toThrow(
       /undo|blockerId|blockedId|state|message/,
     );
+    expect(
+      parseIssueActionResult("phase-move", {
+        message: "GH-8 moved to reviewing.",
+        issueId: "GH-8",
+        phase: "reviewing",
+        state,
+      }),
+    ).toEqual({
+      message: "GH-8 moved to reviewing.",
+      issueId: "GH-8",
+      phase: "reviewing",
+      state,
+    });
+    expect(() =>
+      parseIssueActionResult("phase-move", {
+        message: "nope",
+        issueId: "GH-8",
+        phase: "archived",
+        state,
+      }),
+    ).toThrow(/phase/);
   });
 });

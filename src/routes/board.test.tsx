@@ -66,6 +66,11 @@ describe("the /board route", () => {
     expect(html).not.toContain("issue-detail-panel");
   });
 
+  it("offers the phase move select on the cards it renders", async () => {
+    const html = withoutComments(await renderBoardAt({ href: "/board" }));
+    expect(html).toContain('aria-label="Move GH-8"');
+  });
+
   it("opens the shared issue detail panel from the ?issue param", async () => {
     const html = withoutComments(await renderBoardAt({ to: "/board", search: { issue: "8" } }));
     expect(html).toContain('data-slot="issue-detail-panel"');

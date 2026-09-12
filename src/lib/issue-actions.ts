@@ -4,6 +4,7 @@ import {
   parseIssueCommentResult,
   parseIssueCreateResult,
   parseIssueEditResult,
+  parsePhaseMoveResult,
 } from "../schema";
 
 // The shared panel's wire grammar (tickets #60/#61): each action names its
@@ -25,6 +26,8 @@ export const issueActionRoute = (action: IssuePanelAction): string => {
       return "edge/add";
     case "edge-remove":
       return "edge/remove";
+    case "phase-move":
+      return "phase";
   }
 };
 
@@ -49,6 +52,8 @@ export const issueActionBody = (action: IssuePanelAction): Record<string, unknow
         blockerId: action.blockerId,
         confirm: action.confirm,
       };
+    case "phase-move":
+      return { issueId: action.issueId, phase: action.phase };
   }
 };
 
@@ -63,5 +68,7 @@ export const parseIssueActionResult = (kind: IssuePanelAction["kind"], raw: unkn
     case "edge-add":
     case "edge-remove":
       return parseEdgeWriteResult(raw);
+    case "phase-move":
+      return parsePhaseMoveResult(raw);
   }
 };

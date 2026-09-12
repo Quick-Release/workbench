@@ -45,8 +45,12 @@ const renderPage = (
     <BoardPage
       columns={columns}
       deferredLens={false}
+      mode="live"
+      pendingId={null}
+      message={null}
       onLensChange={() => {}}
       onOpenIssue={() => {}}
+      onMovePhase={() => {}}
       {...overrides}
     />,
   );
@@ -149,5 +153,35 @@ describe("the board page", () => {
     const columns = columnsOf({ workItems: [] });
     const html = withoutComments(renderPage(columns));
     expect(html.match(/data-slot="board-empty"/g)?.length).toBe(8);
+  });
+
+  it("offers a move select on the card, excluding its current column", () => {
+    const columns = columnsOf({ workItems: [item(8, { phase: "implementing" })] });
+    const html = withoutComments(renderPage(columns));
+    expect(html).toContain('aria-label="Move GH-8"');
+    expect(html).toContain('<option value="pre-flow"');
+    expect(html).toContain('<option value="reviewing"');
+    expect(html).not.toContain('<option value="implementing"');
+  });
+
+  it("degrades the card's move to the command composer in static mode", () => {
+    const columns = columnsOf({ workItems: [item(8, { phase: "implementing" })] });
+    const html = withoutComments(renderPage(columns, { mode: "static" }));
+    expect(html).toContain('aria-label="Compose a move command for GH-8"');
+    expect(html).not.toContain('aria-label="Move GH-8"');
+  });
+
+  it("marks the card whose move is in flight", () => {
+    const columns = columnsOf({ workItems: [item(8, { phase: "implementing" })] });
+    const html = withoutComments(renderPage(columns, { pendingId: "GH-8" }));
+    expect(html).toContain("Moving");
+    expect(html).not.toContain('aria-label="Move GH-8"');
+  });
+
+  it("offers no phase move on a decision ticket — placement is the table's, not labels'", () => {
+    const columns = columnsOf({ workItems: [item(70, { kind: "task" })] });
+    const html = withoutComments(renderPage(columns));
+    expect(html).not.toContain('aria-label="Move GH-70"');
+    expect(html).toContain("place by the placement table");
   });
 });

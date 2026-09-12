@@ -4,7 +4,7 @@ import type {
   TrackerMapRecord,
   WorkItemRecord,
 } from "../types";
-import { workflowPhases } from "../types";
+import { phaseMoveTargets } from "../types";
 import { deriveDisplayState, type DisplayCaveat } from "./display-state";
 import { frontier, frontierItemFromWorkItem, indexWorkItems, openBlockers } from "./frontier";
 import { byIssueNumber } from "./work-item-id";
@@ -16,7 +16,9 @@ import { byIssueNumber } from "./work-item-id";
 
 // Pre-flow is the board's fallback column, never a phase: a work item with
 // no `workflow:` label has not been touched by a flow skill yet (ADR 0007).
-export const boardColumns = ["pre-flow", ...workflowPhases] as const;
+// The columns are the phase-move targets' vocabulary (ticket #148): a move
+// speaks the columns it lands between.
+export const boardColumns = phaseMoveTargets;
 
 export type BoardColumn = (typeof boardColumns)[number];
 
