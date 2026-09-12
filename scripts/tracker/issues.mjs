@@ -8,7 +8,9 @@ export const PER_PAGE = 100;
 export const GITHUB_API = "https://api.github.com";
 const API_VERSION = "2022-11-28";
 
-const issuesUrl = (apiBase, repo, path = "", params = {}) => {
+// The issues-list URL builder, shared with the auto-sync probe so the probe
+// asks GitHub with the exact request the sync sweep's first page makes.
+export const issuesUrl = (apiBase, repo, path = "", params = {}) => {
   const url = new URL(`${apiBase}/repos/${repo}/issues${path}`);
   for (const [key, value] of Object.entries(params)) url.searchParams.set(key, String(value));
   return url;

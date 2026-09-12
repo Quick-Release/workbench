@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { deepStrictEqual, ok, rejects, strictEqual } from "node:assert";
 import test from "node:test";
 
-import { handleWorkflowApi, loadWorkflowState } from "./workflow-api.mjs";
+import { handleWorkflowApi, loadWorkflowState, workflowApiPlugin } from "./workflow-api.mjs";
 
 const HOST_ROOT = "/tmp/host-repo";
 const REPO = "Quick-Release/workbench";
@@ -185,6 +185,54 @@ test("the read endpoint serves the freshness stamp and warnings channel", async 
   deepStrictEqual(handled.json.warnings, [
     'GH-7: multiple triage labels "needs-triage", "ready-for-agent"; used "needs-triage"',
   ]);
+});
+
+test("a seam read notes browser presence for the auto-sync leg", async () => {
+  const directory = await withSnapshot(snapshot([workItem(7)]));
+  const reads = [];
+  const note = (pathname) => reads.push(pathname);
+
+  await handleWorkflowApi({
+    method: "GET",
+    pathname: "/api/workflow",
+    appDirectory: directory,
+    onSeamRead: note,
+  });
+  deepStrictEqual(reads, ["/api/workflow"]);
+
+  await handleWorkflowApi({
+    method: "GET",
+    pathname: "/api/nothing-here",
+    appDirectory: directory,
+    onSeamRead: note,
+  });
+  strictEqual(reads.length, 1, "an unowned route is not a seam read");
+});
+
+test("the sync trigger itself is not a presence read", async () => {
+  const directory = await withSnapshot(snapshot([workItem(7)]));
+  const reads = [];
+  const handled = await handleWorkflowApi({
+    method: "POST",
+    pathname: "/api/workflow/sync",
+    body: "{}",
+    appDirectory: directory,
+    hostRoot: HOST_ROOT,
+    run: async () => ({ stdout: "Synced.\n" }),
+    onSeamRead: (pathname) => reads.push(pathname),
+  });
+  strictEqual(handled.status, 200);
+  strictEqual(reads.length, 0, "presence rides the polling GET, not the sync POST");
+});
+
+test("the dev-server plugin keeps the generated snapshot out of the watcher", () => {
+  const plugin = workflowApiPlugin();
+  const fragment = plugin.config({}, { command: "serve", mode: "development" });
+  const ignored = fragment?.server?.watch?.ignored ?? [];
+  ok(
+    ignored.some((pattern) => pattern.includes("data.generated")),
+    `the watcher ignore list must name the generated snapshot: ${JSON.stringify(ignored)}`,
+  );
 });
 
 test("the sync trigger returns the re-read state with its freshness stamp", async () => {
