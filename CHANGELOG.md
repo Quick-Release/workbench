@@ -1,5 +1,11 @@
 # @quick-release/workbench
 
+## 0.13.1
+
+### Patch Changes
+
+- d3be217: Prepare public access: ADR 0013 records the two distribution postures (company reporting dormant unless provisioned), the MIT license lands, and the docs drop the org-only boundary language.
+
 ## 0.13.0
 
 ### Minor Changes
