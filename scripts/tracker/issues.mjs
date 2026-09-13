@@ -186,6 +186,8 @@ export const fetchIssueComments = async ({
 }) => {
   const comments = [];
   const warnings = [];
+  let capped = false;
+  let failed = false;
   for (let page = 1, hasMore = true; hasMore && page <= maxPages; page += 1) {
     let payload;
     try {
@@ -196,12 +198,13 @@ export const fetchIssueComments = async ({
         "tracker",
       );
     } catch (error) {
+      failed = true;
       warnings.push(
         comments.length === 0
           ? `GH-${issueNumber} comments unavailable (${error instanceof Error ? error.message : "read failed"}); no resolution collected`
-          : `GH-${issueNumber} comments unavailable (${error instanceof Error ? error.message : "read failed"}); collected the first ${comments.length}`,
+          : `GH-${issueNumber} comments unavailable (${error instanceof Error ? error.message : "read failed"}); collected the first ${comments.length}; resolution not collected`,
       );
-      return { comments, warnings };
+      return { comments, warnings, capped, failed };
     }
     const entries = Array.isArray(payload) ? payload : [];
     const returned = entries.filter(
@@ -212,12 +215,14 @@ export const fetchIssueComments = async ({
     // on a full page must not stop the walk (GH-136).
     hasMore = entries.length === PER_PAGE;
     if (!hasMore) break;
-    if (page === maxPages)
+    if (page === maxPages) {
+      capped = true;
       warnings.push(
-        `GH-${issueNumber} comments stopped at the ${maxPages}-page cap; showing the first ${comments.length}`,
+        `GH-${issueNumber} comments stopped at the ${maxPages}-page cap; showing the first ${comments.length}; resolution not collected`,
       );
+    }
   }
-  return { comments, warnings };
+  return { comments, warnings, capped, failed };
 };
 
 export const apiBaseFrom = (apiBaseUrl) => (httpUrl(apiBaseUrl) || GITHUB_API).replace(/\/+$/, "");

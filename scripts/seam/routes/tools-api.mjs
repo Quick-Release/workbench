@@ -3,6 +3,9 @@ import { readFile, stat, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
 
+import { guardedApi, methodMismatch, sendJson } from "../middleware/api-shared.mjs";
+import { gateRejection } from "../middleware/request-gate.mjs";
+
 const execFileAsync = promisify(execFile);
 
 // The workbench always runs through the Vite dev server (`pnpm dev` / the
@@ -68,45 +71,79 @@ const setups = {
   },
 };
 
-export const toolsApiPlugin = () => ({
+const runToolSetup = async (rootDirectory, id) => setups[id](rootDirectory);
+
+const TOOL_STATUS_ROUTE = /^\/api\/tools\/?$/;
+const TOOL_SETUP_ROUTE = /^\/api\/tools\/([\w-]+)\/setup$/;
+
+export const isToolsApiRoute = (pathname) =>
+  TOOL_STATUS_ROUTE.test(pathname) || TOOL_SETUP_ROUTE.test(pathname);
+
+const errorMessage = (error, fallback) =>
+  String(error?.stderr ?? error?.message ?? error ?? fallback);
+
+// The tools execution seam is kept pure at the HTTP boundary: host-repo
+// status and side effects are injected, while the shared gate and response
+// contract remain exercised by route tests.
+export const handleToolsApi = async ({
+  method,
+  pathname,
+  host,
+  origin,
+  rootDirectory,
+  getStatus = toolsStatus,
+  setupTool = runToolSetup,
+}) => {
+  if (!isToolsApiRoute(pathname)) return null;
+
+  const gate = gateRejection({ host, origin });
+  if (gate) return gate;
+
+  if (TOOL_STATUS_ROUTE.test(pathname)) {
+    if (method !== "GET") return methodMismatch("GET");
+    try {
+      return { status: 200, json: await getStatus(rootDirectory) };
+    } catch (error) {
+      return { status: 500, json: { message: errorMessage(error, "Unable to read tool status.") } };
+    }
+  }
+
+  if (method !== "POST") return methodMismatch("POST");
+
+  const id = TOOL_SETUP_ROUTE.exec(pathname)?.[1];
+  if (!id || !Object.hasOwn(setups, id))
+    return { status: 404, json: { message: `Unknown tool: ${id}` } };
+
+  try {
+    const message = await setupTool(rootDirectory, id);
+    return {
+      status: 200,
+      json: { message, ...(await getStatus(rootDirectory)) },
+    };
+  } catch (error) {
+    return { status: 500, json: { message: errorMessage(error, "Setup failed.") } };
+  }
+};
+
+export const toolsApiPlugin = ({ getStatus = toolsStatus, setupTool = runToolSetup } = {}) => ({
   name: "workbench-tools-api",
   configureServer(server) {
-    server.middlewares.use(async (request, response, next) => {
-      const rootDirectory = resolve(process.env.WORKBENCH_SOURCE_ROOT || server.config.root);
-      const url = new URL(request.url, "http://localhost");
-      const statusMatch = url.pathname.match(/^\/api\/tools\/?$/);
-      const setupMatch = url.pathname.match(/^\/api\/tools\/([\w-]+)\/setup$/);
-
-      if (request.method === "GET" && statusMatch) {
-        response.statusCode = 200;
-        response.setHeader("content-type", "application/json");
-        response.end(JSON.stringify(await toolsStatus(rootDirectory)));
-        return;
-      }
-
-      if (request.method === "POST" && setupMatch) {
-        const setup = setups[setupMatch[1]];
-        if (!setup) {
-          response.statusCode = 404;
-          response.end(`Unknown tool: ${setupMatch[1]}`);
-          return;
-        }
-        try {
-          const message = await setup(rootDirectory);
-          response.statusCode = 200;
-          response.setHeader("content-type", "application/json");
-          response.end(JSON.stringify({ message, ...(await toolsStatus(rootDirectory)) }));
-        } catch (error) {
-          response.statusCode = 500;
-          response.setHeader("content-type", "application/json");
-          response.end(
-            JSON.stringify({ message: String(error?.stderr ?? error ?? "Setup failed") }),
-          );
-        }
-        return;
-      }
-
-      next();
-    });
+    server.middlewares.use(
+      guardedApi(async (request, response, next, url) => {
+        if (!isToolsApiRoute(url.pathname)) return next();
+        const rootDirectory = resolve(process.env.WORKBENCH_SOURCE_ROOT || server.config.root);
+        const handled = await handleToolsApi({
+          method: request.method,
+          pathname: url.pathname,
+          host: request.headers.host,
+          origin: request.headers.origin,
+          rootDirectory,
+          getStatus,
+          setupTool,
+        });
+        if (!handled) return next();
+        sendJson(response, handled.status, handled.json);
+      }),
+    );
   },
 });

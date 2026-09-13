@@ -19,6 +19,16 @@ import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
 
+// The promisified execFile adapter returns { stdout, stderr }, while the
+// identity seam consumes command output. Keep that normalization at the
+// subprocess boundary so injected runners and production defaults agree.
+export const createExecRunner =
+  (command, options, exec = execFileAsync) =>
+  async (args) => {
+    const result = await exec(command, args, options);
+    return typeof result === "string" ? result : result.stdout;
+  };
+
 export async function resolveIdentity({ runGh, runGit }) {
   try {
     const login = (await runGh(["api", "user", "--jq", ".login"])).trim();
@@ -138,13 +148,12 @@ export async function reportTelemetry({
   env = process.env,
   sessions,
   version,
-  runGh = (args) => execFileAsync("gh", args, { stdio: ["ignore", "pipe", "ignore"] }),
-  runGit = (args) =>
-    execFileAsync("git", args, {
-      stdio: ["ignore", "pipe", "ignore"],
-      cwd: rootDirectory ?? undefined,
-    }),
   rootDirectory,
+  runGh = createExecRunner("gh", { stdio: ["ignore", "pipe", "ignore"] }),
+  runGit = createExecRunner("git", {
+    stdio: ["ignore", "pipe", "ignore"],
+    cwd: rootDirectory ?? undefined,
+  }),
   fetchImpl = fetch,
   now = new Date(),
 }) {

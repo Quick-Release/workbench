@@ -307,6 +307,7 @@ const routeFetch = ({
   subIssues = {},
   singles = {},
   comments = {},
+  commentsPages = {},
   defaultComments = null,
   commentsStatus = null,
   status = 200,
@@ -318,6 +319,13 @@ const routeFetch = ({
     calls.push(u);
     if (u.pathname.endsWith("/comments")) {
       const number = u.pathname.match(/\/issues\/(\d+)\/comments$/)[1];
+      const pages = commentsPages[number];
+      if (pages) {
+        const page = Number(u.searchParams.get("page"));
+        const answer = pages[page - 1];
+        if (answer instanceof Error) throw answer;
+        return jsonResponse(answer ?? [], status);
+      }
       return jsonResponse(comments[number] ?? defaultComments ?? [], commentsStatus ?? status);
     }
     if (u.pathname.endsWith("/sub_issues")) {
@@ -490,7 +498,7 @@ test("fetchIssueComments pages under the cap and filters to real comments", asyn
     );
   };
 
-  const { comments, warnings } = await fetchIssueComments({
+  const result = await fetchIssueComments({
     repo: "example/project",
     token: "secret",
     apiBase: "https://api.github.com",
@@ -499,15 +507,17 @@ test("fetchIssueComments pages under the cap and filters to real comments", asyn
     maxPages: 5,
   });
 
-  deepStrictEqual(warnings, []);
-  strictEqual(comments.length, 101);
-  strictEqual(comments[100].body, "last");
+  deepStrictEqual(result.warnings, []);
+  strictEqual(result.comments.length, 101);
+  strictEqual(result.comments[100].body, "last");
+  strictEqual(result.failed, false);
+  strictEqual(result.capped, false);
   strictEqual(calls[0].searchParams.get("per_page"), "100");
 });
 
 test("fetchIssueComments degrades on a failed page with what it collected", async () => {
   let first = true;
-  const { comments, warnings } = await fetchIssueComments({
+  const result = await fetchIssueComments({
     repo: "example/project",
     token: "secret",
     apiBase: "https://api.github.com",
@@ -528,6 +538,48 @@ test("fetchIssueComments degrades on a failed page with what it collected", asyn
     maxPages: 5,
   });
 
-  strictEqual(comments.length, 100);
+  strictEqual(result.comments.length, 100);
+  strictEqual(result.failed, true);
+  strictEqual(result.capped, false);
+  match(result.warnings.join("\n"), /HTTP 502/);
+});
+
+test("an incomplete comment history never fabricates a resolution", async () => {
+  const firstPage = Array.from({ length: 100 }, (_, index) => ({
+    body: `comment ${index}`,
+    created_at: "2026-09-02T00:00:00Z",
+    html_url: `comment-${index}`,
+  }));
+  const { fetchImpl } = routeFetch({
+    openPages: [[]],
+    maps: [issue(41, { labels: [{ name: "wayfinder:map" }] })],
+    subIssues: { 41: [issue(49, { state: "closed" })] },
+    commentsPages: { 49: [firstPage, new Error("HTTP 502")] },
+  });
+
+  const { decisions, warnings } = await collect({ fetchImpl });
+
+  deepStrictEqual(decisions, []);
+  match(warnings.join("\n"), /GH-49/);
   match(warnings.join("\n"), /HTTP 502/);
+});
+
+test("a capped comment history never fabricates a resolution", async () => {
+  const firstPage = Array.from({ length: 100 }, (_, index) => ({
+    body: `comment ${index}`,
+    created_at: "2026-09-02T00:00:00Z",
+    html_url: `comment-${index}`,
+  }));
+  const { fetchImpl } = routeFetch({
+    openPages: [[]],
+    maps: [issue(41, { labels: [{ name: "wayfinder:map" }] })],
+    subIssues: { 41: [issue(49, { state: "closed" })] },
+    commentsPages: { 49: [firstPage] },
+  });
+
+  const { decisions, warnings } = await collect({ fetchImpl, maxPages: 1 });
+
+  deepStrictEqual(decisions, []);
+  match(warnings.join("\n"), /GH-49/);
+  match(warnings.join("\n"), /comments stopped at the 1-page cap/);
 });

@@ -7,6 +7,7 @@ import test from "node:test";
 import {
   agentUsageFromSessions,
   buildTelemetryPayload,
+  createExecRunner,
   identityKey,
   recordHealthError,
   reportTelemetry,
@@ -52,6 +53,34 @@ test("resolveIdentity prefers the gh login, falls back to git email, then null",
 test("identityKey falls back to anon", () => {
   strictEqual(identityKey({ login: "ada" }), "ada");
   strictEqual(identityKey(null), "anon");
+});
+
+test("command runners normalize execFile stdout before identity resolution", async () => {
+  const calls = [];
+  const execFileImpl = async (command, args, options) => {
+    calls.push({ command, args, options });
+    return { stdout: command === "gh" ? "" : "ada@acme.dev\n" };
+  };
+  const runGh = createExecRunner("gh", { stdio: ["ignore", "pipe", "ignore"] }, execFileImpl);
+  const runGit = createExecRunner(
+    "git",
+    { cwd: "/host/repo", stdio: ["ignore", "pipe", "ignore"] },
+    execFileImpl,
+  );
+
+  deepStrictEqual(await resolveIdentity({ runGh, runGit }), { email: "ada@acme.dev" });
+  deepStrictEqual(calls, [
+    {
+      command: "gh",
+      args: ["api", "user", "--jq", ".login"],
+      options: { stdio: ["ignore", "pipe", "ignore"] },
+    },
+    {
+      command: "git",
+      args: ["config", "user.email"],
+      options: { cwd: "/host/repo", stdio: ["ignore", "pipe", "ignore"] },
+    },
+  ]);
 });
 
 test("buildTelemetryPayload carries the daily payload shape and omits absent folds", () => {
@@ -212,6 +241,24 @@ test("demo mode and an unconfigured endpoint send nothing", async () => {
       "skipped",
     );
     strictEqual(posts.length, 0);
+  } finally {
+    cleanup(dir);
+  }
+});
+
+test("default command adapters do not run when telemetry is unconfigured", async () => {
+  const dir = app();
+  try {
+    strictEqual(
+      (
+        await reportTelemetry({
+          appDirectory: dir,
+          repositoryUrl: "https://github.com/acme/widgets.git",
+          env: { TELEMETRY_INGEST_URL: "", TELEMETRY_INGEST_TOKEN: "" },
+        })
+      ).action,
+      "skipped",
+    );
   } finally {
     cleanup(dir);
   }

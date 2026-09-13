@@ -39,44 +39,45 @@ export const createAutoSync = ({
   let syncing = false;
 
   const tick = async () => {
-    // The mutex answers the tick before it probes: while a sync runs, later
-    // ticks neither probe nor stack a second sync.
+    // Claim the mutex before the first await: token, repository, and probe
+    // resolution are part of one tick, not a window where another tick may
+    // start the same sync.
     if (syncing) return false;
-    if (now() - lastSeamReadAt >= PRESENCE_WINDOW_MS) return false;
-    const token = await resolveGhToken({ env, ghToken });
-    if (!token) return false;
-    const repo = await resolveRepo();
-    if (!repo) return false;
-    // The probe makes the sync sweep's own first-page request, so its ETag
-    // speaks for exactly the list the sweep reads first.
-    const url = issuesUrl(GITHUB_API, repo, "", {
-      state: "open",
-      per_page: PER_PAGE,
-      page: 1,
-    });
-    try {
-      const response = await fetchImpl(url, {
-        headers: {
-          ...githubHeaders(token),
-          ...(probeEtag ? { "If-None-Match": probeEtag } : {}),
-        },
-      });
-      // A 304 answers at no rate cost and means nothing changed; any other
-      // failure skips the tick too — the chip's staleness is the signal, not
-      // a console line per failed probe.
-      if (response.status === 304 || !response.ok) return false;
-      const etag = response.headers?.get?.("etag");
-      if (etag) probeEtag = etag;
-    } catch {
-      return false;
-    }
     syncing = true;
     try {
+      if (now() - lastSeamReadAt >= PRESENCE_WINDOW_MS) return false;
+      const token = await resolveGhToken({ env, ghToken });
+      if (!token) return false;
+      const repo = await resolveRepo();
+      if (!repo) return false;
+      // The probe makes the sync sweep's own first-page request, so its ETag
+      // speaks for exactly the list the sweep reads first.
+      const url = issuesUrl(GITHUB_API, repo, "", {
+        state: "open",
+        per_page: PER_PAGE,
+        page: 1,
+      });
+      try {
+        const response = await fetchImpl(url, {
+          headers: {
+            ...githubHeaders(token),
+            ...(probeEtag ? { "If-None-Match": probeEtag } : {}),
+          },
+        });
+        // A 304 answers at no rate cost and means nothing changed; any other
+        // failure skips the tick too — the chip's staleness is the signal, not
+        // a console line per failed probe.
+        if (response.status === 304 || !response.ok) return false;
+        const etag = response.headers?.get?.("etag");
+        if (etag) probeEtag = etag;
+      } catch {
+        return false;
+      }
       await applySync({ appDirectory, run });
+      return true;
     } finally {
       syncing = false;
     }
-    return true;
   };
 
   let timer = null;
