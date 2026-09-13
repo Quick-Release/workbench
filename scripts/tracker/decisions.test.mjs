@@ -12,10 +12,10 @@ import {
   resolutionDecisionFromIssue,
   sortDecisions,
   specDecisionFromIssue,
-} from "./tracker/decisions.mjs";
-import { DEFAULT_WORKFLOW_VOCABULARY } from "./tracker/labels.mjs";
-import { collectTrackerState } from "./tracker/index.mjs";
-import { fetchIssueComments } from "./tracker/issues.mjs";
+} from "./decisions.mjs";
+import { DEFAULT_WORKFLOW_VOCABULARY } from "./labels.mjs";
+import { collectTrackerState } from "./index.mjs";
+import { fetchIssueComments } from "./issues.mjs";
 
 const adrText = (overrides = {}) => `# Blocker edges and the frontier
 

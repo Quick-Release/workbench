@@ -1,10 +1,10 @@
 import { resolve } from "node:path";
 
-import { parseAiDraftRequest, parseAiDraftResult, parseAiHealth } from "../src/schema.ts";
-import { createDraftModelCall, providerConfigured } from "./ai-model.mjs";
-import { ghPullRequestLoader, gitCommitSubjectLister } from "./ai-sources.mjs";
-import { guardedApi, methodMismatch, readBody, sendJson } from "./api-shared.mjs";
-import { gateRejection } from "./request-gate.mjs";
+import { parseAiDraftRequest, parseAiDraftResult, parseAiHealth } from "../../../src/schema.ts";
+import { createDraftModelCall, providerConfigured } from "../ai/ai-model.mjs";
+import { ghPullRequestLoader, gitCommitSubjectLister } from "../ai/ai-sources.mjs";
+import { guardedApi, methodMismatch, readBody, sendJson } from "../middleware/api-shared.mjs";
+import { gateRejection } from "../middleware/request-gate.mjs";
 
 // The AI middleware (ticket #37): a one-shot draft endpoint and a health
 // probe, both behind the shared request gate. The handler is pure — request

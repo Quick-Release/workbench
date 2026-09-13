@@ -54,4 +54,4 @@ jobs:
       - name: Tag and release the published version
         env:
           GH_TOKEN: ${{ github.token }}
-        run: node scripts/tagged-release.mjs
+        run: node scripts/commands/tagged-release.mjs

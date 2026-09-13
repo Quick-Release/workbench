@@ -1,6 +1,6 @@
-import { offlineFallbackCatalog } from "../src/data/skill-flow.ts";
-import { mattPocockSkillSource } from "../src/lib/skills.ts";
-import { installedSkillIds } from "./skills-api.mjs";
+import { offlineFallbackCatalog } from "../../src/data/skill-flow.ts";
+import { mattPocockSkillSource } from "../../src/lib/skills.ts";
+import { installedSkillIds } from "../host/skills.mjs";
 
 // ADR 0006: the Catalog (which skills exist, id + category) is fetched from
 // mattpocock/skills at sync time — one recursive trees call, category from the

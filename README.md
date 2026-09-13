@@ -205,7 +205,7 @@ overrides: `WORKBENCH_OPENCODE_BIN` (pin the CLI binary),
 
 ## Sources
 
-`scripts/sync-data.mjs` collects the host repo's planning state and produces
+`scripts/commands/sync-data.mjs` collects the host repo's planning state and produces
 the ignored, generated `src/data.generated.ts` snapshot. It reads:
 
 - the host repo's tracker — GitHub issues for work items, map membership,

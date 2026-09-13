@@ -1,9 +1,9 @@
 import { deepStrictEqual, strictEqual } from "node:assert";
 import test from "node:test";
 
-import { DEFAULT_WORKFLOW_VOCABULARY } from "./tracker/labels.mjs";
-import { collectTrackerState } from "./tracker/index.mjs";
-import { fetchOpenPullRequests } from "./tracker/pulls.mjs";
+import { DEFAULT_WORKFLOW_VOCABULARY } from "./labels.mjs";
+import { collectTrackerState } from "./index.mjs";
+import { fetchOpenPullRequests } from "./pulls.mjs";
 
 // The pull-request record family, collected over recorded GitHub REST
 // fixtures — the same paged, capped, fail-soft read shapes the issue

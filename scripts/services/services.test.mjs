@@ -1,11 +1,11 @@
 import { deepStrictEqual, match, rejects, strictEqual } from "node:assert";
 import test from "node:test";
 
-import { fetchAsana } from "./services/asana.mjs";
-import { fetchGitHub } from "./services/github.mjs";
-import { fetchGitLab } from "./services/gitlab.mjs";
-import { fetchNotion } from "./services/notion.mjs";
-import { fetchConfiguredServices } from "./services/index.mjs";
+import { fetchAsana } from "./asana.mjs";
+import { fetchGitHub } from "./github.mjs";
+import { fetchGitLab } from "./gitlab.mjs";
+import { fetchNotion } from "./notion.mjs";
+import { fetchConfiguredServices } from "./index.mjs";
 
 const jsonResponse = (body, status = 200) => ({
   ok: status >= 200 && status < 300,

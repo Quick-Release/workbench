@@ -1,8 +1,8 @@
-import { parseReviewCommentRequest, parseReviewCommentResult } from "../src/schema.ts";
-import { methodMismatch, readBody } from "./api-shared.mjs";
+import { parseReviewCommentRequest, parseReviewCommentResult } from "../../../src/schema.ts";
+import { methodMismatch, readBody } from "../middleware/api-shared.mjs";
 import { resolve } from "node:path";
-import { gateRejection } from "./request-gate.mjs";
-import { postReviewComment } from "./review-comment.mjs";
+import { gateRejection } from "../middleware/request-gate.mjs";
+import { postReviewComment } from "../review/review-comment.mjs";
 
 // The review comment API middleware (epic #20, ticket #25): the endpoint
 // the dashboard's confirm flow calls to post a completed review's findings

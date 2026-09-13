@@ -1,7 +1,7 @@
 import { deepStrictEqual, ok, strictEqual } from "node:assert";
 import test from "node:test";
 
-import { LIVE_REFRESH_MAX_MS } from "../src/lib/live-refresh.ts";
+import { LIVE_REFRESH_MAX_MS } from "../../../src/lib/live-refresh.ts";
 
 import { AUTO_SYNC_CADENCE_MS, createAutoSync } from "./auto-sync.mjs";
 

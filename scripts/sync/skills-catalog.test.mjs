@@ -2,7 +2,7 @@ import { strictEqual, deepStrictEqual } from "node:assert";
 import test from "node:test";
 
 import { catalogFromTreePayload, mergeCatalog, skillSourceRecord } from "./skills-catalog.mjs";
-import { mattPocockSkillSource } from "../src/lib/skills.ts";
+import { mattPocockSkillSource } from "../../src/lib/skills.ts";
 
 // Recorded from GET https://api.github.com/repos/mattpocock/skills/git/trees/main?recursive=1
 // (trimmed to the shapes the walk depends on).

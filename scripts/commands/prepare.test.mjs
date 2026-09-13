@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { envWithoutGitContext } from "./git-context.mjs";
+import { envWithoutGitContext } from "../host/git-context.mjs";
 import { ensureHooksPath } from "./prepare.mjs";
 
 const base = join(tmpdir(), "workbench-prepare");

@@ -6,7 +6,7 @@ export const mattPocockSkillSource = {
   installCommand: "npx skills@latest add mattpocock/skills --all",
 } as const;
 
-// Mirrors the seam's per-skill install (scripts/skills-api.mjs) for the
+// Mirrors the seam's per-skill install (scripts/seam/routes/skills-api.mjs) for the
 // static-build copy-the-command degradation.
 export const perSkillInstallCommand = (id: string) =>
   `npx skills@latest add ${mattPocockSkillSource.repository} --skill ${id}`;

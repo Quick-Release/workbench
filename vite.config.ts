@@ -5,14 +5,14 @@ import { tanstackRouter } from "@tanstack/router-plugin/vite";
 import react from "@vitejs/plugin-react";
 import { fileURLToPath } from "node:url";
 
-import { skillsApiPlugin } from "./scripts/skills-api.mjs";
-import { toolsApiPlugin } from "./scripts/tools-api.mjs";
-import { workflowApiPlugin } from "./scripts/workflow-api.mjs";
-import { aiApiPlugin } from "./scripts/ai-api.mjs";
-import { llmApiPlugin } from "./scripts/llm-api.mjs";
-import { submissionsApiPlugin } from "./scripts/submissions-api.mjs";
-import { reviewApiPlugin } from "./scripts/review-api.mjs";
-import { reviewCommentApiPlugin } from "./scripts/review-comment-api.mjs";
+import { skillsApiPlugin } from "./scripts/seam/routes/skills-api.mjs";
+import { toolsApiPlugin } from "./scripts/seam/routes/tools-api.mjs";
+import { workflowApiPlugin } from "./scripts/seam/routes/workflow-api.mjs";
+import { aiApiPlugin } from "./scripts/seam/routes/ai-api.mjs";
+import { llmApiPlugin } from "./scripts/seam/routes/llm-api.mjs";
+import { submissionsApiPlugin } from "./scripts/seam/routes/submissions-api.mjs";
+import { reviewApiPlugin } from "./scripts/seam/routes/review-api.mjs";
+import { reviewCommentApiPlugin } from "./scripts/seam/routes/review-comment-api.mjs";
 
 // Shared by the dev/build pipeline and the dashboard test project: vitest
 // projects don't inherit the root config's plugins or resolve (ticket #29).

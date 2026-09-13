@@ -1,30 +1,30 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 
-import { collectCommitCandidates } from "./commit-candidates.mjs";
-import { recordHealthError, reportTelemetry } from "./telemetry.mjs";
-import { loadWorkbenchConfig } from "./config.mjs";
-import { SELF_REPOSITORY_URL, servicesForSource } from "./self-defaults.mjs";
-import { fetchConfiguredServices } from "./services/index.mjs";
+import { collectCommitCandidates } from "../sync/commit-candidates.mjs";
+import { recordHealthError, reportTelemetry } from "../sync/telemetry.mjs";
+import { loadWorkbenchConfig } from "../host/config.mjs";
+import { SELF_REPOSITORY_URL, servicesForSource } from "../host/self-defaults.mjs";
+import { fetchConfiguredServices } from "../services/index.mjs";
 import {
   collectSessionUsage,
   resolveSessionsDatabasePath,
   sessionUsageDisabled,
-} from "./sessions.mjs";
-import { collectSkillsCatalog } from "./skills-catalog.mjs";
-import { demoSourceRoot, resolveSourceRoot } from "./source-root.mjs";
-import { lineEdgesForTicketFile, mergeBlockerEdges } from "./tracker/edges.mjs";
+} from "../sync/sessions.mjs";
+import { collectSkillsCatalog } from "../sync/skills-catalog.mjs";
+import { demoSourceRoot, resolveSourceRoot } from "../host/source-root.mjs";
+import { lineEdgesForTicketFile, mergeBlockerEdges } from "../tracker/edges.mjs";
 import {
   collectAdrDecisions,
   collectResearchArtifacts,
   sortDecisions,
-} from "./tracker/decisions.mjs";
-import { collectTrackerState } from "./tracker/index.mjs";
+} from "../tracker/decisions.mjs";
+import { collectTrackerState } from "../tracker/index.mjs";
 import { readdir, readFile, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const appDirectory = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const appDirectory = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 
 const directoryExists = async (path) => {
   try {

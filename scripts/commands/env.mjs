@@ -29,7 +29,7 @@ export const ensureEnvFile = async ({
 };
 
 const main = async () => {
-  const appDirectory = join(dirname(fileURLToPath(import.meta.url)), "..");
+  const appDirectory = join(dirname(fileURLToPath(import.meta.url)), "../..");
   const { created } = await ensureEnvFile({ directory: appDirectory });
   if (created) console.log("[workbench] created .env from .env.example");
 };
