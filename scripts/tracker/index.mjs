@@ -200,7 +200,12 @@ export const collectTrackerState = async ({
           cappedResolutionsHere += 1;
         } else {
           resolutionReads += 1;
-          const { comments, warnings: commentWarnings } = await fetchIssueComments({
+          const {
+            comments,
+            warnings: commentWarnings,
+            capped: commentsCapped,
+            failed: commentsFailed,
+          } = await fetchIssueComments({
             repo,
             token,
             apiBase,
@@ -209,8 +214,10 @@ export const collectTrackerState = async ({
             maxPages,
           });
           warnings.push(...commentWarnings.map((warning) => `${record.id}: ${warning}`));
-          const resolution = resolutionDecisionFromIssue({ issue: member, comments });
-          if (resolution) resolutions.push(resolution);
+          if (!commentsCapped && !commentsFailed) {
+            const resolution = resolutionDecisionFromIssue({ issue: member, comments });
+            if (resolution) resolutions.push(resolution);
+          }
         }
       }
       if (knownNumbers.has(member.number)) continue;

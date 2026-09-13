@@ -168,6 +168,32 @@ test("a tick never stacks a sync onto a sync that is still running", async () =>
   strictEqual(fetches.length, 1, "the overlapping tick must not even probe");
 });
 
+test("a tick claims the mutex before asynchronous setup completes", async () => {
+  const fetches = [];
+  const syncs = [];
+  const repoResolvers = [];
+  const { leg } = makeLeg({
+    resolveRepo: () => new Promise((resolve) => repoResolvers.push(resolve)),
+    applySync: async () => {
+      syncs.push(true);
+      return syncTriggered();
+    },
+    fetchImpl: scriptedFetch([probeResponse(200, "etag-1")], fetches),
+  });
+
+  leg.noteSeamRead();
+  const first = leg.tick();
+  await new Promise((resolve) => setImmediate(resolve));
+  const second = leg.tick();
+  await new Promise((resolve) => setImmediate(resolve));
+  for (const resolve of repoResolvers) resolve(REPO);
+
+  deepStrictEqual(await Promise.all([first, second]), [true, false]);
+  strictEqual(repoResolvers.length, 1, "only the first tick may resolve the repo");
+  strictEqual(syncs.length, 1);
+  strictEqual(fetches.length, 1);
+});
+
 test("a missing GitHub token skips the probe without syncing", async () => {
   const fetches = [];
   const { leg, syncs } = makeLeg({
