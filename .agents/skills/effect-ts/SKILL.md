@@ -1,11 +1,11 @@
 ---
 name: effect-ts
-description: Use this skill when setting up a repository that uses the Effect Typescript library.
+description: Use this skill when setting up a repository that uses the Effect TypeScript library.
 ---
 
 # Step 1: Install effect
 
-Use the users preferred package manager:
+Use the user's preferred package manager:
 
 ```
 pnpm add effect@rc
@@ -25,11 +25,11 @@ Ensure that the agent instructions contain the following:
 ```md
 # Learning more about Effect
 
-This repository uses the Effect Typescript library.
+This repository uses the Effect TypeScript library.
 
 Before writing any Effect code, first read `node_modules/effect/AGENTS.md`
 **completely**, and follow the links in the file when required.
 
-If you need to learn more about particular Effect apis and concepts that the
+If you need to learn more about particular Effect APIs and concepts that the
 guide doesn't cover, search through the source code in `node_modules/effect/src`.
 ```
