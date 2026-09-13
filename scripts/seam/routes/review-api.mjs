@@ -1,25 +1,24 @@
 import { spawnSync } from "node:child_process";
-import { dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { resolve } from "node:path";
 
 import {
   parseReviewCancelRequest,
   parseReviewHealth,
   parseReviewHistory,
   parseReviewRunRequest,
-} from "../src/schema.ts";
-import { evaluateClientGate, openClientBugs } from "../src/lib/client-priority.ts";
-import { guardedApi, methodMismatch, readBody, sendJson } from "./api-shared.mjs";
-import { ghPullRequestLoader } from "./ai-sources.mjs";
-import { gateRejection } from "./request-gate.mjs";
-import { collectClientTickets } from "./tracker/client-tickets.mjs";
-import { ghIssueRecord, isGhNotFound } from "./tracker/gh-view.mjs";
-import { deriveWorkItem } from "./tracker/labels.mjs";
-import { tokenFromGhCli } from "./tracker/index.mjs";
-import { GITHUB_API } from "./tracker/issues.mjs";
-import { createRunRegistry, reviewHealth, startReviewRun } from "./review-runner.mjs";
-import { loadWorkflowState } from "./workflow-api.mjs";
-import { reviewRunOutcome } from "../src/lib/review-run-state.ts";
+} from "../../../src/schema.ts";
+import { evaluateClientGate, openClientBugs } from "../../../src/lib/client-priority.ts";
+import { guardedApi, methodMismatch, readBody, sendJson } from "../middleware/api-shared.mjs";
+import { ghPullRequestLoader } from "../ai/ai-sources.mjs";
+import { gateRejection } from "../middleware/request-gate.mjs";
+import { collectClientTickets } from "../../tracker/client-tickets.mjs";
+import { ghIssueRecord, isGhNotFound } from "../../tracker/gh-view.mjs";
+import { deriveWorkItem } from "../../tracker/labels.mjs";
+import { tokenFromGhCli } from "../../tracker/index.mjs";
+import { GITHUB_API } from "../../tracker/issues.mjs";
+import { createRunRegistry, reviewHealth, startReviewRun } from "../review/review-runner.mjs";
+import { APP_DIRECTORY, loadWorkflowState } from "../workflow/snapshot.mjs";
+import { reviewRunOutcome } from "../../../src/lib/review-run-state.ts";
 
 // The review API middleware (epic #20): the localhost seam the dashboard's
 // PR page drives — the engines' health (ticket #24), the review runs
@@ -27,8 +26,6 @@ import { reviewRunOutcome } from "../src/lib/review-run-state.ts";
 // handlers are pure — request parts in, a response part out, the answers
 // through the Effect Schema — and the runner is injected, so tests stub it
 // and no live CLI is ever touched.
-
-const APP_DIRECTORY = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 const HEALTH_ROUTE = /^\/api\/review\/health\/?$/;
 const RUN_ROUTE = /^\/api\/review\/?$/;

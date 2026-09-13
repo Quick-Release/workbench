@@ -6,9 +6,9 @@ import {
   lineEdgesForBody,
   lineEdgesForTicketFile,
   mergeBlockerEdges,
-} from "./tracker/edges.mjs";
-import { collectTrackerState } from "./tracker/index.mjs";
-import { DEFAULT_WORKFLOW_VOCABULARY } from "./tracker/labels.mjs";
+} from "./edges.mjs";
+import { collectTrackerState } from "./index.mjs";
+import { DEFAULT_WORKFLOW_VOCABULARY } from "./labels.mjs";
 
 const jsonResponse = (body, status = 200) => ({
   ok: status >= 200 && status < 300,

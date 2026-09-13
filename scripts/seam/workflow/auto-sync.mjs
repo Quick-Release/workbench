@@ -6,10 +6,10 @@
 // identically. An in-flight guard keeps ticks from stacking a sync onto a
 // sync, and a browser that never reads the seam keeps the leg asleep: an
 // unread board burns no quota.
-import { LIVE_REFRESH_MAX_MS } from "../src/lib/live-refresh.ts";
+import { LIVE_REFRESH_MAX_MS } from "../../../src/lib/live-refresh.ts";
 
-import { GITHUB_API, PER_PAGE, githubHeaders, issuesUrl } from "./tracker/issues.mjs";
-import { resolveGhToken } from "./tracker/index.mjs";
+import { GITHUB_API, PER_PAGE, githubHeaders, issuesUrl } from "../../tracker/issues.mjs";
+import { resolveGhToken } from "../../tracker/index.mjs";
 
 export const AUTO_SYNC_CADENCE_MS = 90_000;
 

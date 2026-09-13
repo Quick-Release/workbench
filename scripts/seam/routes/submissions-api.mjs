@@ -1,6 +1,6 @@
-import { parseSubmissionRequest } from "../src/schema.ts";
-import { methodMismatch, readBody } from "./api-shared.mjs";
-import { gateRejection } from "./request-gate.mjs";
+import { parseSubmissionRequest } from "../../../src/schema.ts";
+import { methodMismatch, readBody } from "../middleware/api-shared.mjs";
+import { gateRejection } from "../middleware/request-gate.mjs";
 
 // The Submission seam (ticket #12): the Highlights page's Submit action
 // POSTs here, and this dev-server endpoint attaches the host repo remote

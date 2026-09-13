@@ -13,7 +13,7 @@ boundary (`src/schema.ts`), vitest with `renderToString` smoke tests as the
 test seam (ADR 0002), pnpm. Distributed as npm package `@quick-release/workbench`;
 one install serves one host repo.
 
-**Data path.** `pnpm sync` (`scripts/sync-data.mjs`) runs in Node and generates
+**Data path.** `pnpm sync` (`scripts/commands/sync-data.mjs`) runs in Node and generates
 `src/data.generated.ts`; the browser renders that snapshot and makes zero
 network calls. Sources scraped today:
 
@@ -26,7 +26,7 @@ network calls. Sources scraped today:
   Notion — open issues/tasks, status derived from labels via the triage
   vocabulary. In standalone mode workbench reads its own tracker
   (`Quick-Release/workbench`) by default.
-- Optional ZCode session database (`scripts/sessions.mjs`): per-day/per-model
+- Optional ZCode session database (`scripts/sync/sessions.mjs`): per-day/per-model
   aggregates plus a per-session rollup (id, taskType, **parent**, title,
   directory, started, requests, tokens, edits/writes). Prompt content is never
   read.
@@ -43,13 +43,13 @@ the Ask Matt flow onto existing records), Sessions (usage charts), Skills
 (hardcoded favorites shelf + Matt Pocock source install button), Tools
 (Fallow/Renovate setup cards).
 
-**Skills data today.** `scripts/skills-api.mjs` keeps a hardcoded list of 37
-Matt Pocock skill ids, detects installed ones from `skills-lock.json` and
-well-known skill directories, and serves `GET /api/skills` plus a
-`POST /api/skills/matt-pocock/setup` install endpoint through a Vite
-middleware plugin — the repo's only live localhost API seam so far. No
-SKILL.md parsing, no categories beyond 12 hardcoded favorites, no flow
-relationships.
+**Skills data today.** `scripts/sync/skills-catalog.mjs` builds the catalog from
+upstream data with curated fallbacks, while `scripts/host/skills.mjs` detects
+installed skills from `skills-lock.json` and well-known skill directories.
+`scripts/seam/routes/skills-api.mjs` serves `GET /api/skills` plus the
+per-skill and source setup endpoints through a Vite middleware plugin. Catalog
+entries carry categories and installed frontmatter descriptions; flow
+relationships remain separate domain data.
 
 **Workflow state today.** One flat `TicketStatus` vocabulary of eight values
 mapped onto the five triage labels; a regex lifts triage labels out of

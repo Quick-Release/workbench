@@ -1,7 +1,5 @@
 import { execFile } from "node:child_process";
-import { stat } from "node:fs/promises";
-import { dirname, join, resolve } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { resolve } from "node:path";
 import { promisify } from "node:util";
 
 import {
@@ -22,23 +20,20 @@ import {
   parseTriageMoveResult,
   parseWorkflowStatePayload,
   parseClosedClientTickets,
-} from "../src/schema.ts";
-import { workflowStateFrom } from "../src/lib/workflow-state.ts";
-import { byIssueNumber, workItemIdNumber } from "../src/lib/work-item-id.ts";
-import { deriveWorkItem } from "./tracker/labels.mjs";
-import { ghIssueRecord } from "./tracker/gh-view.mjs";
-import { collectClientTickets } from "./tracker/client-tickets.mjs";
-import { resolveGhToken, tokenFromGhCli } from "./tracker/index.mjs";
-import { GITHUB_API } from "./tracker/issues.mjs";
-import { guardedApi, sendJson } from "./api-shared.mjs";
-import { createAutoSync } from "./auto-sync.mjs";
+} from "../../../src/schema.ts";
+import { byIssueNumber, workItemIdNumber } from "../../../src/lib/work-item-id.ts";
+import { deriveWorkItem } from "../../tracker/labels.mjs";
+import { ghIssueRecord } from "../../tracker/gh-view.mjs";
+import { collectClientTickets } from "../../tracker/client-tickets.mjs";
+import { resolveGhToken, tokenFromGhCli } from "../../tracker/index.mjs";
+import { GITHUB_API } from "../../tracker/issues.mjs";
+import { guardedApi, sendJson } from "../middleware/api-shared.mjs";
+import { createAutoSync } from "../workflow/auto-sync.mjs";
+import { APP_DIRECTORY, importWorkflowSnapshot, loadWorkflowState } from "../workflow/snapshot.mjs";
+
+export { loadWorkflowState } from "../workflow/snapshot.mjs";
 
 const execFileAsync = promisify(execFile);
-
-// The workbench app directory holds the generated snapshot; the host repo the
-// server runs against is where gh commands execute, mirroring the other
-// seam endpoints.
-const APP_DIRECTORY = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 const WORKFLOW_ROUTE = /^\/api\/workflow\/?$/;
 const CLIENT_CLOSED_ROUTE = /^\/api\/client-tickets\/closed\/?$/;
@@ -50,39 +45,6 @@ const ISSUE_CREATE_ROUTE = /^\/api\/workflow\/issue\/create\/?$/;
 const SYNC_ROUTE = /^\/api\/workflow\/sync\/?$/;
 const EDGE_ADD_ROUTE = /^\/api\/workflow\/edge\/add\/?$/;
 const EDGE_REMOVE_ROUTE = /^\/api\/workflow\/edge\/remove\/?$/;
-
-// The seam imports the generated snapshot module — its only syntax is the
-// erasable kind (a type-only import and `satisfies`), so plain Node loads it.
-// The mtime-keyed query re-imports after a re-sync instead of serving Node's
-// module cache, so a fresh snapshot needs no dev-server restart. The module
-// also carries the sync warnings channel, read structurally instead of
-// scraped from the sync output's console copy.
-let snapshotCache = null;
-
-const importSnapshot = async (appDirectory) => {
-  const path = join(appDirectory, "src", "data.generated.ts");
-  const { mtimeMs } = await stat(path);
-  if (snapshotCache && snapshotCache.path === path && snapshotCache.mtimeMs === mtimeMs)
-    return snapshotCache;
-  const module = await import(`${pathToFileURL(path).href}?t=${mtimeMs}`);
-  snapshotCache = {
-    path,
-    mtimeMs,
-    snapshot: module.overviewData,
-    // A generated module from an older workbench carries no warnings export.
-    warnings: Array.isArray(module.syncWarnings) ? module.syncWarnings : [],
-  };
-  return snapshotCache;
-};
-
-export const loadWorkflowState = async (appDirectory = APP_DIRECTORY) => {
-  const { snapshot, warnings } = await importSnapshot(appDirectory);
-  if (!snapshot || typeof snapshot !== "object" || typeof snapshot.meta !== "object")
-    throw new Error("snapshot file does not carry the overviewData literal");
-  // GH-145: the warnings channel rides the served payload, so the dashboard
-  // sees what sync saw instead of scraping the console.
-  return workflowStateFrom(snapshot, warnings);
-};
 
 // ADR 0005: behind the seam run only the tools a Developer would run by hand.
 const runGh = (command, args, cwd) => execFileAsync(command, args, { cwd, encoding: "utf8" });
@@ -529,7 +491,7 @@ export const applySyncTrigger = async ({ appDirectory, run }) => {
   try {
     // The mtime cache makes the second import free; loadWorkflowState owns
     // the snapshot-shape guard so it cannot drift from the GET read.
-    warnings = (await importSnapshot(appDirectory)).warnings;
+    warnings = (await importWorkflowSnapshot(appDirectory)).warnings;
     state = parseWorkflowStatePayload(await loadWorkflowState(appDirectory));
   } catch (error) {
     return {

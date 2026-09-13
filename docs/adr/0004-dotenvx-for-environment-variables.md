@@ -10,7 +10,7 @@ deploy time), and the demo entries, which switch the inline
 `WORKBENCH_DEMO_SOURCE=1` prefix for a committed `.env.demo` loaded with
 `dotenvx run -f .env.demo -f .env`. The demo file is safe to track because it
 holds no secrets; everything else lives in a gitignored `.env` that
-`scripts/env.mjs` seeds from `.env.example` on first run, so a fresh clone
+`scripts/commands/env.mjs` seeds from `.env.example` on first run, so a fresh clone
 never trips dotenvx's missing-file warning. `.env.example` is the single
 inventory of every variable the repo reads.
 
@@ -39,7 +39,7 @@ demo flag survives the inner load.
 
 - `pnpm dev`, `pnpm sync`, `pnpm build`, `pnpm test`, and the `worker:*`
   commands all see the same environment; nothing needs `export`ing first.
-- `scripts/env.mjs` runs before every dotenvx entry point and never
+- `scripts/commands/env.mjs` runs before every dotenvx entry point and never
   overwrites: an existing `.env` always wins over the example, and packaged
   copies without `.env.example` stay silent.
 - Real values keep winning over files everywhere, so CI and shell behavior is

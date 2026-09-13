@@ -19,7 +19,7 @@ Ticket #45 asked where Skill and SkillFlowEdge records come from at sync time. T
 
 - A skills collector in `pnpm sync` writes Skill records, plus an installed-state snapshot for static degradation only, into `src/data.generated.ts`. The upstream fetch is fail-open: unreachable GitHub degrades to last-good data and never fails a firewalled host repo's sync.
 - The seam joins the bundled Catalog with live disk state. Staleness is therefore: Catalog as-of last successful sync (fallback: workbench-release curated data); installed state never stale; static builds as-of last sync, degrading actions per ADR 0005.
-- The hardcoded `MATT_POCOCK_SKILL_IDS` array in `scripts/skills-api.mjs` is deleted. Descriptions resolve installed frontmatter → curated blurb → name only.
+- The hardcoded `MATT_POCOCK_SKILL_IDS` array in `scripts/seam/routes/skills-api.mjs` is deleted. Descriptions resolve installed frontmatter → curated blurb → name only.
 - Classification rulings: upstream-new skills enter the Catalog with no flow role (shelf, not graph, until classified); curated ids that vanish upstream are dropped unless installed — disk is the only truth for installed; `misc` is catalogued literally and classifiable (git-guardrails-claude-code → standalone); `deprecated` is filtered unless installed.
 - Flow role is nullable: main-flow step, on-ramp, standalone, vocabulary layer, primitive, or none. Edge vocabulary: merges-onto | delegates-to | pairs-with | runs-internally | hands-off-to | next-step.
 - v1 reuses the existing install-all action on the source card; per-skill install is prototype ticket #50's scope, which this decision unblocks.

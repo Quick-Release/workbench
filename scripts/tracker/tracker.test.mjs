@@ -13,8 +13,8 @@ import {
   loadWorkflowVocabulary,
   phaseFromLabels,
   workflowVocabularyFromMarkdown,
-} from "./tracker/labels.mjs";
-import { collectTrackerState } from "./tracker/index.mjs";
+} from "./labels.mjs";
+import { collectTrackerState } from "./index.mjs";
 
 const jsonResponse = (body, status = 200) => ({
   ok: status >= 200 && status < 300,
@@ -434,7 +434,7 @@ test("a repository outside owner/name format degrades with a warning", async () 
 
 test("the workflow vocabulary parses from its markdown home in flow order", async () => {
   const text = await readFile(
-    new URL("../docs/agents/workflow-labels.md", import.meta.url),
+    new URL("../../docs/agents/workflow-labels.md", import.meta.url),
     "utf8",
   );
   const vocabulary = workflowVocabularyFromMarkdown(text);
@@ -485,7 +485,7 @@ test("a vocabulary entry outside the canonical phases never resolves", () => {
 
 test("decision-ticket board placement parses from its markdown home", async () => {
   const text = await readFile(
-    new URL("../docs/agents/workflow-labels.md", import.meta.url),
+    new URL("../../docs/agents/workflow-labels.md", import.meta.url),
     "utf8",
   );
 

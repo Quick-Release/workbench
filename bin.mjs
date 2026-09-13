@@ -23,7 +23,7 @@ const main = async () => {
   } catch (cause) {
     // Health (#15): server-startup failures ride the next telemetry
     // payload before the process exits non-zero.
-    const { recordHealthError } = await import("./scripts/telemetry.mjs");
+    const { recordHealthError } = await import("./scripts/sync/telemetry.mjs");
     const version = JSON.parse(readFileSync(join(appDirectory, "package.json"), "utf8")).version;
     recordHealthError({ appDirectory, error: cause, version });
     throw cause;
@@ -34,7 +34,7 @@ const runPipeline = async () => {
   // `init` scaffolds workbench.config.json interactively; every other invocation
   // takes the default pipeline, which must stay non-interactive (zero keystrokes).
   if (process.argv[2] === "init") {
-    const { runInit } = await import("./scripts/init.mjs");
+    const { runInit } = await import("./scripts/commands/init.mjs");
     const result = await runInit({ rootDirectory: sourceRoot });
     process.exitCode = result.status === "error" ? 1 : 0;
     return;
@@ -49,7 +49,7 @@ const runPipeline = async () => {
   // cwd fallback correct for installed packages, where git detection may fail.
   const syncStatus = run(
     process.execPath,
-    [join(appDirectory, "scripts/sync-data.mjs")],
+    [join(appDirectory, "scripts/commands/sync-data.mjs")],
     sourceRoot,
   );
   if (syncStatus !== 0) {
@@ -84,7 +84,7 @@ const runPipeline = async () => {
   if (devStatus !== 0) {
     // Health (#15): a dev server that cannot start (port busy, build
     // failure) is a captured startup error, not a silent exit.
-    const { recordHealthError } = await import("./scripts/telemetry.mjs");
+    const { recordHealthError } = await import("./scripts/sync/telemetry.mjs");
     const version = JSON.parse(readFileSync(join(appDirectory, "package.json"), "utf8")).version;
     recordHealthError({
       appDirectory,

@@ -10,7 +10,7 @@
 
 - `gh repo view Quick-Release/workbench --json name,owner,visibility,isPrivate` returned: `"isPrivate":true`, `"visibility":"PRIVATE"`, owner login **`Quick-Release`**. The repo is private.
 - The package is `@banquinha/workbench` with `"private": true` (`package.json`) — the npm scope `@banquinha` does **not** match the GitHub owner `Quick-Release`, and GitHub Packages' npm registry documents scoped names as `@NAMESPACE/PACKAGE-NAME` where "NAMESPACE" is "the name of the user or organization account to which the package will be scoped" ([GitHub docs, "Working with the npm registry"](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-npm-registry)). Any GitHub-Packages path therefore requires a scope rename to `@quick-release/workbench`.
-- Workbench is an **app, not a library**: its `dev`/`sync` scripts require the `vp` binary (vite-plus), and `sync` writes `src/data.generated.ts` _inside the package directory_ (`package.json` scripts; `scripts/sync-data.mjs:8,37`). Distribution strategy must account for this (Section 4).
+- Workbench is an **app, not a library**: its `dev`/`sync` scripts require the `vp` binary (vite-plus), and `sync` writes `src/data.generated.ts` _inside the package directory_ (`package.json` scripts; `scripts/commands/sync-data.mjs:8,37`). Distribution strategy must account for this (Section 4).
 
 **Recommendation**
 
@@ -30,7 +30,7 @@ From [Semantic Versioning 2.0.0](https://semver.org/) (spec text also mirrored a
 - **Item 2 (immutability):** "Once a versioned package has been released, the contents of that version MUST NOT be modified. Any modifications MUST be released as a new version." — this is the core argument for _tagged, pinned_ distribution over submodule-at-head.
 - **FAQ "How do I know when to release 1.0.0?":** "If your software is being used in production, it should probably already be 1.0.0. If you have a stable API on which users have come to depend, you should be 1.0.0… The simplest thing to do is start your initial development release at 0.1.0." (Spec FAQ, item 11.)
 
-**Which version to start at for this tool:** start at **0.1.0**. Workbench's "public API" for consumers is its runtime contract: the `sync` script's host expectations (`docs/plans/**`, `openspec/changes/*`, `workbench.config.json` — `scripts/sync-data.mjs:34-36`, `scripts/config.mjs:138-140`), the env vars (`WORKBENCH_SOURCE_ROOT`, `WORKBENCH_PROJECT_NAME`, `WORKBENCH_REPOSITORY_URL` — `scripts/sync-data.mjs:30`, `scripts/sync-data.mjs:402-405`), and (if shipped) the `bin` entry. Breaking any of those in 0.y.z is a MINOR-or-PATCH judgment call you are allowed to make; move to 1.0.0 once the first host repo depends on it in steady use (per the FAQ's production-use criterion).
+**Which version to start at for this tool:** start at **0.1.0**. Workbench's "public API" for consumers is its runtime contract: the `sync` script's host expectations (`docs/plans/**`, `openspec/changes/*`, `workbench.config.json` — `scripts/commands/sync-data.mjs:34-36`, `scripts/host/config.mjs:138-140`), the env vars (`WORKBENCH_SOURCE_ROOT`, `WORKBENCH_PROJECT_NAME`, `WORKBENCH_REPOSITORY_URL` — `scripts/commands/sync-data.mjs:30`, `scripts/commands/sync-data.mjs:402-405`), and (if shipped) the `bin` entry. Breaking any of those in 0.y.z is a MINOR-or-PATCH judgment call you are allowed to make; move to 1.0.0 once the first host repo depends on it in steady use (per the FAQ's production-use criterion).
 
 ---
 
@@ -101,7 +101,7 @@ Primary docs: ["About releases"](https://docs.github.com/en/repositories/releasi
 
 - **pnpm workspace `link:` / `workspace:`:** unversioned by construction (points at a local checkout), defeats the pinned-SemVer goal; also the hosts are separate repos, not this workspace.
 - **Vendoring scripts:** no versioning, no updates, drift.
-- **Docker image on ghcr.io:** appropriate for server-like tools; wrong here — workbench must read the _host repo's working tree_ (`docs/plans/**`, `openspec/changes/*` — `scripts/sync-data.mjs:34-36`) and run _host-side_ git metadata queries (branch, commit, remote origin — `scripts/sync-data.mjs:400-413`). A container would need the host tree mounted and the host's git identity inside it; the payoff over a plain npm/git install is negative for a local dev dashboard.
+- **Docker image on ghcr.io:** appropriate for server-like tools; wrong here — workbench must read the _host repo's working tree_ (`docs/plans/**`, `openspec/changes/*` — `scripts/commands/sync-data.mjs:34-36`) and run _host-side_ git metadata queries (branch, commit, remote origin — `scripts/commands/sync-data.mjs:400-413`). A container would need the host tree mounted and the host's git identity inside it; the payoff over a plain npm/git install is negative for a local dev dashboard.
 
 ### Comparison table
 
@@ -119,17 +119,17 @@ Primary docs: ["About releases"](https://docs.github.com/en/repositories/releasi
 
 ### 4.1 Which paths `sync` assumes (verified in files)
 
-`scripts/sync-data.mjs`:
+`scripts/commands/sync-data.mjs`:
 
 - `appDirectory` = the package root (parent of `scripts/`) — line 8. All outputs go **inside the package**: `outputPath = join(appDirectory, "src/data.generated.ts")` — line 37.
-- Source root resolution — lines 24–33: `WORKBENCH_SOURCE_ROOT` env → `git rev-parse --show-superproject-working-tree` → `git rev-parse --show-toplevel` → `process.cwd()`. It reads `{root}/docs/plans/**` (lines 34–35, 418), `{root}/docs/dashboard-plan/status.md` (line 296), `{root}/openspec/changes/*/` (lines 36, 452–457), and loads `workbench.config.json` from the root (`scripts/config.mjs:138-140`).
+- Source root resolution — lines 24–33: `WORKBENCH_SOURCE_ROOT` env → `git rev-parse --show-superproject-working-tree` → `git rev-parse --show-toplevel` → `process.cwd()`. It reads `{root}/docs/plans/**` (lines 34–35, 418), `{root}/docs/dashboard-plan/status.md` (line 296), `{root}/openspec/changes/*/` (lines 36, 452–457), and loads `workbench.config.json` from the root (`scripts/host/config.mjs:138-140`).
 - Host git metadata queries run with `cwd = rootDirectory`: `remote.origin.url`, `branch --show-current`, `rev-parse HEAD`, `show -s --format=%cI HEAD` (lines 400–413), overridable via `WORKBENCH_REPOSITORY_URL` / `WORKBENCH_PROJECT_NAME`.
-- `package.json` scripts chain the app's own tooling: `sync` = `node scripts/sync-data.mjs && vp fmt --write src/data.generated.ts`; `dev` = `pnpm sync && vp dev --port 4051 --strictPort`; `build`/`test`/`check` all run `pnpm sync` first. `vp` comes from `vite-plus`, a **devDependency** resolved through the `catalog:` in `pnpm-workspace.yaml` (→ `npm:@voidzero-dev/vite-plus-core@0.2.8`). `vite.config.ts` imports `defineConfig` from `vite-plus` and pulls `@tanstack/router-plugin` + `@vitejs/plugin-react`; `index.html` mounts `/src/main.tsx` directly — this is a source-mode app, so there is no prebuilt-dist story today; any consumer must run this exact toolchain.
+- `package.json` scripts chain the app's own tooling: `sync` = `node scripts/commands/sync-data.mjs && vp fmt --write src/data.generated.ts`; `dev` = `pnpm sync && vp dev --port 4051 --strictPort`; `build`/`test`/`check` all run `pnpm sync` first. `vp` comes from `vite-plus`, a **devDependency** resolved through the `catalog:` in `pnpm-workspace.yaml` (→ `npm:@voidzero-dev/vite-plus-core@0.2.8`). `vite.config.ts` imports `defineConfig` from `vite-plus` and pulls `@tanstack/router-plugin` + `@vitejs/plugin-react`; `index.html` mounts `/src/main.tsx` directly — this is a source-mode app, so there is no prebuilt-dist story today; any consumer must run this exact toolchain.
 
 **Consequences when installed as a dependency:**
 
 1. **Toolchain availability:** for a _registry_ package, `devDependencies` are not installed for consumers (npm `package.json` docs: devDependencies are installed "when doing `npm link` or `npm install` from the root of a package"), so `vp`, `vitest`, the router plugin, React plugin and TypeScript would be missing and every script fails. Fix: move them into `dependencies` (the app _is_ the runtime), or ship a prebuilt dist — but a prebuilt dist bakes `src/data.generated.ts` in at build time and sync must regenerate it per host, so shipping source is the realistic option. (For the git-tag fallback channel, the documented build-flow for workspace git deps installs all deps including dev ones, which is why that channel works nearly as-is.)
-2. **Superproject detection:** the brief assumed detection breaks inside `node_modules`. Reading the code shows something subtler: `git rev-parse --show-toplevel` walks up to the nearest enclosing `.git`, and a pnpm-installed package (real path under the host's `node_modules/.pnpm/…`, with `import.meta.url` resolving symlinks) is still _inside the host working tree_, so detection likely still finds the host root in the default setup. It breaks when the store/virtual store is relocated outside the project, for global installs, or if the command is run from outside the host tree — that is exactly what the `process.cwd()` fallback (run from host root) and the explicit `WORKBENCH_SOURCE_ROOT` override are for (`scripts/sync-data.mjs:30-33`). Document `WORKBENCH_SOURCE_ROOT` as the supported contract for dependency installs rather than relying on git luck. _(This paragraph is reasoning from git/pnpm behavior plus the code, not an official-docs citation.)_
+2. **Superproject detection:** the brief assumed detection breaks inside `node_modules`. Reading the code shows something subtler: `git rev-parse --show-toplevel` walks up to the nearest enclosing `.git`, and a pnpm-installed package (real path under the host's `node_modules/.pnpm/…`, with `import.meta.url` resolving symlinks) is still _inside the host working tree_, so detection likely still finds the host root in the default setup. It breaks when the store/virtual store is relocated outside the project, for global installs, or if the command is run from outside the host tree — that is exactly what the `process.cwd()` fallback (run from host root) and the explicit `WORKBENCH_SOURCE_ROOT` override are for (`scripts/commands/sync-data.mjs:30-33`). Document `WORKBENCH_SOURCE_ROOT` as the supported contract for dependency installs rather than relying on git luck. _(This paragraph is reasoning from git/pnpm behavior plus the code, not an official-docs citation.)_
 3. **Writing `src/data.generated.ts` inside `node_modules`:** fragile in principle — `node_modules` is reinstallable and pnpm builds it from its content-addressable store, so anything written there can vanish on the next `pnpm install`. In practice the blast radius is small _for this app_ because every entry point (`dev`, `build`, `test`, `check`) runs `pnpm sync` first, so the file is regenerated before it is ever read. Mitigations, in order of preference: (a) keep as-is but document that the snapshot is disposable; (b) harden later with a host-provided output dir env var (e.g. `WORKBENCH_OUTPUT_DIR`) plus a small runtime indirection so the generated module is read from outside the package; (c) never have sync write anything to the host repo itself (it currently doesn't — README confirms `src/data.generated.ts` is ignored/generated).
 
 ### 4.2 `catalog:` at publish time
@@ -151,7 +151,7 @@ Primary docs: ["About releases"](https://docs.github.com/en/repositories/releasi
 
 Ship **source**, not a prebuilt `dist` — `vite.config.ts` + `index.html` show a source-mode Vite app whose data import is regenerated at sync time, so a consumer must run the app's own `vp dev`/`vp build` anyway.
 
-- Add a `bin` so hosts don't hand-write `pnpm --dir` paths: `"bin": { "workbench": "./bin.mjs" }` (npm docs: `bin` files are linked so consumers can run them "either directly by `npm exec`/`pnpm exec` or by name in other scripts"). `bin.mjs` resolves the source root (`WORKBENCH_SOURCE_ROOT` → `process.cwd()`), runs `node scripts/sync-data.mjs`, then spawns the package-local `vp dev --port 4051 --strictPort`.
+- Add a `bin` so hosts don't hand-write `pnpm --dir` paths: `"bin": { "workbench": "./bin.mjs" }` (npm docs: `bin` files are linked so consumers can run them "either directly by `npm exec`/`pnpm exec` or by name in other scripts"). `bin.mjs` resolves the source root (`WORKBENCH_SOURCE_ROOT` → `process.cwd()`), runs `node scripts/commands/sync-data.mjs`, then spawns the package-local `vp dev --port 4051 --strictPort`.
 - Host `package.json`:
 
 ```json
@@ -167,7 +167,7 @@ Ship **source**, not a prebuilt `dist` — `vite.config.ts` + `index.html` show 
 
 (Pin exact versions for an internal app; a `^0.2.0` range in 0.y.z effectively floats until the next breaking-ish minor — semver item 4.)
 
-- Config stays at the **host repo root** (`workbench.config.json`, loaded from the resolved root — `scripts/config.mjs:138-140`); the schema is shipped in the package, so hosts reference `$schema: "./node_modules/@quick-release/workbench/workbench.config.schema.json"` (or the package keeps a copy at the repo root for a stable relative path).
+- Config stays at the **host repo root** (`workbench.config.json`, loaded from the resolved root — `scripts/host/config.mjs:138-140`); the schema is shipped in the package, so hosts reference `$schema: "./node_modules/@quick-release/workbench/workbench.config.schema.json"` (or the package keeps a copy at the repo root for a stable relative path).
 
 ---
 
@@ -281,7 +281,7 @@ pnpm run workbench                              # → bin: sync against host roo
 
 ### What changes in the README consumption story
 
-Replace the submodule instructions ("initialize the submodule… `pnpm --dir apps/workbench dev`") with: (1) `pnpm add @quick-release/workbench@<pin>` plus the scoped-registry `.npmrc` (or the `github:#semver:` one-liner); (2) a host script `"workbench": "workbench"` instead of `pnpm run workbench` shelling into `apps/workbench`; (3) `WORKBENCH_SOURCE_ROOT` documented as the supported way to point at the host root when auto-detection can't see it (dependency installs, standalone checkouts); (4) the schema path moves from `./apps/workbench/workbench.config.schema.json` to the installed package path. The "Sources"/config sections are unchanged — the host-root conventions (`docs/plans/**`, `openspec/changes/`, `workbench.config.json`) are exactly what sync already reads (`scripts/sync-data.mjs:34-36`, `scripts/config.mjs:139`).
+Replace the submodule instructions ("initialize the submodule… `pnpm --dir apps/workbench dev`") with: (1) `pnpm add @quick-release/workbench@<pin>` plus the scoped-registry `.npmrc` (or the `github:#semver:` one-liner); (2) a host script `"workbench": "workbench"` instead of `pnpm run workbench` shelling into `apps/workbench`; (3) `WORKBENCH_SOURCE_ROOT` documented as the supported way to point at the host root when auto-detection can't see it (dependency installs, standalone checkouts); (4) the schema path moves from `./apps/workbench/workbench.config.schema.json` to the installed package path. The "Sources"/config sections are unchanged — the host-root conventions (`docs/plans/**`, `openspec/changes/`, `workbench.config.json`) are exactly what sync already reads (`scripts/commands/sync-data.mjs:34-36`, `scripts/host/config.mjs:139`).
 
 ---
 
@@ -317,4 +317,4 @@ Primary-source pages consulted (all fetched 2026-09-02):
 - https://github.com/googleapis/release-please-action
 - https://semantic-release.gitbook.io/semantic-release/
 
-Repo files cited: `package.json`, `pnpm-workspace.yaml`, `vite.config.ts`, `index.html`, `README.md`, `scripts/sync-data.mjs`, `scripts/config.mjs` (all under `/Users/valeriovaz/workspaces/getquick/banquinha/tools/workbench/`).
+Repo files cited: `package.json`, `pnpm-workspace.yaml`, `vite.config.ts`, `index.html`, `README.md`, `scripts/commands/sync-data.mjs`, `scripts/host/config.mjs` (all under `/Users/valeriovaz/workspaces/getquick/banquinha/tools/workbench/`).

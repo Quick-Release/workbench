@@ -9,12 +9,12 @@ import { execFileSync } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import { envWithoutGitContext } from "./git-context.mjs";
+import { envWithoutGitContext } from "../host/git-context.mjs";
 
 export const ensureHooksPath = ({ directory, hooksPath = ".githooks", ci = process.env.CI }) => {
   if (ci) return { enabled: false, reason: "ci" };
   // The probe and the config write target `directory`; the caller's git
-  // context is stripped (scripts/git-context.mjs) or it would redirect both.
+  // context is stripped (scripts/host/git-context.mjs) or it would redirect both.
   const options = { cwd: directory, stdio: "ignore", env: envWithoutGitContext() };
   try {
     execFileSync("git", ["rev-parse", "--git-dir"], options);
@@ -26,7 +26,7 @@ export const ensureHooksPath = ({ directory, hooksPath = ".githooks", ci = proce
 };
 
 const main = () => {
-  const appDirectory = join(dirname(fileURLToPath(import.meta.url)), "..");
+  const appDirectory = join(dirname(fileURLToPath(import.meta.url)), "../..");
   const { reason } = ensureHooksPath({ directory: appDirectory });
   // CI skips are the expected outcome there, so they stay silent; only a
   // real checkout without git infrastructure is worth a line of output.

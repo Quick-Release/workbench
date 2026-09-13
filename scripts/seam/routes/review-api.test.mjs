@@ -105,7 +105,7 @@ test("a malformed request URL is forwarded to next(error), never swallowed", asy
 // --- The run half (ticket #26): start, stream, cancel, single-run ---
 
 import { handleReviewRunCancel, handleReviewRunStart } from "./review-api.mjs";
-import { createRunRegistry } from "./review-runner.mjs";
+import { createRunRegistry } from "../review/review-runner.mjs";
 
 // A stub runner: the events are pre-scripted, `cancel` is observable, and
 // the captured target is what the endpoint resolved for the run.

@@ -1,5 +1,5 @@
-import { guardedApi, methodMismatch, readBody, sendJson } from "./api-shared.mjs";
-import { gateRejection } from "./request-gate.mjs";
+import { guardedApi, methodMismatch, readBody, sendJson } from "../middleware/api-shared.mjs";
+import { gateRejection } from "../middleware/request-gate.mjs";
 
 // The session-capture API (ticket #35): read-only proxies to the ingest
 // worker's /llm read endpoints, behind the shared request gate. The
