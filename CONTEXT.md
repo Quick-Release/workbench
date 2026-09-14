@@ -182,6 +182,58 @@ _Avoid_: session (that is capture's noun), job, task (none of them stream or hol
 Research and proposal correction started by the Developer through Workbench for one host-repo issue, ending at an explicitly approved issue brief rather than implementation. Its approved product boundary is distinct from the Issue agent (ADR 0014).
 _Avoid_: factory run (implies coding), Agent run (the issue agent's execution)
 
+**Context packet**:
+A bounded, versioned set of tracker, host-repository, skill, decision, and research evidence assembled for one clarification attempt, with provenance and coverage visible. It is evidence for the conversation, never permission to execute.
+_Avoid_: prompt (too narrow), context window (runtime-specific)
+
+**Capability profile**:
+The bounded set of data and actions a Workbench-controlled run may use, selected before the run and never expandable by host-repo content, provider output, or model output.
+_Avoid_: permission list (implementation detail), tool list (too narrow)
+
+**Approval binding**:
+The specific host, issue and context, provider and data destination, capability profile, and action covered by an explicit Developer approval; a material change makes that approval stale.
+_Avoid_: approval token (implementation detail), authorization (too broad)
+
+**Untrusted content**:
+Issue, source, documentation, skill, tool, or model content that may provide data or instructions but never changes a run's capability profile or approval.
+_Avoid_: prompt (too narrow), trusted instruction
+
+**Credential boundary**:
+The separation between credentials used by Workbench's adapters and the data or actions visible to a runtime; no generic credential access crosses it.
+_Avoid_: credential proxy (implementation detail), secret store (a storage mechanism)
+
+**Clarification attempt**:
+One Workbench-owned clarification lifecycle using one context packet, provider/data destination, and capability profile. A material input or policy change requires a new attempt.
+_Avoid_: retry (may hide a changed approval), Agent run (a separate coding workflow)
+
+**Clarification draft**:
+The mutable proposal of behavior, scope, exclusions, acceptance criteria, assumptions, evidence, and the visible issue-body diff. Saving a draft is not publication approval.
+_Avoid_: Issue brief (the draft may still be incomplete), answer (too vague)
+
+**Issue brief**:
+An implementation-ready statement of a work item’s problem or intent, scope, exclusions, acceptance, dependencies, and supporting evidence. Approval of a brief authorizes neither implementation nor any project command.
+_Avoid_: specification (reserved for the spec workflow), task (overloaded)
+
+**Pi conversation**:
+The runtime conversation and transcript backing an owned clarification, distinct from Session capture and from Workbench's clarification state. An external Pi conversation remains observed unless explicitly supported by a separate authority decision.
+_Avoid_: session (ambiguous with Session capture), transcript (describes the record, not the runtime conversation)
+
+**Readiness**:
+The independent condition of tracker eligibility, brief completeness, host capability, research sufficiency, or authorization for a requested action. Readiness is not one score and is not proof of successful implementation.
+_Avoid_: guarantee (overstates the evidence), status (overloaded)
+
+**Provenance**:
+The source, locator, observed revision or hash, retrieval time, and uncertainty attached to context or a claim. Provenance explains evidence; it does not grant authority.
+_Avoid_: trust (authority is a separate decision), citation (too narrow)
+
+**Command candidate**:
+A statically discovered command description with its invocation context, observed effects, and uncertainty. Discovery does not make it a verifier or permission to execute.
+_Avoid_: approved command (requires a separate decision), verifier (a different concept)
+
+**Verifier**:
+A separately approved check bound to an exact invocation, context, effects, prerequisites, and expected evidence. A verifier is not created merely because command discovery found a script.
+_Avoid_: test (a verifier may be broader than a test), command candidate (not approved)
+
 ### Execution and workspaces
 
 **Execution workspace**:
