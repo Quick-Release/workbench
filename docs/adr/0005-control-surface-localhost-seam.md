@@ -18,7 +18,7 @@ Ticket #44 asked whether the new dashboard views stay strictly visual. The decis
 - ADR 0001's consequence "the browser app still makes zero network calls" narrows to zero _remote_ network calls; the localhost execution seam is excepted. Reporting still happens only in sync, and the telemetry contract is unchanged.
 - Phase-1 action scope: triage-state moves, issue create/edit/comment, blocker-edge edits, sync trigger. Destructive or costly actions (close, wontfix, blocker-edge removal, and any future session spawn) confirm first; label moves fire directly; no undo in v1 — GitHub history is the audit log.
 - Static builds (no dev server) degrade action affordances to copy-the-command.
-- Starting agent sessions from the dashboard is the declared destination but gets its own decision; until then the session database is observed, never acted on.
+- Starting agent sessions from the dashboard was deferred to separate decisions: ADR 0010 covers the issue agent; ADR 0014 approves the owned-clarification product boundary, not its implementation. Externally started sessions and the observed session database do not acquire control authority.
 - The live-seam grilling ticket is absorbed by this decision: reads are live, served by the dev-server API.
 - The invariant gets one mechanical guard: a vitest source-scan (`src/architecture.test.ts`) asserting no `fetch()` outside `/api/`-relative URLs in `src/**` and no Node-builtin or tracker-client imports in browser code.
 - README's "read-only" wording is now wrong; rewording happens in the build slice.
