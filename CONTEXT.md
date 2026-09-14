@@ -182,12 +182,40 @@ _Avoid_: session (that is capture's noun), job, task (none of them stream or hol
 Research and proposal correction started by the Developer through Workbench for one host-repo issue, ending at an explicitly approved issue brief rather than implementation. Its approved product boundary is distinct from the Issue agent (ADR 0014).
 _Avoid_: factory run (implies coding), Agent run (the issue agent's execution)
 
+**Context packet**:
+A bounded, versioned set of tracker, host-repository, skill, decision, and research evidence assembled for one clarification attempt, with provenance and coverage visible. It is evidence for the conversation, never permission to execute.
+_Avoid_: prompt (too narrow), context window (runtime-specific)
+
+**Capability profile**:
+The immutable set of data, operations, tools, resources and destinations granted to a Workbench-controlled run. It is selected before the run and cannot be broadened by prompts, extensions, host-repo content, skills, provider output or model output.
+_Avoid_: permissions (too implementation-specific and too easily confused with Pi tool permissions), tool list (too narrow)
+
+**Approval binding**:
+The specific host, issue and context, provider and data destination, capability profile, and action covered by an explicit Developer approval; a material change makes that approval stale.
+_Avoid_: approval token (implementation detail), authorization (too broad)
+
+**Untrusted content**:
+Issue, source, documentation, skill, tool, or model content that may provide data or instructions but never changes a run's capability profile or approval.
+_Avoid_: prompt (too narrow), trusted instruction
+
+**Credential boundary**:
+The separation between credentials used by Workbench's adapters and the data or actions visible to a runtime; no generic credential access crosses it.
+_Avoid_: credential proxy (implementation detail), secret store (a storage mechanism)
+
 **Clarification attempt**:
 One Workbench-owned, revision-bound instance of Owned clarification carrying one immutable Context packet, approval binding and capability profile. A retry or material issue, context, provider or policy change starts a new attempt.
 _Avoid_: run (overloaded with Agent run and Review run)
 
+**Clarification draft**:
+The mutable proposal of behavior, scope, exclusions, acceptance criteria, assumptions, evidence, and the visible issue-body diff. Saving a draft is not publication approval.
+_Avoid_: Issue brief (the draft may still be incomplete), answer (too vague)
+
+**Issue brief**:
+An implementation-ready statement of a work item's problem or intent, scope, exclusions, acceptance, dependencies and supporting evidence. Approval of a brief authorizes neither implementation nor any project command.
+_Avoid_: specification (reserved for the spec workflow), task (overloaded)
+
 **Pi conversation**:
-The transcript and ordered/tree-shaped event history used by the shared Pi Chat Workspace boundary. It is not a process, an approval, or Session capture.
+The transcript and ordered/tree-shaped event history used by the shared Pi Chat Workspace boundary. It is not a process, an approval or Session capture.
 _Avoid_: transcript (describes content but not the conversation boundary), session capture (the opt-in reporting flow)
 
 **Managed Pi session**:
@@ -222,9 +250,51 @@ _Avoid_: session token (could be confused with provider credentials)
 A position used to reconcile ordered session evidence. A persisted Pi entry ID can help recover history, but it is not automatically a live transport sequence.
 _Avoid_: offset (does not capture tree-entry identity)
 
-**Capability profile**:
-The immutable set of operations, tools, resources and destinations granted to a session. Prompts, extensions, issue content, skills and model output cannot broaden it.
-_Avoid_: permissions (too implementation-specific and too easily confused with Pi tool permissions)
+**Readiness**:
+The independent condition of tracker eligibility, brief completeness, host capability, research sufficiency, or authorization for a requested action. Readiness is not one score and is not proof of successful implementation.
+_Avoid_: guarantee (overstates the evidence), status (overloaded)
+
+**Provenance**:
+The source, locator, observed revision or hash, retrieval time, and uncertainty attached to context or a claim. Provenance explains evidence; it does not grant authority.
+_Avoid_: trust (authority is a separate decision), citation (too narrow)
+
+**Command candidate**:
+A statically discovered command description with its invocation context, observed effects, and uncertainty. Discovery does not make it a verifier or permission to execute.
+_Avoid_: approved command (requires a separate decision), verifier (a different concept)
+
+**Verifier**:
+A separately approved check bound to an exact invocation, context, effects, prerequisites, and expected evidence. A verifier is not created merely because command discovery found a script.
+_Avoid_: test (a verifier may be broader than a test), command candidate (not approved)
+
+### Execution and workspaces
+
+**Execution workspace**:
+An isolated, run-owned checkout plus its backend-managed process, filesystem, network, resource and retention state. It is not the Developer's working tree and is not identified by a path alone.
+_Avoid_: worktree (a Git checkout primitive, not an isolation boundary), sandbox (an enforcement mechanism, not the Workbench resource)
+
+**Execution backend**:
+A narrow adapter that enforces an execution boundary and reports verifiable process, resource, filesystem and network facts. It is not the Workbench coordinator, workflow engine, approval store, verifier or publication service.
+_Avoid_: runner (already means the current Review/Agent subprocess runner), factory backend (implies a separate product)
+
+**Execution profile**:
+A versioned, approved set of backend, workspace, command, filesystem, network, credential, resource and artifact capabilities for a class of execution. Owned clarification does not use a coding execution profile.
+_Avoid_: factory run (implies an unbounded autonomous execution), mode (too vague)
+
+**Workspace owner**:
+The Workbench run and fencing identity authorized to inspect, retain, export or clean one Execution workspace. A matching path or branch name does not establish ownership.
+_Avoid_: path owner (a path is not an authority)
+
+**Retained workspace**:
+An Execution workspace deliberately preserved after failure or cancellation so its evidence can be inspected. Retention does not imply that the process is alive or that the workspace can be resumed.
+_Avoid_: recoverable workspace (retention does not promise recovery)
+
+**Quarantined workspace**:
+An Execution workspace whose process termination, ownership or cleanup state is uncertain. It cannot be reused or deleted until explicit reconciliation or discard establishes authority.
+_Avoid_: abandoned workspace (does not say whether deletion is safe)
+
+**Execution artifact**:
+A bounded, declared result exported from an Execution workspace, such as a patch, commit bundle, log, test evidence or diagnostic record. It is not a publication or proof of correctness.
+_Avoid_: output (too broad), deliverable (implies a reviewed result)
 
 ### Decisions and artifacts
 
