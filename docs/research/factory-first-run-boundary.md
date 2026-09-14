@@ -1,0 +1,76 @@
+# Factory 01: product boundary and first valuable result
+
+Work item: GH-159
+
+Research input for [#159](https://github.com/Quick-Release/workbench/issues/159), part of [#158](https://github.com/Quick-Release/workbench/issues/158). The human-confirmed decision is the issue's closing **Resolution**; [ADR 0014](../adr/0014-owned-clarification-boundary.md) records its authority boundary. Neither authorizes implementation or claims a successful pilot.
+
+## Provenance
+
+Research inspected local source at `d6f1c986a1fcc367fa100d5957e4b1c605f92982` and the intervening diff to [main at `2ccdb1a`](https://github.com/Quick-Release/workbench/tree/2ccdb1a513d8f7204775c5122d013f913a8e78e6). The execution code below is unchanged between those revisions. Issues were read through `gh`; external sources are linked below. No runner, permission-containment experiment, or product benchmark was executed. Documentation validation is not a product experiment.
+
+Source paths and line ranges below refer to that pinned revision, not an assurance about future main. No client task histories were supplied or invented. Source gaps show possible failure paths, not their frequency or cost to a Developer.
+
+## Current start-to-draft-PR journey
+
+The issue agent already performs issue → worktree → agent → commit → push → draft PR. Renaming that sequence does not establish a new product need.
+
+| Stage              | Source facts                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Start              | The pull-requests page offers an issue-number field and pulled Ollama-model picker. Health gates submission; there is no separate scope/approval preview. Health checks CLI/model availability, not brief quality. [`IssueAgentPanel.tsx:36–128`](https://github.com/Quick-Release/workbench/blob/2ccdb1a513d8f7204775c5122d013f913a8e78e6/src/components/IssueAgentPanel.tsx#L36); [`opencode-engine.mjs:245–329`](https://github.com/Quick-Release/workbench/blob/2ccdb1a513d8f7204775c5122d013f913a8e78e6/scripts/seam/review/opencode-engine.mjs#L245). |
+| Request and policy | The request schema enumerates inputs and requires exactly one target, but does not enforce engine/target pairing. The route resolves the host/base, checks the issue is open and applies client policy; that is not complete brief readiness. [`schema.ts:751–792`](https://github.com/Quick-Release/workbench/blob/2ccdb1a513d8f7204775c5122d013f913a8e78e6/src/schema.ts#L751); [`review-api.mjs:113–175,231–302`](https://github.com/Quick-Release/workbench/blob/2ccdb1a513d8f7204775c5122d013f913a8e78e6/scripts/seam/routes/review-api.mjs#L113).     |
+| Workspace          | Temporary path `workbench-issue-<n>` and branch `agent/issue-<n>` do not identify a unique host/run. Preparation force-removes the previous worktree and uses `git worktree add -B`. [`opencode-engine.mjs:151–180`](https://github.com/Quick-Release/workbench/blob/2ccdb1a513d8f7204775c5122d013f913a8e78e6/scripts/seam/review/opencode-engine.mjs#L151).                                                                                                                                                                                                |
+| Execute            | A fixed prompt asks OpenCode to read the issue/comments, follow repo instructions, implement, test/check and write `AGENT-SUMMARY.md`. It does not explicitly invoke the installed implement skill. [`opencode-engine.mjs:59–87,182–190`](https://github.com/Quick-Release/workbench/blob/2ccdb1a513d8f7204775c5122d013f913a8e78e6/scripts/seam/review/opencode-engine.mjs#L59).                                                                                                                                                                            |
+| Publish            | Agent exit success is followed by add, commit, push and draft-PR creation. The plan has no independent verifier, scope check, summary-content check or CI wait. [`opencode-engine.mjs:109–119,191–235`](https://github.com/Quick-Release/workbench/blob/2ccdb1a513d8f7204775c5122d013f913a8e78e6/scripts/seam/review/opencode-engine.mjs#L191).                                                                                                                                                                                                             |
+| Inspect/retry      | History is in memory, lacks structured commit/check/PR provenance and resets on restart. Re-run starts by issue number rather than saved execution state. [`review-api.mjs:41–55,319–348`](https://github.com/Quick-Release/workbench/blob/2ccdb1a513d8f7204775c5122d013f913a8e78e6/scripts/seam/routes/review-api.mjs#L41); [`PullRequestsPage.tsx:408–414`](https://github.com/Quick-Release/workbench/blob/2ccdb1a513d8f7204775c5122d013f913a8e78e6/src/components/PullRequestsPage.tsx#L408).                                                           |
+
+Workbench's [pre-commit hook](https://github.com/Quick-Release/workbench/blob/2ccdb1a513d8f7204775c5122d013f913a8e78e6/.githooks/pre-commit) runs check/test, but a different host repo need not have those hooks. Engine tests inspect generated plans with fake dependencies; they do not establish end-to-end success or containment.
+
+## Safety and recovery: findings, not the selected product justification
+
+- **Cancellation contract mismatch, static finding:** UI sends `opencode`, while `ReviewCancelRequestSchema` accepts only CodeRabbit/zcode. This prevents the request reaching underlying cancellation. Sources: `src/schema.ts:795–802`, `src/types.ts:557–559`, `src/components/PullRequestsPage.tsx:316–319`, and [`review-api.mjs:356–378`](https://github.com/Quick-Release/workbench/blob/2ccdb1a513d8f7204775c5122d013f913a8e78e6/scripts/seam/routes/review-api.mjs#L356). Not reproduced in this research.
+- **Disconnect is cancellation, not detachment:** stream close cancels the run; shutdown requests cancellation. The runner attempts process-group SIGTERM then escalation. Default step/output bounds are not a whole-run inference-spend budget. [`review-runner.mjs:152–180,230–274`](https://github.com/Quick-Release/workbench/blob/2ccdb1a513d8f7204775c5122d013f913a8e78e6/scripts/seam/review/review-runner.mjs#L152); `review-api.mjs:396,473–498`.
+- **Retention is not recovery:** failure initially retains work, but retry discards it. [#116](https://github.com/Quick-Release/workbench/issues/116) records prior disposable-Git reproductions of cross-host collisions and loss of an uncommitted fixture. Those are fixture observations recorded by that issue, not production histories or experiments executed here.
+- **Partial publication:** push precedes PR creation, so failure can leave a remote branch. There is no reconciliation/resume stage. The optional worktree base is not passed as `gh pr create --base`; the [GitHub CLI](https://cli.github.com/manual/gh_pr_create) has its own base resolution. `opencode-engine.mjs:209–238`.
+- **Eligibility is not readiness:** start policy does not establish complete brief/triage/ownership readiness; a planning ticket may reach an implementation prompt. [#115](https://github.com/Quick-Release/workbench/issues/115) separately records a static dependency-completeness concern. Neither establishes observed clarification cost.
+- **Not a security sandbox:** fixed orchestrator argv and selected agent permission denies do not demonstrate credential, network or arbitrary-process confinement. The agent inherits the server environment. [`opencode-engine.mjs:75–87`](https://github.com/Quick-Release/workbench/blob/2ccdb1a513d8f7204775c5122d013f913a8e78e6/scripts/seam/review/opencode-engine.mjs#L75); `review-runner.mjs:152–162`; [OpenCode permissions](https://opencode.ai/docs/permissions/); [Git worktree shared-state documentation](https://git-scm.com/docs/git-worktree).
+
+These findings merit separate maintenance decisions. The Developer selected **clarifying intent**, not interrupted coding runs, as the first problem to address.
+
+## Existing proposals and alternatives
+
+The following are proposals, not shipped guarantees:
+
+- [#120: Guided Skill Starter](https://github.com/Quick-Release/workbench/issues/120): bounded context preparation does not itself execute.
+- [#121: Agent Readiness](https://github.com/Quick-Release/workbench/issues/121): distinguish eligibility, brief completeness and local capability.
+- [#122: Checkpoints](https://github.com/Quick-Release/workbench/issues/122): portable handoff, not native process resumption.
+- [#133: Pi Chat Workspace](https://github.com/Quick-Release/workbench/issues/133): shared conversation boundary, owned versus attached/history sessions. Reuse must be decided, not presumed implemented.
+- [#127: DX index](https://github.com/Quick-Release/workbench/issues/127): reuse skills and existing workflow, not a second state machine or compulsory discovery for clear tickets.
+
+| Alternative                   | Honest assessment after grilling                                                                                                                                                                                         |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Harden existing runner        | Necessary comparator for execution problems, but does not directly resolve the selected clarification pain. Keep defects as separate maintenance.                                                                        |
+| Managed single-run capability | Could address ownership/recovery/verification. Those coding-run requirements do not follow from the approved issue/spec boundary.                                                                                        |
+| External factory              | Adds runtime, credentials, packaging and policy integration. No evidence here that it reduces intent-clarification effort. Not selected for the first scope.                                                             |
+| Proposal-first existing skill | Smallest experiment and fallback; can produce researched intent without a new UI. The Developer instead chose embedding to keep issue, proposal and evidence together. Incremental embedding value remains hypothetical. |
+| Embedded clarification        | Selected product direction, not an implementation architecture. Existing Pi-workspace/skill proposals should be reconciled in #160 rather than duplicated.                                                               |
+
+## External inputs
+
+- [Jake Saunders' experiment](https://blog.jakesaunders.dev/building-an-almost-fully-self-hosted-sandboxed-agentic-software-factory/) describes a sacrificial server, Forgejo/CI and deployment tooling; it also reports a later CSRF fix and remaining destructive/credential/network risks. Useful boundary questions, not Workbench reliability evidence.
+- [Firecrawl's framing](https://www.firecrawl.dev/blog/ai-software-factory) describes intake, isolation, verification and merge gates. Its statistics are not Workbench benchmarks; automatic intake, parallelism and deployment are unnecessary for the selected clarification result.
+- The [Druids discussion](https://news.ycombinator.com/item?id=47695666) leads to Ramure. Its [pinned primary README](https://github.com/fulcrumresearch/ramure/blob/d7675f1eaaae37d08b829cbb1022c685e352fc0a/README.md) describes Python 3.11+, Pi/tmux and local/Docker/Morph backends. Local is default and Docker documents host networking by default; these do not prove Workbench-compatible sandboxing or recovery.
+- [Spotify's engineering account](https://engineering.atspotify.com/2025/12/feedback-loops-background-coding-agents-part-3) supports separating verification from generation and publishing from agent authority, while acknowledging evaluation limits. It is not proof of universal pipeline success or clarification savings.
+
+## Representative journeys — illustrative, not observed histories
+
+| Journey           | Boundary after the human decision                                                                                                                                                                                                                |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Bug fix           | Where expected behavior is ambiguous, propose it with cited current behavior, scope and testable criteria; Developer corrects and approves the issue update. Do not claim the bug is fixed. A sufficiently clear ticket can skip clarification.  |
+| Narrow refactor   | Propose behavior to preserve and scope exclusions where missing. A clear refactor can remain in the existing implementation flow; clarification approval does not authorize code changes or substantiate performance gains.                      |
+| Ambiguous request | Research relevant facts, propose concrete intent with labeled assumptions, surface consequential choices, then revise with the Developer. Stop at approved issue/spec; missing material facts or decisions block an implementation-ready result. |
+
+## Remaining evidence and downstream decisions
+
+No concrete incident cost or baseline was supplied. The selected pain and preference are Developer decisions, not measured observations. The agreed six-task comparison and go/no-go rule are prospective; no improvement or pilot success is claimed.
+
+[#160](https://github.com/Quick-Release/workbench/issues/160) is next: determine minimal ownership/seams for embedded clarification, reconcile #133 and existing skills, and compare build/adopt against this narrower need. Subsequent threat-model, persistence, readiness, inspection and evaluation decisions must be narrowed accordingly. Coding workspace, revision verification and draft-PR delivery topics are not first-result requirements merely because the original map listed them. Do not silently close/rewrite those tickets or treat this research as authorization to build.

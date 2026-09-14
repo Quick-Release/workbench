@@ -1,0 +1,20 @@
+{
+  "file_scan_exclusions": [
+    "**/.agents",
+    "**/agent",
+    "**/.claude",
+    "**/.github",
+    "**/.zcode",
+    "**/.githooks",
+    "**/.git",
+    "**/.changeset",
+    "**/node_modules",
+    "**/dist",
+    "**/build",
+    "**/.next",
+    "**/*.log"
+  ],
+  "tab_size": 2,
+  "hard_tabs": false,
+  "format_on_save": "on"
+}

@@ -23,7 +23,7 @@ The single validated localhost API through which the browser reads live state an
 _Avoid_: write API (understates reads), backend (implies hosting)
 
 **Planning state**:
-What the dashboard may act on: issues, triage states, blocker edges, maps, decision tickets, and — through the issue agent (ADR 0010) — issue runs. Agent sessions remain observed, never acted on.
+What the dashboard may act on: issues, triage states, blocker edges, maps, decision tickets, and — through the issue agent (ADR 0010) — issue runs. Externally started agent sessions remain observed, never acted on; owned clarification is a separately approved product boundary (ADR 0014).
 _Avoid_: project data (vague)
 
 ### Reporting
@@ -175,6 +175,12 @@ _Avoid_: autonomous agent (overstates the fence), bot (misplaces the execution)
 **Agent run**:
 One execution of the issue agent against one issue, streamed as the same typed events as a review run and bounded like one — cancellable, time-limited, capped. A successful run ends in a draft PR; a failed run keeps its worktree for inspection.
 _Avoid_: session (that is capture's noun), job, task (none of them stream or hold the single-run guarantee)
+
+### Clarification
+
+**Owned clarification**:
+Research and proposal correction started by the Developer through Workbench for one host-repo issue, ending at an explicitly approved issue brief rather than implementation. Its approved product boundary is distinct from the Issue agent (ADR 0014).
+_Avoid_: factory run (implies coding), Agent run (the issue agent's execution)
 
 ### Decisions and artifacts
 
