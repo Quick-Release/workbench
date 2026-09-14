@@ -243,8 +243,8 @@ Creating a new conversation from an earlier conversation entry. It is distinct f
 _Avoid_: branch (overlaps with Git and Pi's internal tree terminology)
 
 **Controller lease**:
-The singular, fenced authority to submit commands to one managed Pi session. Viewers can observe but cannot write or control without the current lease.
-_Avoid_: session token (could be confused with provider credentials)
+The singular, fenced authority to mutate one Workbench-owned operational record and submit its authorized lifecycle operations, including commands for one managed Pi session. Viewers are read-only; lease expiry permits reconciliation but does not prove that the prior owner stopped.
+_Avoid_: session token (could be confused with provider credentials), lock (does not express ownership or fencing)
 
 **Session event cursor**:
 A position used to reconcile ordered session evidence. A persisted Pi entry ID can help recover history, but it is not automatically a live transport sequence.
@@ -295,6 +295,36 @@ _Avoid_: abandoned workspace (does not say whether deletion is safe)
 **Execution artifact**:
 A bounded, declared result exported from an Execution workspace, such as a patch, commit bundle, log, test evidence or diagnostic record. It is not a publication or proof of correctness.
 _Avoid_: output (too broad), deliverable (implies a reviewed result)
+
+### Run ownership and recovery
+
+**Operational run record**:
+The durable Workbench record of one approved run intent, its attempts, ownership, lifecycle, evidence references and human-resolution state. It is not a Pi transcript, Work Checkpoint, Session capture record or proof of a successful change.
+_Avoid_: run history (too weak about ownership), checkpoint (a separate human handoff)
+
+**Execution attempt**:
+One dispatch under an Operational run record. A retry creates a new attempt; an attempt with an unknown side effect is not resumed or replayed.
+_Avoid_: retry (an action that may create an attempt), run (the parent intent)
+
+**Run request**:
+One client submission that names or creates a run intent and is deduplicated across reconnects. Repeating a request must not silently create a second attempt.
+_Avoid_: prompt (a Pi input), run (the durable intent)
+
+**Fencing generation**:
+A monotonically increasing ownership epoch attached to a Controller lease and its mutations. A stale generation cannot write a late completion, cancellation, cleanup result or retry decision.
+_Avoid_: version (too broad), process ID (not a durable authority)
+
+**Reconciliation**:
+The explicit inspection of a durable run record against process, backend, workspace, revision and external-side-effect evidence after owner loss or an uncertain response. Reconciliation classifies uncertainty; it does not itself mean success.
+_Avoid_: resume (may imply replay), recovery (too broad and can overpromise)
+
+**Unknown outcome**:
+A state in which Workbench cannot prove whether a dispatched process or external operation had an effect. It requires reconciliation or human resolution and is never silently retried as if nothing happened.
+_Avoid_: failure (an unknown operation may have succeeded), timeout (one possible cause only)
+
+**Operational event cursor**:
+A position in the ordered evidence for one Operational run record, used to reconnect a viewer to a snapshot plus later events. An expired cursor produces an explicit gap rather than an invented complete history.
+_Avoid_: session event cursor (owned by Pi conversation history), offset (too implementation-specific)
 
 ### Decisions and artifacts
 
