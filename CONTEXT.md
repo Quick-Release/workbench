@@ -182,6 +182,36 @@ _Avoid_: session (that is capture's noun), job, task (none of them stream or hol
 Research and proposal correction started by the Developer through Workbench for one host-repo issue, ending at an explicitly approved issue brief rather than implementation. Its approved product boundary is distinct from the Issue agent (ADR 0014).
 _Avoid_: factory run (implies coding), Agent run (the issue agent's execution)
 
+### Execution and workspaces
+
+**Execution workspace**:
+An isolated, run-owned checkout plus its backend-managed process, filesystem, network, resource and retention state. It is not the Developer's working tree and is not identified by a path alone.
+_Avoid_: worktree (a Git checkout primitive, not an isolation boundary), sandbox (an enforcement mechanism, not the Workbench resource)
+
+**Execution backend**:
+A narrow adapter that enforces an execution boundary and reports verifiable process, resource, filesystem and network facts. It is not the Workbench coordinator, workflow engine, approval store, verifier or publication service.
+_Avoid_: runner (already means the current Review/Agent subprocess runner), factory backend (implies a separate product)
+
+**Execution profile**:
+A versioned, approved set of backend, workspace, command, filesystem, network, credential, resource and artifact capabilities for a class of execution. Owned clarification does not use a coding execution profile.
+_Avoid_: factory run (implies an unbounded autonomous execution), mode (too vague)
+
+**Workspace owner**:
+The Workbench run and fencing identity authorized to inspect, retain, export or clean one Execution workspace. A matching path or branch name does not establish ownership.
+_Avoid_: path owner (a path is not an authority)
+
+**Retained workspace**:
+An Execution workspace deliberately preserved after failure or cancellation so its evidence can be inspected. Retention does not imply that the process is alive or that the workspace can be resumed.
+_Avoid_: recoverable workspace (retention does not promise recovery)
+
+**Quarantined workspace**:
+An Execution workspace whose process termination, ownership or cleanup state is uncertain. It cannot be reused or deleted until explicit reconciliation or discard establishes authority.
+_Avoid_: abandoned workspace (does not say whether deletion is safe)
+
+**Execution artifact**:
+A bounded, declared result exported from an Execution workspace, such as a patch, commit bundle, log, test evidence or diagnostic record. It is not a publication or proof of correctness.
+_Avoid_: output (too broad), deliverable (implies a reviewed result)
+
 ### Decisions and artifacts
 
 **Decision**:
