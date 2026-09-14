@@ -4,7 +4,9 @@
 
 ---
 
-## 0. Summary / recommendation
+> **Decision update (2026-09-12):** This note was researched while the repository and package were private. ADR 0013 supersedes its private-tool distribution posture: the repository is now public and `@quick-release/workbench` is intended for the public npm registry. The analysis below remains historical evidence; wherever it calls public npm “rejected,” that verdict is superseded by ADR 0013.
+
+## 0. Summary / recommendation (historical; superseded by ADR 0013)
 
 **Observed facts that drive everything below**
 
@@ -69,14 +71,14 @@ Primary docs: ["Working with the npm registry"](https://docs.github.com/en/packa
 - **Consumer setup:** host `.npmrc` needs the `@quick-release:registry=…` mapping plus an auth token line; then `pnpm add @quick-release/workbench@<pinned>` resolves like any registry package (pnpm reads the same `.npmrc` config as npm).
 - **Costs:** classic PATs are legacy-flavored; every host repo needs registry config + token in CI; package must be publishable (no `"private": true` — see b).
 
-### b. npm package on the public npmjs.com registry
+### b. npm package on the public npmjs.com registry (historical analysis; decision superseded by ADR 0013)
 
 Primary docs: [`npm publish`](https://docs.npmjs.com/cli/commands/npm-publish), [`package.json`](https://docs.npmjs.com/cli/v11/configuring-npm/package-json), [`--access` default in npm config source](https://github.com/npm/cli/blob/latest/workspaces/config/lib/definitions/definitions.js).
 
 - `package.json` changes required: remove `"private": true` — "If you set `\"private\": true` in your package.json, then npm will refuse to publish it." (`package.json` docs, `private` field). If you want to pin to a specific registry, "use the `publishConfig` dictionary … to override the `registry` config param at publish-time" (`publishConfig` supports "the tag, registry or access").
-- **Access:** the default is "'public' for new packages, existing packages it will not change the current level" (npm `@npmcli/config` definitions, which generate the CLI's docs); to keep a scoped package non-public you must set `--access=restricted`. **A public registry publish therefore makes the code publicly viewable — incompatible with this private internal tool.** (A paid npm org could publish it restricted, at ongoing cost and vendor lock-in.)
+- **Access:** the default is "'public' for new packages, existing packages it will not change the current level" (npm `@npmcli/config` definitions, which generate the CLI's docs); to keep a scoped package non-public you must set `--access=restricted`. **At the time, a public registry publish would have made the code publicly viewable — incompatible with the then-private internal tool.** (A paid npm org could have published it restricted, at ongoing cost and vendor lock-in.)
 - `npm publish` includes only the `files` allowlist ("If there is a `files` list in package.json, then only the files specified will be included"); `package.json`, `README`, `LICENSE`, `main` and `bin` files are always included; `node_modules` and `pnpm-lock.yaml` are always excluded (`package.json` docs, `files` section).
-- Verdict: rejected for a private tool unless the org wants it world-readable.
+- Verdict at the time of research: rejected for a private tool unless the org wanted it world-readable. **Superseded by ADR 0013:** the tool is now public and this is the selected distribution posture.
 
 ### c. Install straight from git tags
 
@@ -105,13 +107,13 @@ Primary docs: ["About releases"](https://docs.github.com/en/repositories/releasi
 
 ### Comparison table
 
-| Channel                                      | SemVer pinning                                     | Host install auth                                                                          | Extra package.json work                                                     | Works with app-shaped repo                                        | Verdict                                |
-| -------------------------------------------- | -------------------------------------------------- | ------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------- | ----------------------------------------------------------------- | -------------------------------------- |
-| GitHub Packages (`@quick-release/workbench`) | Registry ranges/exact                              | `.npmrc` scope+token; CI `GITHUB_TOKEN` (own repo) or classic PAT `read:packages` (others) | Scope rename, drop `private`, `files`, `publishConfig`, move toolchain deps | Yes, if toolchain moves to `dependencies`                         | **Primary**                            |
-| Public npmjs.com                             | Registry ranges/exact                              | None                                                                                       | Drop `private`, `files`, `publishConfig`                                    | Yes                                                               | **Rejected** — publishes code publicly |
-| Git tag `#semver:`                           | `#semver:` range vs tags; lockfile pins resolution | Any git auth that can clone (SSH rewrite / credential helper)                              | Almost none (tags only)                                                     | Yes — full build install for workspace/git-dep repos (npm docs)   | **Fallback**                           |
-| Release-asset tarball                        | Exact URL per version                              | Private assets need read access; client auth path undocumented                             | Release-asset pipeline                                                      | Awkward auth                                                      | Rejected (private repo)                |
-| `link:`/vendoring/Docker                     | none / none / image tag                            | n/a / n/a / ghcr auth                                                                      | small/large                                                                 | link & vendor break pinning; Docker fights host-tree + git access | Rejected                               |
+| Channel                                      | SemVer pinning                                     | Host install auth                                                                          | Extra package.json work                                                     | Works with app-shaped repo                                        | Verdict                                                            |
+| -------------------------------------------- | -------------------------------------------------- | ------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------- | ----------------------------------------------------------------- | ------------------------------------------------------------------ |
+| GitHub Packages (`@quick-release/workbench`) | Registry ranges/exact                              | `.npmrc` scope+token; CI `GITHUB_TOKEN` (own repo) or classic PAT `read:packages` (others) | Scope rename, drop `private`, `files`, `publishConfig`, move toolchain deps | Yes, if toolchain moves to `dependencies`                         | **Fallback** — historical primary while public npm was unavailable |
+| Public npmjs.com                             | Registry ranges/exact                              | None                                                                                       | Drop `private`, `files`, `publishConfig`                                    | Yes                                                               | **Selected by ADR 0013** — the source and install are public       |
+| Git tag `#semver:`                           | `#semver:` range vs tags; lockfile pins resolution | Any git auth that can clone (SSH rewrite / credential helper)                              | Almost none (tags only)                                                     | Yes — full build install for workspace/git-dep repos (npm docs)   | **Fallback**                                                       |
+| Release-asset tarball                        | Exact URL per version                              | Private assets need read access; client auth path undocumented                             | Release-asset pipeline                                                      | Awkward auth                                                      | Rejected (private repo)                                            |
+| `link:`/vendoring/Docker                     | none / none / image tag                            | n/a / n/a / ghcr auth                                                                      | small/large                                                                 | link & vendor break pinning; Docker fights host-tree + git access | Rejected                                                           |
 
 ---
 
@@ -171,9 +173,9 @@ Ship **source**, not a prebuilt `dist` — `vite.config.ts` + `index.html` show 
 
 ---
 
-## 5. Recommended setup + adoption plan
+## 5. Historical recommended setup + adoption plan (superseded by ADR 0013)
 
-**Setup: Changesets (start 0.1.0) → publish `@quick-release/workbench` to GitHub Packages via `pnpm publish` in the changesets action; git-tag `#semver:` installs as the documented fallback.**
+**Historical setup:** Changesets (start 0.1.0) → publish `@quick-release/workbench` to GitHub Packages via `pnpm publish` in the changesets action; git-tag `#semver:` installs as the documented fallback. ADR 0013 changes the selected registry to public npm.
 
 ### Step 1 — `package.json` edits
 

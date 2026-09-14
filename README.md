@@ -11,14 +11,17 @@ submodule.
 
 ## Install it in a host repository
 
-Workbench is distributed through the public npm registry. In the host
-repository:
+Workbench's public distribution target is the public npm registry. The release
+workflow keeps GitHub Packages as a fallback until public publishing is
+configured. In the host repository:
 
 ```sh
 pnpm add @quick-release/workbench
 ```
 
-and add a script that runs the installed command:
+This command assumes public npm is the active release registry; until the
+public-access flip, use the release-tag alternative below. Add a script that
+runs the installed command:
 
 ```json
 {
@@ -68,8 +71,9 @@ detected project metadata.
 Versions follow [SemVer](https://semver.org/). To cut a release, describe the
 change in a changeset (`pnpm changeset`) inside your PR. After merging, an
 automated "Version Packages" PR aggregates the changesets; merging it bumps
-the version, writes the changelog, publishes the package to GitHub Packages,
-pushes the `vX.Y.Z` tag, and creates the GitHub release.
+the version, writes the changelog, publishes the package through the configured
+registry (public npm after the public-access flip, with GitHub Packages as the
+fallback until then), pushes the `vX.Y.Z` tag, and creates the GitHub release.
 
 ## Run a standalone checkout
 

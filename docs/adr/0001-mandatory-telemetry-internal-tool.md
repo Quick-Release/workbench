@@ -2,7 +2,7 @@
 
 Status: accepted
 
-Workbench is an internal company tool distributed through GitHub Packages, and the README previously promised the app never phones home. We decided that every install reports identified telemetry — agent usage, outcomes, health — to a company-owned Cloudflare Worker + D1 endpoint at sync time, with no opt-out, because the audience is employees and the registry itself already gates distribution to the company. Telemetry carries aggregates and identifiers only; commit messages and any other content reach the company exclusively through an explicit Developer submission (Content sourcing), never through Telemetry.
+Workbench's internal distribution is a company tool, and the README previously promised the app never phones home. We decided that every install in that distribution reports identified telemetry — agent usage, outcomes, health — to a company-owned Cloudflare Worker + D1 endpoint at sync time, with no opt-out, because the audience is employees and the distribution provisions the endpoint only to the company. Telemetry carries aggregates and identifiers only; commit messages and any other content reach the company exclusively through an explicit Developer submission (Content sourcing), never through Telemetry. ADR 0013 scopes this decision to internal installs; public installs are unconfigured and report nothing.
 
 ## Considered options
 
@@ -12,6 +12,6 @@ Workbench is an internal company tool distributed through GitHub Packages, and t
 
 ## Consequences
 
-- The README's no-phone-home invariant is amended: the browser app still makes zero network calls; all reporting happens in the `sync` script.
-- The endpoint authenticates installs with a shared ingest token baked into the package; the Cloudflare account choice is a deployment decision, not a design constraint.
+- The README's no-phone-home invariant is amended for Telemetry: the browser app still makes zero network calls; Telemetry reporting happens in the `sync` script. Content sourcing and session capture retain their separate explicit/configured boundaries.
+- The endpoint authenticates internal installs with a shared ingest token provisioned into their environment; the token is never committed or shipped in the package. The Cloudflare account choice is a deployment decision, not a design constraint.
 - `git log` is read locally to surface Highlights candidates; message text crosses the machine boundary only on explicit submission.

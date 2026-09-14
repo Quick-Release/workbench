@@ -15,12 +15,12 @@ The record also corrects itself: the worker documentation described the ingest t
 - **Keep GitHub Packages and grant external collaborators** — rejected: per-stranger token ceremony, and "the entire world" is not an enumerable grant list.
 - **Compile-time dual builds (internal/public distribution flags)** — rejected: environment gating already yields exactly the behavioral split; a second mechanism would be machinery in search of a difference.
 - **Fork a public edition without the reporting flows** — rejected: two codebases to review, and the single artifact carries no secrets, so one codebase serves both postures.
-- **Opt-in telemetry for public users** — deferred: there is nothing to opt into until a public endpoint exists; dormant-by-omission means offering one later is a configuration distribution, not a code change.
+- **Opt-in telemetry for Developers on public installs** — deferred: there is nothing to opt into until a public endpoint exists; dormant-by-omission means offering one later is a configuration distribution, not a code change.
 - **Public npm publish for a private tool** — the verdict `docs/research/versioning-and-distribution.md` recorded ("incompatible with this private internal tool") was premised on the tool staying private; it stopped being private, and #107 enacts the new posture.
 
 ## Consequences
 
-- The install gate is npmjs.com's, i.e. none. Operational prerequisites for the flip are the `NPM_TOKEN` repository secret and the `@quick-release` scope on npmjs.com; both are human actions, tracked on the work item.
+- Public access removes the install gate; the release workflow's operational flip is deliberately outside this decision record.
 - The MIT license lands with this decision; without it the public source stayed all-rights-reserved and the granted access was read-only in law as well as in fact.
 - Telemetry consumers must distinguish _unconfigured_ (skipped with reason `unconfigured`) from _reporting no usage_: a public install contributes absence, not zeros.
 - `worker/README.md` no longer describes the token as package-baked; the deploy notes and the legacy runbook name provisioning as the distribution path.
