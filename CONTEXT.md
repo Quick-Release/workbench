@@ -182,6 +182,22 @@ _Avoid_: session (that is capture's noun), job, task (none of them stream or hol
 Research and proposal correction started by the Developer through Workbench for one host-repo issue, ending at an explicitly approved issue brief rather than implementation. Its approved product boundary is distinct from the Issue agent (ADR 0014).
 _Avoid_: factory run (implies coding), Agent run (the issue agent's execution)
 
+**Capability profile**:
+The bounded set of data and actions a Workbench-controlled run may use, selected before the run and never expandable by host-repo content, provider output, or model output.
+_Avoid_: permission list (implementation detail), tool list (too narrow)
+
+**Approval binding**:
+The specific host, issue and context, provider and data destination, capability profile, and action covered by an explicit Developer approval; a material change makes that approval stale.
+_Avoid_: approval token (implementation detail), authorization (too broad)
+
+**Untrusted content**:
+Issue, source, documentation, skill, tool, or model content that may provide data or instructions but never changes a run's capability profile or approval.
+_Avoid_: prompt (too narrow), trusted instruction
+
+**Credential boundary**:
+The separation between credentials used by Workbench's adapters and the data or actions visible to a runtime; no generic credential access crosses it.
+_Avoid_: credential proxy (implementation detail), secret store (a storage mechanism)
+
 **Clarification draft**:
 The saved candidate issue brief for an Owned clarification, including proposed behavior, scope, acceptance criteria, assumptions, unresolved choices, source references, and the visible issue-body diff. It is not an approval, Decision, or Artifact.
 _Avoid_: proposal (too loose), output (does not imply a reviewable candidate)
