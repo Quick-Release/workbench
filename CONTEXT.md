@@ -182,6 +182,22 @@ _Avoid_: session (that is capture's noun), job, task (none of them stream or hol
 Research and proposal correction started by the Developer through Workbench for one host-repo issue, ending at an explicitly approved issue brief rather than implementation. Its approved product boundary is distinct from the Issue agent (ADR 0014).
 _Avoid_: factory run (implies coding), Agent run (the issue agent's execution)
 
+**Clarification draft**:
+The saved candidate issue brief for an Owned clarification, including proposed behavior, scope, acceptance criteria, assumptions, unresolved choices, source references, and the visible issue-body diff. It is not an approval, Decision, or Artifact.
+_Avoid_: proposal (too loose), output (does not imply a reviewable candidate)
+
+**Clarification attempt**:
+One bounded execution of an Owned clarification. An interruption or failure ends the attempt; an explicit retry starts another attempt.
+_Avoid_: Agent run, Review run, factory run
+
+**Issue brief**:
+The concrete behavior, scope, acceptance criteria, assumptions, and resolved choices that a Developer has reviewed as implementation-ready. Approval publishes only its exact issue-body update and does not authorize implementation.
+_Avoid_: specification (can imply implementation authorization), ticket (the tracker record)
+
+**Pi conversation**:
+The runtime conversation and transcript backing an owned clarification, distinct from Session capture and from Workbench's clarification state. An external Pi conversation remains observed unless explicitly supported by a separate authority decision.
+_Avoid_: session (ambiguous with Session capture), transcript (describes the record, not the runtime conversation)
+
 ### Decisions and artifacts
 
 **Decision**:
