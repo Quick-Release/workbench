@@ -198,6 +198,22 @@ _Avoid_: prompt (too narrow), trusted instruction
 The separation between credentials used by Workbench's adapters and the data or actions visible to a runtime; no generic credential access crosses it.
 _Avoid_: credential proxy (implementation detail), secret store (a storage mechanism)
 
+**Clarification draft**:
+The saved candidate issue brief for an Owned clarification, including proposed behavior, scope, acceptance criteria, assumptions, unresolved choices, source references, and the visible issue-body diff. It is not an approval, Decision, or Artifact.
+_Avoid_: proposal (too loose), output (does not imply a reviewable candidate)
+
+**Clarification attempt**:
+One bounded execution of an Owned clarification. An interruption or failure ends the attempt; an explicit retry starts another attempt.
+_Avoid_: Agent run, Review run, factory run
+
+**Issue brief**:
+The concrete behavior, scope, acceptance criteria, assumptions, and resolved choices that a Developer has reviewed as implementation-ready. Approval publishes only its exact issue-body update and does not authorize implementation.
+_Avoid_: specification (can imply implementation authorization), ticket (the tracker record)
+
+**Pi conversation**:
+The runtime conversation and transcript backing an owned clarification, distinct from Session capture and from Workbench's clarification state. An external Pi conversation remains observed unless explicitly supported by a separate authority decision.
+_Avoid_: session (ambiguous with Session capture), transcript (describes the record, not the runtime conversation)
+
 ### Decisions and artifacts
 
 **Decision**:
