@@ -187,8 +187,8 @@ A bounded, versioned set of tracker, host-repository, skill, decision, and resea
 _Avoid_: prompt (too narrow), context window (runtime-specific)
 
 **Capability profile**:
-The bounded set of data and actions a Workbench-controlled run may use, selected before the run and never expandable by host-repo content, provider output, or model output.
-_Avoid_: permission list (implementation detail), tool list (too narrow)
+The immutable set of data, operations, tools, resources and destinations granted to a Workbench-controlled run. It is selected before the run and cannot be broadened by prompts, extensions, host-repo content, skills, provider output or model output.
+_Avoid_: permissions (too implementation-specific and too easily confused with Pi tool permissions), tool list (too narrow)
 
 **Approval binding**:
 The specific host, issue and context, provider and data destination, capability profile, and action covered by an explicit Developer approval; a material change makes that approval stale.
@@ -203,20 +203,52 @@ The separation between credentials used by Workbench's adapters and the data or 
 _Avoid_: credential proxy (implementation detail), secret store (a storage mechanism)
 
 **Clarification attempt**:
-One Workbench-owned clarification lifecycle using one context packet, provider/data destination, and capability profile. A material input or policy change requires a new attempt.
-_Avoid_: retry (may hide a changed approval), Agent run (a separate coding workflow)
+One Workbench-owned, revision-bound instance of Owned clarification carrying one immutable Context packet, approval binding and capability profile. A retry or material issue, context, provider or policy change starts a new attempt.
+_Avoid_: run (overloaded with Agent run and Review run)
 
 **Clarification draft**:
 The mutable proposal of behavior, scope, exclusions, acceptance criteria, assumptions, evidence, and the visible issue-body diff. Saving a draft is not publication approval.
 _Avoid_: Issue brief (the draft may still be incomplete), answer (too vague)
 
 **Issue brief**:
-An implementation-ready statement of a work item’s problem or intent, scope, exclusions, acceptance, dependencies, and supporting evidence. Approval of a brief authorizes neither implementation nor any project command.
+An implementation-ready statement of a work item's problem or intent, scope, exclusions, acceptance, dependencies and supporting evidence. Approval of a brief authorizes neither implementation nor any project command.
 _Avoid_: specification (reserved for the spec workflow), task (overloaded)
 
 **Pi conversation**:
-The runtime conversation and transcript backing an owned clarification, distinct from Session capture and from Workbench's clarification state. An external Pi conversation remains observed unless explicitly supported by a separate authority decision.
-_Avoid_: session (ambiguous with Session capture), transcript (describes the record, not the runtime conversation)
+The transcript and ordered/tree-shaped event history used by the shared Pi Chat Workspace boundary. It is not a process, an approval or Session capture.
+_Avoid_: transcript (describes content but not the conversation boundary), session capture (the opt-in reporting flow)
+
+**Managed Pi session**:
+A Workbench-created Pi conversation with one Workbench-controlled live runtime and one authorized session-file writer. Its authority is narrower than the Developer's general Pi environment.
+_Avoid_: shared session (does not say who owns control), factory session (implies a separate product)
+
+**Attached session**:
+An existing Developer-owned Pi session exposed through an explicit observation pairing. Historical visibility does not grant permission to send, steer, resume, fork or terminate it.
+_Avoid_: imported session (suggests Workbench owns it), managed session (the ownership is different)
+
+**Session history**:
+A read of persisted conversation entries and branches. History does not imply a live runtime or permission to resume it.
+_Avoid_: resume (a control operation, not a read)
+
+**Session reconnect**:
+Reattaching a viewer to an existing managed runtime and reconciling a snapshot with an ordered event cursor. Reconnect never replays an accepted or uncertain request.
+_Avoid_: resume (starts a runtime from saved state), refresh (does not describe event reconciliation)
+
+**Session resume**:
+Starting a runtime from persisted conversation state after the prior runtime has ended. It is distinct from history and reconnect and is not part of the first managed clarification profile.
+_Avoid_: reconnect (the runtime lifetimes differ)
+
+**Session fork**:
+Creating a new conversation from an earlier conversation entry. It is distinct from history, reconnect and resume and requires its own capability.
+_Avoid_: branch (overlaps with Git and Pi's internal tree terminology)
+
+**Controller lease**:
+The singular, fenced authority to submit commands to one managed Pi session. Viewers can observe but cannot write or control without the current lease.
+_Avoid_: session token (could be confused with provider credentials)
+
+**Session event cursor**:
+A position used to reconcile ordered session evidence. A persisted Pi entry ID can help recover history, but it is not automatically a live transport sequence.
+_Avoid_: offset (does not capture tree-entry identity)
 
 **Readiness**:
 The independent condition of tracker eligibility, brief completeness, host capability, research sufficiency, or authorization for a requested action. Readiness is not one score and is not proof of successful implementation.
