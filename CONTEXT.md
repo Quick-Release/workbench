@@ -182,6 +182,50 @@ _Avoid_: session (that is capture's noun), job, task (none of them stream or hol
 Research and proposal correction started by the Developer through Workbench for one host-repo issue, ending at an explicitly approved issue brief rather than implementation. Its approved product boundary is distinct from the Issue agent (ADR 0014).
 _Avoid_: factory run (implies coding), Agent run (the issue agent's execution)
 
+**Clarification attempt**:
+One Workbench-owned, revision-bound instance of Owned clarification carrying one immutable Context packet, approval binding and capability profile. A retry or material issue, context, provider or policy change starts a new attempt.
+_Avoid_: run (overloaded with Agent run and Review run)
+
+**Pi conversation**:
+The transcript and ordered/tree-shaped event history used by the shared Pi Chat Workspace boundary. It is not a process, an approval, or Session capture.
+_Avoid_: transcript (describes content but not the conversation boundary), session capture (the opt-in reporting flow)
+
+**Managed Pi session**:
+A Workbench-created Pi conversation with one Workbench-controlled live runtime and one authorized session-file writer. Its authority is narrower than the Developer's general Pi environment.
+_Avoid_: shared session (does not say who owns control), factory session (implies a separate product)
+
+**Attached session**:
+An existing Developer-owned Pi session exposed through an explicit observation pairing. Historical visibility does not grant permission to send, steer, resume, fork or terminate it.
+_Avoid_: imported session (suggests Workbench owns it), managed session (the ownership is different)
+
+**Session history**:
+A read of persisted conversation entries and branches. History does not imply a live runtime or permission to resume it.
+_Avoid_: resume (a control operation, not a read)
+
+**Session reconnect**:
+Reattaching a viewer to an existing managed runtime and reconciling a snapshot with an ordered event cursor. Reconnect never replays an accepted or uncertain request.
+_Avoid_: resume (starts a runtime from saved state), refresh (does not describe event reconciliation)
+
+**Session resume**:
+Starting a runtime from persisted conversation state after the prior runtime has ended. It is distinct from history and reconnect and is not part of the first managed clarification profile.
+_Avoid_: reconnect (the runtime lifetimes differ)
+
+**Session fork**:
+Creating a new conversation from an earlier conversation entry. It is distinct from history, reconnect and resume and requires its own capability.
+_Avoid_: branch (overlaps with Git and Pi's internal tree terminology)
+
+**Controller lease**:
+The singular, fenced authority to submit commands to one managed Pi session. Viewers can observe but cannot write or control without the current lease.
+_Avoid_: session token (could be confused with provider credentials)
+
+**Session event cursor**:
+A position used to reconcile ordered session evidence. A persisted Pi entry ID can help recover history, but it is not automatically a live transport sequence.
+_Avoid_: offset (does not capture tree-entry identity)
+
+**Capability profile**:
+The immutable set of operations, tools, resources and destinations granted to a session. Prompts, extensions, issue content, skills and model output cannot broaden it.
+_Avoid_: permissions (too implementation-specific and too easily confused with Pi tool permissions)
+
 ### Decisions and artifacts
 
 **Decision**:
