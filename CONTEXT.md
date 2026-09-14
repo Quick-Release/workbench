@@ -1,6 +1,6 @@
 # Workbench
 
-A local dashboard that renders a host repo's planning and development work live and starts actions on it through the execution seam. It ships in two postures — the company's internal installs, and public installs, where every company-reporting flow is dormant because it is never provisioned (ADR 0013). Its two reporting flows have different consent postures and must never be conflated.
+A local dashboard that renders a host repo's planning and development work live and starts actions on it through the execution seam. It ships in two postures — the company's internal installs, and public installs, where every company-reporting flow is dormant because it is never provisioned (ADR 0013). Its reporting flows have different consent postures and must never be conflated.
 
 ## Language
 

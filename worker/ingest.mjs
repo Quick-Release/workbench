@@ -1,7 +1,8 @@
 // Ingest endpoint for workbench Telemetry and Submissions (ADR 0001).
 // A pure fetch handler: request + D1 binding in, response out, so the
 // tests drive it directly without a runtime. Auth is a shared bearer
-// token (registry membership is the company boundary); validation is
+// token (the token itself is the company boundary, not registry membership);
+// validation is
 // strict on required identity fields and type-checked on enrichment.
 // The deploy entry (worker.mjs) composes the same pieces with the Agents
 // SDK and the session-capture proxy (#35) mounted behind the gate.

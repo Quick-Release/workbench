@@ -3,11 +3,13 @@
 **Date:** 2026-09-04
 **Sources:** Part A primary — repo source read on this date (`src/routes/*`, `src/components/layout/*`, `src/router.tsx`, `src/routeTree.gen.ts`, `vite.config.ts`, `package.json`). Part B primary — official sites/docs/repos as cited per tool.
 
+> **Public-access update (2026-09-12):** This research predates the public-access decision. Repository visibility, package-registry, and private-repository pricing statements below are historical; ADR 0013 is the current posture.
+
 ## TL;DR
 
 - **New page = 2 file edits, 0 manual codegen.** Create `src/routes/<name>.tsx` with `createFileRoute`, add a `linkOptions` entry + item in `src/components/layout/nav-main.tsx`. The TanStack Router Vite plugin regenerates `src/routeTree.gen.ts` automatically on dev/build; no CLI command needed.
 - **"fallow" is real**: `fallow-rs/fallow`, a free MIT-licensed Rust codebase-intelligence CLI for TS/JS (dead code, circular deps, duplication). Complementary to CodeRabbit, not a competitor.
-- **CodeRabbit** is the strongest AI-review option; this repo is private (publishes to `npm.pkg.github.com`, `package.json:18-20`), so the free tier gives summaries only — full review needs $24/dev/mo.
+- **CodeRabbit** is the strongest AI-review option; this research was written while the repo was private (it now targets public npm), so its free-tier comparison below reflects the old posture and should not be used as the current pricing decision.
 - Repo already has: changesets, a release CI workflow, and vite-plus `fmt`/`lint` — so Biome/ESLint/Prettier/changesets recommendations below are "already covered".
 
 ---
@@ -75,7 +77,7 @@ Stack context: TypeScript, Vite (+ `vite-plus` which already provides `fmt`/`lin
 
 ### The two named tools
 
-**CodeRabbit** — AI code review as a GitHub App. Reviews every PR with line-by-line comments, can be wired to review agent-authored PRs. Install: sign in at [coderabbit.ai](https://coderabbit.ai), install the GitHub App on `Quick-Release/workbench`, optionally add a `.coderabbit.yaml` ([docs.coderabbit.ai](https://docs.coderabbit.ai)). Pricing: free tier is permanent but limited to PR summarization + release notes on private repos; **OSS/public repos get Pro-tier reviews free**; paid starts at $24/dev/mo (Essentials, annual) with a 14-day Pro trial ([coderabbit.ai/pricing](https://www.coderabbit.ai/pricing), [docs.coderabbit.ai/management/plans](https://docs.coderabbit.ai/management/plans)). Since this repo is private, meaningful review requires a paid seat or accepting summary-only. Setup effort: GitHub App, ~5 minutes, zero config files required.
+**CodeRabbit** — AI code review as a GitHub App. Reviews every PR with line-by-line comments, can be wired to review agent-authored PRs. Install: sign in at [coderabbit.ai](https://coderabbit.ai), install the GitHub App on `Quick-Release/workbench`, optionally add a `.coderabbit.yaml` ([docs.coderabbit.ai](https://docs.coderabbit.ai)). Pricing: free tier is permanent but limited to PR summarization + release notes on private repos; **OSS/public repos get Pro-tier reviews free**; paid starts at $24/dev/mo (Essentials, annual) with a 14-day Pro trial ([coderabbit.ai/pricing](https://www.coderabbit.ai/pricing), [docs.coderabbit.ai/management/plans](https://docs.coderabbit.ai/management/plans)). Since this research predates the public-access decision, its private-repo pricing conclusion is historical; confirm the current public-repo plan before choosing a seat. Setup effort: GitHub App, ~5 minutes, zero config files required.
 
 **Fallow** (`fallow-rs/fallow`) — verified: a free, MIT-licensed, Rust-based **codebase intelligence** tool for TypeScript/JavaScript, not an AI reviewer. Single binary detects unused code (files/exports/types/deps), circular dependencies, duplication, complexity hotspots, architecture boundary violations, and CSS drift; deterministic, 100+ framework plugins; ships as CLI (`npx fallow`), GitHub Action (`fallow-rs/fallow@v3`), and VS Code extension (LSP). Optional paid "Fallow Runtime" layer adds production-coverage evidence ([github.com/fallow-rs/fallow](https://github.com/fallow-rs/fallow), [GitHub Marketplace action](https://github.com/marketplace/actions/fallow-codebase-intelligence)). Particularly relevant here: this codebase is partly agent-generated, and Fallow's dead-code/duplication checks are exactly the failure mode of agent code. `npx fallow recommend` auto-detects the stack and proposes a config; `npx fallow audit` gates only newly-introduced findings, which suits a PR check. Setup effort: one devDependency + optional workflow step; no config needed to start.
 
@@ -94,18 +96,18 @@ The two are complementary: Fallow = deterministic structural analysis (free), Co
 
 ### Shortlist
 
-| Tool                    | Verdict         | Why                                                                                       | Cost                            | Setup                                  |
-| ----------------------- | --------------- | ----------------------------------------------------------------------------------------- | ------------------------------- | -------------------------------------- |
-| Fallow                  | **Install now** | Free dead-code/dup/circular-dep analysis; ideal for agent-generated TS                    | Free (MIT)                      | `pnpm add -D fallow` + optional Action |
-| Renovate                | **Install now** | Dependency pins on RCs/betas drift without it                                             | Free                            | GitHub App + `renovate.json`           |
-| PR CI workflow          | **Install now** | `pnpm check`/`test` currently only run on main pushes                                     | Free (minutes)                  | ~10-line YAML                          |
-| CodeRabbit              | **Maybe**       | Best-in-class AI review, but private repo ⇒ $24/dev/mo for real reviews; try 14-day trial | Free tier summaries; $24/dev/mo | GitHub App                             |
-| Socket                  | **Maybe**       | Supply-chain risk on RC/beta deps                                                         | Paid for private                | GitHub App                             |
-| lefthook                | **Maybe**       | Local fmt speed; CI already enforces                                                      | Free                            | config file                            |
-| Graphite                | **Skip**        | Process change, not a gap                                                                 | Free tier                       | App + CLI                              |
-| CodeQL                  | **Skip**        | Private repo ⇒ GHAS paid                                                                  | $                               | none                                   |
-| Biome / ESLint+Prettier | **Skip**        | vite-plus already does fmt/lint                                                           | Free                            | —                                      |
-| Changesets / Dependabot | **Skip**        | Changesets already in; Renovate preferred over Dependabot                                 | Free                            | —                                      |
+| Tool                    | Verdict         | Why                                                                                 | Cost                                    | Setup                                  |
+| ----------------------- | --------------- | ----------------------------------------------------------------------------------- | --------------------------------------- | -------------------------------------- |
+| Fallow                  | **Install now** | Free dead-code/dup/circular-dep analysis; ideal for agent-generated TS              | Free (MIT)                              | `pnpm add -D fallow` + optional Action |
+| Renovate                | **Install now** | Dependency pins on RCs/betas drift without it                                       | Free                                    | GitHub App + `renovate.json`           |
+| PR CI workflow          | **Install now** | `pnpm check`/`test` currently only run on main pushes                               | Free (minutes)                          | ~10-line YAML                          |
+| CodeRabbit              | **Maybe**       | Best-in-class AI review; this row reflects the pre-public-access pricing comparison | Confirm current public-repo plan        | GitHub App                             |
+| Socket                  | **Maybe**       | Supply-chain risk on RC/beta deps                                                   | Paid for private                        | GitHub App                             |
+| lefthook                | **Maybe**       | Local fmt speed; CI already enforces                                                | Free                                    | config file                            |
+| Graphite                | **Skip**        | Process change, not a gap                                                           | Free tier                               | App + CLI                              |
+| CodeQL                  | **Revisit**     | The private-repo assumption in this historical shortlist no longer holds            | Verify current public-repo availability | none                                   |
+| Biome / ESLint+Prettier | **Skip**        | vite-plus already does fmt/lint                                                     | Free                                    | —                                      |
+| Changesets / Dependabot | **Skip**        | Changesets already in; Renovate preferred over Dependabot                           | Free                                    | —                                      |
 
 ---
 
