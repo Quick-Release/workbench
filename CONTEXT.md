@@ -298,6 +298,46 @@ _Avoid_: local CI (does not express the publication boundary), pre-commit hook (
 The requirement for current-head remote CI and human approval after publication and before merge. Passing the Inner publication gate never implies that a Candidate commit is eligible to merge.
 _Avoid_: verification gate (ambiguous about which boundary), release gate (merge need not be a release)
 
+**Publication intent**:
+The durable, uniquely identified plan for one remote delivery, binding its run and candidate-producing attempt, host repository, publishing identity, exact Candidate commit and base, Verification bundle, immutable branch and Review payload. Later publication attempts reconcile the same intent rather than changing its bindings or creating another publication.
+_Avoid_: retry key (too narrow), PR request (omits Git publication and evidence), run (owns broader work)
+
+**Publication approval**:
+The Developer's separate authority to complete one exact Publication intent, including another dispatch only when prior non-dispatch is proven or the operation is independently safe to converge. It is committed before the first remote mutation; implementation approval and Verification eligibility do not imply it.
+_Avoid_: push permission (too narrow), request permission (one intent may require reconciled requests), implementation approval (a different authority), deploy approval (publication is not deployment)
+
+**Expected PR**:
+The one draft pull request a Publication intent identifies before GitHub assigns its immutable remote identity, through its canonical repository, unique head branch and commit, base revision, intent marker and Review payload digest. Ambiguous or partially matching pull requests are not adopted.
+_Avoid_: existing PR (existence does not prove identity), branch PR (omits base, revision and payload), latest PR (ordering is not identity)
+
+**Review payload**:
+The immutable, revision-bound issue intent, changed scope, pre-publication evidence, claims, failure history, side-effect posture and remaining uncertainty delivered for human review. The Publisher verifies it but does not generate, reinterpret or add later remote observations to it.
+_Avoid_: PR description (only one rendering), agent summary (an unverified input), review approval (a human decision)
+
+**Publication receipt**:
+The content-addressed, Workbench-owned evidence of one Publication intent's approved bindings, remote operations, read-backs, failures and reconciliation. A PR body may project it for a reviewer but is not the authoritative record.
+_Avoid_: PR body (mutable presentation), push log (omits the PR and reconciliation), success message (collapses evidence)
+
+**Publisher**:
+The Workbench-owned authority that reconciles and, when necessary, transfers one publication-eligible Candidate commit from a trusted object source and performs the minimum remote Git and draft-PR writes covered by a Publication approval. It derives a reserved immutable branch and treats candidate-controlled content and configuration as data, never privileged instructions.
+_Avoid_: agent (the candidate cannot publish), Git wrapper (understates reconciliation and authority), release service (publication is not release)
+
+**Published draft**:
+A reconciled delivery state proving that the intended draft pull request exists and its remote head is the exact Candidate commit covered by the Verification bundle. Its branch is immutable: a different Candidate commit requires a new publication rather than updating the draft.
+_Avoid_: successful run (conflates lifecycles), delivered (hides draft and revision), ready for review (a later state)
+
+**Delivery profile**:
+The host maintainer's versioned, expiring approval of publication credentials, remote destinations, branch protections, privileged paths and pre-merge integrations, backed by repository observations and an explicit side-effect inventory. Unknown, stale, privileged or mismatched policy fails closed.
+_Avoid_: repository settings (too narrow), CI configuration (only one source of side effects), execution profile (governs a different authority)
+
+**Ready for human review**:
+A Published draft whose exact current head, refreshable review evidence under #124, successful required remote checks and Delivery profile satisfy the prerequisites for a human to begin the merge-gating review. Pending, missing, stale, skipped, cancelled or failing checks remain non-ready; readiness is neither human approval nor merge eligibility.
+_Avoid_: published (an earlier state), approved (a human decision), green (hides distinct evidence)
+
+**Human merge instruction**:
+The Developer's explicit approval to merge one exact Candidate commit after reviewing its current base, Publication receipt, current review evidence and required CI. Revision or evidence drift makes the instruction stale; automated review and GitHub mergeability are not substitutes.
+_Avoid_: approval (too broad), PR approval (may be automated or stale), mergeable (a platform observation)
+
 ### Execution and workspaces
 
 **Execution workspace**:
