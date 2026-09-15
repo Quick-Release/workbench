@@ -266,6 +266,38 @@ _Avoid_: approved command (requires a separate decision), verifier (a different 
 A separately approved check bound to an exact invocation, context, effects, prerequisites, and expected evidence. A verifier is not created merely because command discovery found a script.
 _Avoid_: test (a verifier may be broader than a test), command candidate (not approved)
 
+**Verification recipe**:
+The independently approved, versioned set of mandatory Verifiers for one host repo and task profile. Candidate changes may be evidence reviewed by the recipe but never authority to weaken it.
+_Avoid_: test command (too narrow), agent checklist (not independent), discovered scripts (not approved)
+
+**Verification evidence**:
+An independently recorded Verifier result bound to the exact candidate, recipe and execution context. Only fresh, complete passing evidence satisfies a mandatory Verifier; missing, failed, inconclusive, infrastructure-error and stale results remain distinct.
+_Avoid_: agent claim (not independent), green status (hides provenance and freshness), test result (too narrow)
+
+**Candidate commit**:
+The immutable commit assembled by Workbench from an exported change and proposed for publication. Verification and publication bind to this exact commit and its base; any content or ancestry change creates a different candidate.
+_Avoid_: workspace (mutable), patch (does not fully identify the resulting tree and base), branch (a movable reference)
+
+**Verification exception**:
+A human's single-use approval to publish one exact Candidate commit despite identified non-passing Verification evidence. It preserves and exposes the failed or unknown result rather than converting it to a pass.
+_Avoid_: override (suggests the result changed), waiver (does not express the exact binding), ignore (hides the decision)
+
+**Verification bundle**:
+The content-addressed publication input that joins one Candidate commit with its base, Verification recipe, individual Verification evidence, aggregate decision and any Verification exception. Publication succeeds only when the remote change is proven to be that exact candidate.
+_Avoid_: build artifact (only one possible input), check summary (omits binding and evidence), branch status (bound to a movable reference)
+
+**Model-based scope review**:
+An optional, provenance-bearing model assessment of whether a Candidate commit appears consistent with its Issue brief. It may require human attention but never certifies correctness, overrules a deterministic Verifier or grants a Verification exception.
+_Avoid_: AI verifier (implies deterministic authority), LLM approval (the model cannot approve publication)
+
+**Inner publication gate**:
+The requirement for a complete Verification bundle before a Candidate commit may first cross a remote Git publication boundary. It is distinct from later current-head CI and human review.
+_Avoid_: local CI (does not express the publication boundary), pre-commit hook (bypassable candidate-repository behavior)
+
+**Outer delivery gate**:
+The requirement for current-head remote CI and human approval after publication and before merge. Passing the Inner publication gate never implies that a Candidate commit is eligible to merge.
+_Avoid_: verification gate (ambiguous about which boundary), release gate (merge need not be a release)
+
 ### Execution and workspaces
 
 **Execution workspace**:
