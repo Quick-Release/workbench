@@ -394,6 +394,30 @@ _Avoid_: resume (may imply replay), recovery (too broad and can overpromise)
 A state in which Workbench cannot prove whether a dispatched process or external operation had an effect. It requires reconciliation or human resolution and is never silently retried as if nothing happened.
 _Avoid_: failure (an unknown operation may have succeeded), timeout (one possible cause only)
 
+**Failure classification**:
+A Workbench-owned typed interpretation of an observed attempt outcome that determines the permitted next action while keeping known failure, unsupported, policy denial, cancellation and Unknown outcome distinct.
+_Avoid_: error (a cause or diagnostic), status (overloaded)
+
+**Repair**:
+A fresh Execution attempt intended to address a known candidate failure within an unchanged approved Issue brief, scope, capability profile and Verification recipe; it produces a new Candidate commit.
+_Avoid_: resume (the old attempt is not continued), patch (does not identify the new candidate)
+
+**Usage budget**:
+The approved, durable accounting envelope for one Operational run record, spanning its Execution attempts and restarts while keeping provider-reported usage, estimates and unknown values distinct from hard resource limits.
+_Avoid_: quota (provider-controlled availability), allowance (subscription terminology)
+
+**Failure signature**:
+A bounded, normalized identity of a repeated failure, including relevant Verifier or recipe and candidate/base context where applicable, used to detect missing progress across attempts.
+_Avoid_: error message (unstable and unbounded)
+
+**Awaiting-human**:
+A lifecycle state in which Workbench will dispatch nothing further until the Developer makes an explicit decision; it does not claim that an in-flight process was paused.
+_Avoid_: paused (does not say what is waiting), stopped (termination may not be complete)
+
+**Escalation record**:
+A bounded operational handoff containing trusted failure evidence, remaining authority and the next human decision; it is not a Work Checkpoint, Pi transcript or recovery proof.
+_Avoid_: alert (too narrow about evidence), checkpoint (a separate human handoff)
+
 **Operational event cursor**:
 A position in the ordered evidence for one Operational run record, used to reconnect a viewer to a snapshot plus later events. An expired cursor produces an explicit gap rather than an invented complete history.
 _Avoid_: session event cursor (owned by Pi conversation history), offset (too implementation-specific)
