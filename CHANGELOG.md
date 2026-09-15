@@ -1,5 +1,11 @@
 # @quick-release/workbench
 
+## 0.13.2
+
+### Patch Changes
+
+- fed87aa: Install the Effect skills (`effect-ts`, `effect-v3-to-v4`) from `Effect-TS/skills` alongside the existing set, so agents working this Effect 4 codebase get the library's own conventions.
+
 ## 0.13.1
 
 ### Patch Changes
