@@ -21,6 +21,7 @@ const appDirectory = join(dirname(fileURLToPath(import.meta.url)), "../..");
 
 const BOOT_TIMEOUT_MS = 120_000;
 const POLL_INTERVAL_MS = 500;
+const REQUEST_TIMEOUT_MS = 5_000;
 // Workers test resources must never ride in the artifact: worker/ is the
 // runtime test source tree, and vite.worker.config.ts is the test-only
 // config that imports the dev-only plugin. The shipped vite config must not
@@ -156,6 +157,24 @@ const awaitServing = async (child, port, timeoutMs) => {
   const exited = new Promise((resolveExit) => {
     child.once("exit", (code, signal) => resolveExit({ code, signal }));
   });
+  // One request at a time, each hard-bounded: a cold-start request can hang
+  // (Vite's dependency optimizer accepts the connection, then reloads the
+  // server mid-flight), and an unbounded fetch would stall this loop past
+  // the deadline.
+  const serving = async () => {
+    for (const host of ["localhost", "127.0.0.1"]) {
+      for (const path of ["/", "/api/skills"]) {
+        const response = await fetch(`http://${host}:${port}${path}`, {
+          signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+        });
+        if (response.status !== 200)
+          throw new Error(`${path} answered ${response.status}, expected 200:\n${tail()}`);
+      }
+    }
+  };
+  // Two consecutive clean passes: the first can complete just before the
+  // optimizer's "dependencies changed, reloading" restart drops it.
+  let consecutivePasses = 0;
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const exitedEarly = await Promise.race([
@@ -164,18 +183,15 @@ const awaitServing = async (child, port, timeoutMs) => {
     ]);
     if (exitedEarly) throw new Error(`installed CLI exited before serving:\n${tail()}`);
     try {
-      for (const host of ["localhost", "127.0.0.1"]) {
-        for (const path of ["/", "/api/skills"]) {
-          const response = await fetch(`http://${host}:${port}${path}`);
-          if (response.status !== 200)
-            throw new Error(`${path} answered ${response.status}, expected 200:\n${tail()}`);
-        }
-      }
+      await serving();
+      consecutivePasses += 1;
     } catch (cause) {
       if (cause.message.includes("expected 200")) throw cause;
+      consecutivePasses = 0;
       continue; // not serving yet — keep polling until the deadline
     }
-    return tail;
+    if (consecutivePasses >= 2) return tail;
+    await delay(1_000);
   }
   throw new Error(`installed CLI did not serve within ${timeoutMs}ms:\n${tail()}`);
 };
