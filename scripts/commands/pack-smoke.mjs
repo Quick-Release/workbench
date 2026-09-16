@@ -177,6 +177,9 @@ const awaitServing = async (child, port, timeoutMs) => {
           const response = await fetch(`http://${host}:${port}${path}`, {
             signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
           });
+          // Drain the body — undici keeps the socket pooled until it is
+          // consumed, and an undrained probe would leak one per poll round.
+          await response.body?.cancel()?.catch(() => {});
           if (response.status !== 200) served = false;
         } catch {
           served = false; // refused or hung — not the bound stack (or not ready yet)
