@@ -8,7 +8,7 @@ import { setWorkflowState, useWorkflowMode, useWorkflowState } from "../hooks/us
 import { board } from "../lib/board";
 import { issueActionBody, issueActionRoute } from "../lib/issue-actions";
 import { issueParamFromSearch } from "../lib/issue-param";
-import { workItemIdNumberText } from "../lib/work-item-id";
+import { workItemIdNumberText } from "../lib/work-item-id.mjs";
 import { parsePhaseMoveResult } from "../schema";
 import type { PhaseMoveTarget } from "../types";
 

@@ -7,8 +7,8 @@ import type {
 import { phaseMoveTargets } from "../types";
 import { deriveDisplayState, type DisplayCaveat } from "./display-state";
 import { frontier, frontierItemFromWorkItem, indexWorkItems, openBlockers } from "./frontier";
-import { phaseClockLine, type PhaseClockLine } from "./phase-clock";
-import { byIssueNumber } from "./work-item-id";
+import { phaseClockLine, type PhaseClockLine } from "./phase-clock.mjs";
+import { byIssueNumber } from "./work-item-id.mjs";
 
 // The flow board's derivation (ticket #146, the read-only board): pure over
 // the workflow payload — placement, chips, caveats, and warnings — so the

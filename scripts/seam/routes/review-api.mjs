@@ -7,7 +7,7 @@ import {
   parseReviewHistory,
   parseReviewRunRequest,
 } from "../../../src/schema.ts";
-import { evaluateClientGate, openClientBugs } from "../../../src/lib/client-priority.ts";
+import { evaluateClientGate, openClientBugs } from "../../../src/lib/client-priority.mjs";
 import { guardedApi, methodMismatch, readBody, sendJson } from "../middleware/api-shared.mjs";
 import { ghPullRequestLoader } from "../ai/ai-sources.mjs";
 import { gateRejection } from "../middleware/request-gate.mjs";

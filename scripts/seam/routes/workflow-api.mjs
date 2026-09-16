@@ -21,7 +21,7 @@ import {
   parseWorkflowStatePayload,
   parseClosedClientTickets,
 } from "../../../src/schema.ts";
-import { byIssueNumber, workItemIdNumber } from "../../../src/lib/work-item-id.ts";
+import { byIssueNumber, workItemIdNumber } from "../../../src/lib/work-item-id.mjs";
 import { deriveWorkItem } from "../../tracker/labels.mjs";
 import { ghIssueRecord } from "../../tracker/gh-view.mjs";
 import { collectClientTickets } from "../../tracker/client-tickets.mjs";

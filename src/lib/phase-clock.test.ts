@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import type { WorkItemRecord } from "../types";
-import { phaseClockLine, phaseSinceFromEvents } from "./phase-clock";
+import { phaseClockLine, phaseSinceFromEvents } from "./phase-clock.mjs";
 
 const item = (overrides: Partial<WorkItemRecord> = {}): WorkItemRecord => ({
   id: "GH-8",

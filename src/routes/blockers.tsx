@@ -9,7 +9,7 @@ import {
   issueParamFromSearch,
   mapParamFromSearch,
 } from "../lib/issue-param";
-import { workItemIdNumberText } from "../lib/work-item-id";
+import { workItemIdNumberText } from "../lib/work-item-id.mjs";
 
 type BlockersSearch = {
   map?: string;

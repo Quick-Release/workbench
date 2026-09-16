@@ -1,5 +1,5 @@
 import type { ArtifactRecord, DecisionRecord } from "../types";
-import { compareWorkItemIds } from "./work-item-id";
+import { compareWorkItemIds } from "./work-item-id.mjs";
 
 // The decisions view's index (ticket #63): records regrouped by work item —
 // ADR, resolution, and spec records stay distinct but side by side, research

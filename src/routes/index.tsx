@@ -7,7 +7,7 @@ import { overviewData } from "../data";
 import { useWorkflowMode, useWorkflowState } from "../hooks/use-workflow-state";
 import { useSyncTrigger } from "../hooks/use-sync-trigger";
 import { issueParamFromSearch } from "../lib/issue-param";
-import { workItemIdNumberText } from "../lib/work-item-id";
+import { workItemIdNumberText } from "../lib/work-item-id.mjs";
 
 const searchSchema = z.object({
   // The detail panel's param (ticket #60): `?issue=NN` / `?issue=new`,

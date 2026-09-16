@@ -1,6 +1,6 @@
 import type { TriageState, TrackerMapRecord, WorkItemRecord } from "../types";
-import { compareByClientTier } from "./client-priority";
-import { workItemIdNumberText } from "./work-item-id";
+import { compareByClientTier } from "./client-priority.mjs";
+import { workItemIdNumberText } from "./work-item-id.mjs";
 
 // The triage view's lanes (ticket #59): an Intake lane — the triage skill's
 // surface of unlabeled ∪ needs-triage issues with map children excluded — and

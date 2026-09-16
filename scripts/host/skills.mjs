@@ -1,7 +1,7 @@
 import { readdir, readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 
-import { mattPocockSkillSource } from "../../src/lib/skills.ts";
+import { mattPocockSkillSource } from "../../src/lib/skills.mjs";
 
 const MATT_POCOCK_SOURCE = mattPocockSkillSource.repository;
 

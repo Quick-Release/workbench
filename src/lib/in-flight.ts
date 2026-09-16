@@ -1,5 +1,5 @@
 import type { WorkItemRecord } from "../types";
-import { compareByClientTier } from "./client-priority";
+import { compareByClientTier } from "./client-priority.mjs";
 import { deriveDisplayState } from "./display-state";
 
 // The in-flight bucket (ticket #62): the assigned work a Developer resumes

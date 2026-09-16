@@ -1,5 +1,5 @@
 import { fetchIssuesByLabel } from "./issues.mjs";
-import { clientBugKind, clientFeedbackKind } from "../../src/lib/client-priority.ts";
+import { clientBugKind, clientFeedbackKind } from "../../src/lib/client-priority.mjs";
 
 export const CLIENT_TICKET_LABELS = [clientBugKind, clientFeedbackKind];
 

@@ -12,8 +12,8 @@ import {
   layoutFlowGraph,
 } from "@/lib/flow-layout";
 import { GraphView, type GraphNodeDatum } from "@/components/GraphView";
-import { skillClassification, skillFlowEdges } from "@/data/skill-flow";
-import { favoriteSkillIds, mattPocockSkillSource, perSkillInstallCommand } from "@/lib/skills";
+import { skillClassification, skillFlowEdges } from "@/data/skill-flow.mjs";
+import { favoriteSkillIds, mattPocockSkillSource, perSkillInstallCommand } from "@/lib/skills.mjs";
 import type { OverviewData, SkillRecord, SkillsStatus } from "@/types";
 
 const ROLE_TAG = {

@@ -10,7 +10,7 @@ import {
   compareByClientTier,
   evaluateClientGate,
   openClientBugs,
-} from "./client-priority";
+} from "./client-priority.mjs";
 
 const item = (number: number, overrides: Partial<WorkItemRecord> = {}): WorkItemRecord => ({
   id: `GH-${number}`,

@@ -1,14 +1,17 @@
+// Plain ESM so the installed CLI's raw-Node sync can import it from
+// node_modules, where Node refuses to type-strip TypeScript (GH-195); types
+// live in the sibling .d.mts.
 export const mattPocockSkillSource = {
   id: "matt-pocock",
   name: "Matt Pocock Skills",
   repository: "mattpocock/skills",
   repositoryUrl: "https://github.com/mattpocock/skills",
   installCommand: "npx skills@latest add mattpocock/skills --all",
-} as const;
+};
 
 // Mirrors the seam's per-skill install (scripts/seam/routes/skills-api.mjs) for the
 // static-build copy-the-command degradation.
-export const perSkillInstallCommand = (id: string) =>
+export const perSkillInstallCommand = (id) =>
   `npx skills@latest add ${mattPocockSkillSource.repository} --skill ${id}`;
 
 // The favorites lens over the flow graph — a filter, not a second home.
@@ -25,4 +28,4 @@ export const favoriteSkillIds = [
   "to-tickets",
   "triage",
   "setup-matt-pocock-skills",
-] as const;
+];

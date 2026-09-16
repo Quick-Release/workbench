@@ -12,8 +12,8 @@ import {
   fetchOpenIssues,
   fetchSubIssues,
 } from "./issues.mjs";
-import { phaseClockable, phaseSinceFromEvents } from "../../src/lib/phase-clock.ts";
-import { workItemIdNumber } from "../../src/lib/work-item-id.ts";
+import { phaseClockable, phaseSinceFromEvents } from "../../src/lib/phase-clock.mjs";
+import { workItemIdNumber } from "../../src/lib/work-item-id.mjs";
 import { CLIENT_TICKET_LABELS, collectClientTickets } from "./client-tickets.mjs";
 import { lineEdgesForBody, mergeBlockerEdges } from "./edges.mjs";
 import { resolutionDecisionFromIssue, sortDecisions, specDecisionFromIssue } from "./decisions.mjs";

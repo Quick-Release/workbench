@@ -3,7 +3,7 @@ import { useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { ClientCoverageNote, ClientTicketRow } from "@/components/ClientTicketList";
-import { clientAttention } from "@/lib/client-priority";
+import { clientAttention } from "@/lib/client-priority.mjs";
 import { deriveDisplayState } from "@/lib/display-state";
 import { inFlightBuckets } from "@/lib/in-flight";
 import {
@@ -12,7 +12,7 @@ import {
   type FrontierStrip as FrontierStripData,
   type Recommendation,
 } from "@/lib/recommendation";
-import { workItemIdNumberText } from "@/lib/work-item-id";
+import { workItemIdNumberText } from "@/lib/work-item-id.mjs";
 
 import type { OverviewData, WorkflowStatePayload } from "../types";
 

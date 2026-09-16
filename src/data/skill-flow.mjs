@@ -8,7 +8,9 @@
 // Draft transcribed from .agents/skills/ask-matt/SKILL.md and the approved
 // flow-graph prototype (decision ticket #50), which is the landing design.
 
-import type { SkillClassification, SkillFlowEdge } from "../types";
+// Plain ESM so the installed CLI's raw-Node sync can import it from
+// node_modules, where Node refuses to type-strip TypeScript (GH-195); types
+// live in the sibling .d.mts.
 
 export const skillFlowClassification = {
   "grill-with-docs": {
@@ -204,7 +206,7 @@ export const skillFlowClassification = {
     blurb: "Writing shape reference. Upstream work in progress.",
     when: "",
   },
-} satisfies Record<string, SkillClassification>;
+};
 
 export const skillFlowEdges = [
   // spine progression
@@ -233,11 +235,11 @@ export const skillFlowEdges = [
   { from: "implement", to: "code-review", kind: "runs-internally" },
   { from: "tdd", to: "codebase-design", kind: "runs-internally" },
   { from: "improve-codebase-architecture", to: "codebase-design", kind: "runs-internally" },
-] satisfies readonly SkillFlowEdge[];
+];
 
 // The offline floor for the catalog collector: used only when the upstream
 // trees fetch and the last-good generated data are both unavailable.
-export const offlineFallbackCatalog: Array<{ id: string; category: string }> = [
+export const offlineFallbackCatalog = [
   { id: "ask-matt", category: "engineering" },
   { id: "claude-handoff", category: "in-progress" },
   { id: "code-review", category: "engineering" },
@@ -310,5 +312,4 @@ export const curatedPenOrder = [
   "writing-shape",
 ];
 
-export const skillClassification = (id: string): SkillClassification | undefined =>
-  (skillFlowClassification as Record<string, SkillClassification>)[id];
+export const skillClassification = (id) => skillFlowClassification[id];

@@ -1,5 +1,5 @@
-import { offlineFallbackCatalog } from "../../src/data/skill-flow.ts";
-import { mattPocockSkillSource } from "../../src/lib/skills.ts";
+import { offlineFallbackCatalog } from "../../src/data/skill-flow.mjs";
+import { mattPocockSkillSource } from "../../src/lib/skills.mjs";
 import { installedSkillIds } from "../host/skills.mjs";
 
 // ADR 0006: the Catalog (which skills exist, id + category) is fetched from

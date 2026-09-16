@@ -9,7 +9,7 @@ import {
 } from "@/hooks/use-workflow-state";
 import { useSyncTrigger } from "@/hooks/use-sync-trigger";
 import { syncedAgo } from "@/lib/freshness";
-import { clientAttention, openClientBugs } from "@/lib/client-priority";
+import { clientAttention, openClientBugs } from "@/lib/client-priority.mjs";
 import { recommendNextAction, type Recommendation } from "@/lib/recommendation";
 
 type SiteHeaderProps = {

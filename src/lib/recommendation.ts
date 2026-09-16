@@ -4,13 +4,13 @@ import type {
   WorkflowStatePayload,
   WorkItemRecord,
 } from "../types";
-import { clientKindFor, compareByClientTier } from "./client-priority";
+import { clientKindFor, compareByClientTier } from "./client-priority.mjs";
 import { deriveDisplayState } from "./display-state";
 import { frontier, frontierItemFromWorkItem } from "./frontier";
 import { inFlightBuckets } from "./in-flight";
 import { byMapOrderThenNumber, mapOrderIndex } from "./map-order";
 import { triageLanes } from "./triage";
-import { workItemIdLabel } from "./work-item-id";
+import { workItemIdLabel } from "./work-item-id.mjs";
 
 // The ordered priority table (spec #54, "Derivation", extended by ADR 0012):
 // the recommendation engine is a pure function over the snapshot, layering

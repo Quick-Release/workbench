@@ -5,25 +5,28 @@
 // ids (`RN-graph-rendering`) parse too: their namespace is everything
 // before the last dash and their non-numeric suffix counts as number 0 —
 // enough for the stable id order they participate in.
+//
+// Plain ESM so the installed CLI's raw-Node scripts (the sync) can import
+// it from node_modules, where Node refuses to type-strip TypeScript
+// (GH-195); types live in the sibling .d.mts.
 
 /** The id's namespace: everything before the last dash (`GH` in `GH-41`). */
-export const workItemIdNamespace = (id: string): string => id.slice(0, id.lastIndexOf("-"));
+export const workItemIdNamespace = (id) => id.slice(0, id.lastIndexOf("-"));
 
 /** The numeric suffix, 0 when the suffix is not a number (`41` in `GH-41`). */
-export const workItemIdNumber = (id: string): number =>
-  Number(id.slice(id.lastIndexOf("-") + 1)) || 0;
+export const workItemIdNumber = (id) => Number(id.slice(id.lastIndexOf("-") + 1)) || 0;
 
 /** The bare number as text — the `?issue=NN` param and GitHub-url spelling. */
-export const workItemIdNumberText = (id: string): string => id.slice(id.lastIndexOf("-") + 1);
+export const workItemIdNumberText = (id) => id.slice(id.lastIndexOf("-") + 1);
 
 /** The display label (`#41`) the views render beside the title. */
-export const workItemIdLabel = (id: string): string => `#${workItemIdNumberText(id)}`;
+export const workItemIdLabel = (id) => `#${workItemIdNumberText(id)}`;
 
 /** Stable id order: namespace first, numerically within it. */
-export const compareWorkItemIds = (left: string, right: string): number =>
+export const compareWorkItemIds = (left, right) =>
   workItemIdNamespace(left).localeCompare(workItemIdNamespace(right)) ||
   workItemIdNumber(left) - workItemIdNumber(right);
 
 /** Records sorted by their id's issue number ascending. */
-export const byIssueNumber = <T extends { id: string }>(left: T, right: T): number =>
+export const byIssueNumber = (left, right) =>
   workItemIdNumber(left.id) - workItemIdNumber(right.id);

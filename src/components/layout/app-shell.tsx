@@ -4,7 +4,7 @@ import type { OverviewData } from "@/types";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useWorkflowState } from "@/hooks/use-workflow-state";
-import { openClientBugs } from "@/lib/client-priority";
+import { openClientBugs } from "@/lib/client-priority.mjs";
 import { AppSidebar } from "./app-sidebar";
 import { SiteHeader } from "./site-header";
 

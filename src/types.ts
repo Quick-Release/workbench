@@ -1,3 +1,9 @@
+// The client-label vocabulary's runtime value lives in src/lib/client-priority.mjs:
+// the installed CLI's sync scripts load that module under raw Node, where src
+// TypeScript cannot be imported (GH-195); this module re-exports it so the
+// vocabularies cannot drift.
+import { clientTicketKinds } from "./lib/client-priority.mjs";
+
 export const serviceStatuses = ["connected", "skipped", "error"] as const;
 
 export const skillFlowRoles = [
@@ -124,8 +130,8 @@ export type TrackerCategory = (typeof trackerCategories)[number];
 // wording; `client-bug` wins when both labels ride, and a `client-feedback`
 // issue categorized `bug` receives bug-tier treatment so inconsistent tagging
 // cannot bypass the gate. The kind is derived from the source labels by
-// src/lib/client-priority.ts — never stored on the record.
-export const clientTicketKinds = ["client-bug", "client-feedback"] as const;
+// src/lib/client-priority.mjs — never stored on the record.
+export { clientTicketKinds };
 
 export type ClientTicketKind = (typeof clientTicketKinds)[number];
 

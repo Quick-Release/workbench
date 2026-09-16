@@ -1,24 +1,15 @@
-import type { WorkItemRecord } from "../types";
-
 // GH-149: time-in-phase. The clock's only source is GitHub's own label-event
 // history — the latest `labeled` event for the resolved phase's label, so
 // re-entering a phase resets the clock — never a second store of phase
 // history. The derivations are pure: the collector hands over wire events,
 // the board hands over a record and a read time.
+//
+// Plain ESM so the installed CLI's raw-Node sync can import it from
+// node_modules, where Node refuses to type-strip TypeScript (GH-195); types
+// live in the sibling .d.mts.
 
-// The slice of GitHub's issue-events wire shape the clock reads. Everything
-// optional: malformed entries are skipped, never guessed from.
-export type IssueEvent = {
-  event?: string;
-  label?: { name?: string };
-  created_at?: string;
-};
-
-export const phaseSinceFromEvents = (
-  events: readonly IssueEvent[] | undefined,
-  label: string,
-): string | null => {
-  let latest: number | null = null;
+export const phaseSinceFromEvents = (events, label) => {
+  let latest = null;
   for (const entry of events ?? []) {
     if (entry?.event !== "labeled" || entry.label?.name !== label) continue;
     const at = Date.parse(entry.created_at ?? "");
@@ -33,12 +24,7 @@ export const phaseSinceFromEvents = (
 // (a failed read, or an older snapshot). Decision tickets and pre-flow items
 // show no clock at all: they place without a phase, so any duration would be
 // fabricated.
-export type PhaseClockLine = {
-  text: string;
-  source: "phase" | "last-touched";
-};
-
-const durationText = (age: number) => {
+const durationText = (age) => {
   if (age < 60_000) return "just now";
   if (age < 3_600_000) return `${Math.floor(age / 60_000)}m`;
   if (age < 86_400_000) return `${Math.floor(age / 3_600_000)}h`;
@@ -50,10 +36,10 @@ const durationText = (age: number) => {
 // only a map or a plain work item with a resolved phase can be clocked. The
 // collector walks exactly these records and the display rule reads the same
 // predicate, so the rule has one home.
-export const phaseClockable = (record: WorkItemRecord): boolean =>
+export const phaseClockable = (record) =>
   (record.kind === null || record.kind === "map") && record.phase !== null;
 
-export const phaseClockLine = (record: WorkItemRecord, now: number): PhaseClockLine | null => {
+export const phaseClockLine = (record, now) => {
   if (!phaseClockable(record)) return null;
   const since = record.phaseSince === undefined ? NaN : Date.parse(record.phaseSince);
   if (!Number.isNaN(since))

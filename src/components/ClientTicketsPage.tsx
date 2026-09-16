@@ -5,8 +5,8 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { ClientCoverageNote, ClientTicketRow, formatAge } from "@/components/ClientTicketList";
-import { clientAttention, clientWaitingReason } from "@/lib/client-priority";
-import { workItemIdNumberText } from "@/lib/work-item-id";
+import { clientAttention, clientWaitingReason } from "@/lib/client-priority.mjs";
+import { workItemIdNumberText } from "@/lib/work-item-id.mjs";
 
 import type { ClosedClientTickets, WorkItemRecord, WorkflowStatePayload } from "../types";
 

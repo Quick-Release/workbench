@@ -23,7 +23,7 @@ import {
   SidebarMenuItem,
 } from "@/components/ui/sidebar";
 import { useWorkflowState } from "@/hooks/use-workflow-state";
-import { openClientBugs } from "@/lib/client-priority";
+import { openClientBugs } from "@/lib/client-priority.mjs";
 
 // linkOptions keeps each entry typed against the registered route tree,
 // including the required search defaults.
