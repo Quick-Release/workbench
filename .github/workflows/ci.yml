@@ -37,3 +37,24 @@ jobs:
       - run: pnpm test
         env:
           GITHUB_TOKEN: ${{ github.token }}
+
+  # Ticket #113: source-checkout tests cannot police the packaging boundary —
+  # a contributor tree always has the devDependencies and worker/ resources
+  # the shipped artifact must not need. This job packs the real tarball,
+  # installs it into a fresh host repo, and boots the installed CLI offline.
+  pack-smoke:
+    name: CI / pack-install smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test:pack
