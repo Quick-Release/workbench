@@ -5,7 +5,7 @@ import { IssuePanelHost } from "../components/IssuePanelHost";
 import { TriagePage, type TriageLens } from "../components/TriagePage";
 import { setWorkflowState, useWorkflowMode, useWorkflowState } from "../hooks/use-workflow-state";
 import { issueParamFromSearch } from "../lib/issue-param";
-import { workItemIdNumberText } from "../lib/work-item-id";
+import { workItemIdNumberText } from "../lib/work-item-id.mjs";
 import { parseTriageMoveResult } from "../schema";
 import type { TriageState } from "../types";
 

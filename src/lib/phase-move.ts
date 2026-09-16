@@ -1,6 +1,6 @@
 import type { PhaseMoveTarget, WorkItemRecord } from "../types";
 import { phaseMoveTargets } from "../types";
-import { workItemIdNumberText } from "./work-item-id";
+import { workItemIdNumberText } from "./work-item-id.mjs";
 
 // The phase move's view-layer grammar (ticket #148): the columns a board card
 // or the shared panel offers, and the copyable gh command static builds

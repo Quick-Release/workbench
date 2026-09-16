@@ -1,7 +1,7 @@
 import { Bug, LifeBuoy } from "lucide-react";
 
 import type { BlockerEdgeRecord, ClientTicketCoverage, WorkItemRecord } from "../types";
-import { clientKindFor, clientWaitingReason } from "../lib/client-priority";
+import { clientKindFor, clientWaitingReason } from "../lib/client-priority.mjs";
 
 // Relative age as plain data — never an SLA: "opened 3d ago", "updated 21d
 // ago". The dashboard states what GitHub says, not what it should say.

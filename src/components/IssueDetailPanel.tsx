@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input";
 import { PhaseMoveSelect } from "@/components/PhaseMoveSelect";
 import { deriveDisplayState } from "@/lib/display-state";
 import { indexWorkItems, mapFor, openBlockers } from "@/lib/frontier";
-import { workItemIdNumberText } from "@/lib/work-item-id";
+import { workItemIdNumberText } from "@/lib/work-item-id.mjs";
 import { cn } from "@/lib/utils";
 import type { PhaseMoveTarget, WorkflowStatePayload } from "../types";
 

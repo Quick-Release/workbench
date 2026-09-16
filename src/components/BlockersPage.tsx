@@ -16,7 +16,7 @@ import {
 } from "@/lib/blocker-layout";
 import { mapGraph, emptyStateFor, whyNotLine } from "@/lib/blockers";
 import { indexWorkItems, openBlockers } from "@/lib/frontier";
-import { workItemIdLabel } from "@/lib/work-item-id";
+import { workItemIdLabel } from "@/lib/work-item-id.mjs";
 import type { BlockerEdgeRecord, TrackerMapRecord, WorkItemRecord } from "@/types";
 
 type BlockersPageProps = {

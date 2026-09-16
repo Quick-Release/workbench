@@ -9,7 +9,7 @@ import {
 import { IssuePanelHost } from "../components/IssuePanelHost";
 import { useWorkflowMode, useWorkflowState } from "../hooks/use-workflow-state";
 import { issueParamFromSearch } from "../lib/issue-param";
-import { workItemIdNumberText } from "../lib/work-item-id";
+import { workItemIdNumberText } from "../lib/work-item-id.mjs";
 import { parseClosedClientTickets } from "../schema";
 import type { ClosedClientTickets } from "../types";
 

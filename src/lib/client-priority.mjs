@@ -1,16 +1,13 @@
-// The value imports keep the explicit extensions so the tracker scripts and
-// the seam — plain Node ESM importing src TS directly — can share this
-// module; the type imports erase.
-import {
-  clientTicketKinds,
-  type BlockerEdgeRecord,
-  type ClientTicketKind,
-  type WorkItemRecord,
-} from "../types.ts";
-import { workItemIdNumber } from "./work-item-id.ts";
+// Plain ESM so the installed CLI's raw-Node sync can import it from
+// node_modules, where Node refuses to type-strip TypeScript (GH-195); types
+// live in the sibling .d.mts.
+import { workItemIdNumber } from "./work-item-id.mjs";
 
-// The canonical label names, exported for readers that walk GitHub by label
-// (the tracker's client discovery) — always from here, never re-declared.
+// The canonical client-label vocabulary, runtime home of the value this
+// module and src/types.ts share: the sync's scripts run under raw Node, so
+// the const lives here and types.ts re-exports it — one source, never
+// re-declared (the tracker's client discovery walks GitHub by these labels).
+export const clientTicketKinds = ["client-bug", "client-feedback"];
 export const [clientBugKind, clientFeedbackKind] = clientTicketKinds;
 
 // GH-136: the client-first work policy's pure half — one module the tracker,
@@ -26,15 +23,13 @@ export const [clientBugKind, clientFeedbackKind] = clientTicketKinds;
 // Exact-name match after light normalization — never a substring:
 // "client-bugs", "verify-client-bug", and "client bug triage" do not
 // classify. Whitespace/underscore/case variants of the canonical names do.
-const normalizeLabelName = (name: string): string =>
+const normalizeLabelName = (name) =>
   name
     .trim()
     .toLowerCase()
     .replace(/[\s_]+/g, "-");
 
-export const classifyClientTicket = (
-  labels: readonly string[] | undefined,
-): ClientTicketKind | null => {
+export const classifyClientTicket = (labels) => {
   if (!labels) return null;
   const normalized = new Set(labels.map(normalizeLabelName));
   if (normalized.has(clientBugKind)) return "client-bug";
@@ -45,44 +40,33 @@ export const classifyClientTicket = (
 // The effective kind. A `client-feedback` issue categorized `bug` receives
 // bug-tier treatment: inconsistent tagging must not open a gate bypass by
 // dressing a client defect up as feedback (or vice versa).
-export const clientKindFor = (record: {
-  labels?: readonly string[];
-  category: WorkItemRecord["category"];
-}): ClientTicketKind | null => {
+export const clientKindFor = (record) => {
   const kind = classifyClientTicket(record.labels);
   if (kind === "client-feedback" && record.category === "bug") return "client-bug";
   return kind;
 };
 
 // 0 = client bug, 1 = client feedback, 2 = internal work.
-export const clientTierFor = (record: {
-  labels?: readonly string[];
-  category: WorkItemRecord["category"];
-}): 0 | 1 | 2 => {
+export const clientTierFor = (record) => {
   const kind = clientKindFor(record);
   if (kind === "client-bug") return 0;
   return kind === "client-feedback" ? 1 : 2;
 };
 
-const issueNumberOf = (record: { id: string }): number => workItemIdNumber(record.id);
+const issueNumberOf = (record) => workItemIdNumber(record.id);
 
 // Tier order first, deterministic issue-number fallback; a stable sort in the
 // caller keeps the existing readiness/map-order rules inside each tier.
-export const compareByClientTier = (left: WorkItemRecord, right: WorkItemRecord): number => {
+export const compareByClientTier = (left, right) => {
   const tier = clientTierFor(left) - clientTierFor(right);
   if (tier !== 0) return tier;
   return issueNumberOf(left) - issueNumberOf(right);
 };
 
-export type ClientAttention = {
-  bugs: readonly WorkItemRecord[];
-  feedback: readonly WorkItemRecord[];
-};
-
 // Client attention: every open client ticket, whether or not anything can be
 // done about it right now. Deferred, untriaged, wontfix, and waiting tickets
 // stay here — attention is not executability.
-export const clientAttention = (workItems: readonly WorkItemRecord[]): ClientAttention => {
+export const clientAttention = (workItems) => {
   const open = workItems.filter((record) => record.state === "open");
   return {
     bugs: open.filter((record) => clientKindFor(record) === "client-bug").sort(compareByClientTier),
@@ -92,13 +76,7 @@ export const clientAttention = (workItems: readonly WorkItemRecord[]): ClientAtt
   };
 };
 
-export type ClientGateBlockingBug = {
-  id: string;
-  title: string;
-  url: string;
-};
-
-export const openClientBugs = (workItems: readonly WorkItemRecord[]): ClientGateBlockingBug[] =>
+export const openClientBugs = (workItems) =>
   workItems
     .filter((record) => record.state === "open" && clientKindFor(record) === "client-bug")
     .map((record) => ({ id: record.id, title: record.title, url: record.url }))
@@ -108,11 +86,7 @@ export const openClientBugs = (workItems: readonly WorkItemRecord[]): ClientGate
 // record's own state — never a stored status. Blocked outranks parked, which
 // outranks the explicit waiting states; an actionable ticket explains nothing
 // and renders no excuse (GH-136).
-export const clientWaitingReason = (
-  record: WorkItemRecord,
-  workItems: readonly WorkItemRecord[],
-  blockerEdges: readonly BlockerEdgeRecord[],
-): string | null => {
+export const clientWaitingReason = (record, workItems, blockerEdges) => {
   const stateById = new Map(workItems.map((item) => [item.id, item]));
   const openBlockers = blockerEdges
     .filter((edge) => edge.blockedId === record.id)
@@ -136,38 +110,7 @@ export const clientWaitingReason = (
   }
 };
 
-export type ClientGateDenialReason =
-  | "target_not_open"
-  | "client_priority_unverified"
-  | "client_bugs_open";
-
-export type ClientGateTarget = {
-  state: WorkItemRecord["state"];
-  labels?: readonly string[];
-  category: WorkItemRecord["category"];
-  kind: WorkItemRecord["kind"];
-};
-
-export type ClientGateInput = {
-  // The resolved target — null when the issue cannot be resolved at all.
-  target: ClientGateTarget | null;
-  // False when the last client-ticket pass was capped, failed, or is missing:
-  // an incomplete snapshot never grants a fresh all-clear.
-  coverageComplete: boolean;
-  openClientBugs?: readonly ClientGateBlockingBug[];
-  // Ids of open client bugs this target is a *validated* blocker edge of —
-  // the caller validates the edges; readiness checks stay the caller's too.
-  prerequisiteOfOpenClientBugs?: readonly string[];
-};
-
-export type ClientGateVerdict = {
-  allowed: boolean;
-  reason: ClientGateDenialReason | null;
-  blockingBugs: readonly ClientGateBlockingBug[];
-  explanation: string;
-};
-
-const allowed = (blockingBugs: readonly ClientGateBlockingBug[]): ClientGateVerdict => ({
+const allowed = (blockingBugs) => ({
   allowed: true,
   reason: null,
   blockingBugs,
@@ -183,9 +126,8 @@ export const evaluateClientGate = ({
   coverageComplete,
   openClientBugs: bugs = [],
   prerequisiteOfOpenClientBugs = [],
-}: ClientGateInput): ClientGateVerdict => {
-  const names = (list: readonly ClientGateBlockingBug[]) =>
-    list.map((bug) => `${bug.id} "${bug.title}"`).join(", ");
+}) => {
+  const names = (list) => list.map((bug) => `${bug.id} "${bug.title}"`).join(", ");
   if (!target || target.state !== "open")
     return {
       allowed: false,

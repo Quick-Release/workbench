@@ -1,7 +1,7 @@
 import { renderToString } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
 
-import { offlineFallbackCatalog, skillFlowEdges } from "../data/skill-flow";
+import { offlineFallbackCatalog, skillFlowEdges } from "../data/skill-flow.mjs";
 import type { OverviewData, SkillsStatus, SkillRecord } from "../types";
 import { FlowPage } from "./FlowPage";
 

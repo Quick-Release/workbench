@@ -1,5 +1,5 @@
 import type { TrackerMapRecord } from "../types";
-import { workItemIdNumber } from "./work-item-id";
+import { workItemIdNumber } from "./work-item-id.mjs";
 
 // Map membership is order, not edges (ADR 0008): "first in map order wins" —
 // a member's position is its map's ticketIds index, first map to claim the id

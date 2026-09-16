@@ -2,7 +2,11 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { overviewData } from "./data";
 import { overviewData as generatedData } from "./data.generated";
-import { offlineFallbackCatalog, skillFlowClassification, skillFlowEdges } from "./data/skill-flow";
+import {
+  offlineFallbackCatalog,
+  skillFlowClassification,
+  skillFlowEdges,
+} from "./data/skill-flow.mjs";
 import { frontier, frontierItemFromWorkItem, openBlockers } from "./lib/frontier";
 import {
   parseArtifactRecord,

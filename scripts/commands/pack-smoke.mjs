@@ -1,17 +1,17 @@
-// Ticket #113: the shipped CLI must start without Workbench's devDependencies
-// and without worker/ test resources. Source checkouts can never police that
-// boundary — their node_modules always carry the dev dependencies and their
-// tree always has worker/ — so this smoke packs the real tarball, installs it
-// into a fresh fixture host repo, and boots the installed package's dev
-// server offline (stubbed `gh`, no tokens, no telemetry), asserting the
-// dashboard and one read-only API endpoint answer.
+// Ticket #113/#195: the shipped CLI must start in a clean host repository —
+// no Workbench devDependencies, no worker/ test resources, and a sync that
+// runs under raw Node from node_modules. Source checkouts can never police
+// that boundary — their node_modules always carry the dev dependencies and
+// their tree always has worker/ and generated data — so this smoke packs the
+// real tarball, installs it into a fresh fixture host repo, and boots the
+// installed CLI's full bin.mjs pipeline (sync → fmt → dev server) offline
+// (stubbed `gh`, no tokens, no telemetry), asserting the dashboard and one
+// read-only API endpoint answer.
 //
 // CI-only (`pnpm test:pack`): it needs registry access and a few minutes, so
 // the per-commit gate (`pnpm test`) deliberately does not run it.
 import { execFileSync, spawn } from "node:child_process";
-import { readFileSync } from "node:fs";
-import { chmod, copyFile, mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
-import { createRequire } from "node:module";
+import { chmod, mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { createServer as netCreateServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -111,10 +111,9 @@ const seedGhStub = async (stubDir) => {
   await chmod(stub, 0o700);
 };
 
-// The offline env shared by the fixture sync and the boot: fixture source
-// root, no service tokens, stubbed gh first on PATH, and CI=1 so the
-// package's prepare script never points the fixture repo's git hooks at the
-// install.
+// The env the installed CLI boots under: fixture source root, no service
+// tokens, stubbed gh first on PATH, and CI=1 so the package's prepare script
+// never points the fixture repo's git hooks at the install.
 const offlineEnv = async ({ hostDir, parentEnv = process.env }) => {
   const env = { ...parentEnv };
   for (const key of [
@@ -138,29 +137,13 @@ const bootEnv = async ({ hostDir, port, parentEnv }) => ({
   WORKBENCH_PORT: String(port),
 });
 
-// Stub for the sync step bin.mjs runs before the dev server: the dashboard's
-// src/data.generated.ts is generated, never shipped, and the installed sync
-// cannot run (its scripts import src/lib/*.ts, which Node refuses to
-// type-strip under node_modules — the separate defect this smoke isolates).
-// So generate the module with the checkout's generator against the fixture
-// host repo — the same output sync would produce — and place it into the
-// installed package.
-const stubSyncInInstalledPackage = async ({ hostDir, installedDirectory, parentEnv }) => {
-  run(process.execPath, [join(appDirectory, "scripts/commands/sync-data.mjs")], {
-    cwd: appDirectory,
-    env: await offlineEnv({ hostDir, parentEnv }),
-  });
-  await copyFile(
-    join(appDirectory, "src/data.generated.ts"),
-    join(installedDirectory, "src/data.generated.ts"),
-  );
-};
-
 // Boots the installed CLI and polls until both the dashboard and one
-// read-only API endpoint answer 200. Returns a captured output tail for
-// failure messages; throws (with that tail) on early exit, wrong status, or
-// deadline. Startup failures surface here because the CLI's config-loading
-// path is exactly what ticket #113 protects.
+// read-only API endpoint answer 200. The probe tries both loopback spellings:
+// a bare `localhost` bind resolves IPv6-first on some CI runners, and bin.mjs
+// passes no --host. Returns a captured output tail for failure messages;
+// throws (with that tail) on early exit, wrong status, or deadline. Startup
+// failures surface here because the CLI's startup path is exactly what
+// tickets #113/#195 protect.
 const awaitServing = async (child, port, timeoutMs) => {
   const output = [];
   const capture = (chunk) => {
@@ -181,10 +164,12 @@ const awaitServing = async (child, port, timeoutMs) => {
     ]);
     if (exitedEarly) throw new Error(`installed CLI exited before serving:\n${tail()}`);
     try {
-      for (const path of ["/", "/api/skills"]) {
-        const response = await fetch(`http://127.0.0.1:${port}${path}`);
-        if (response.status !== 200)
-          throw new Error(`${path} answered ${response.status}, expected 200:\n${tail()}`);
+      for (const host of ["localhost", "127.0.0.1"]) {
+        for (const path of ["/", "/api/skills"]) {
+          const response = await fetch(`http://${host}:${port}${path}`);
+          if (response.status !== 200)
+            throw new Error(`${path} answered ${response.status}, expected 200:\n${tail()}`);
+        }
       }
     } catch (cause) {
       if (cause.message.includes("expected 200")) throw cause;
@@ -227,38 +212,21 @@ const main = async () => {
       cwd: hostDir,
     });
     console.log("[pack-smoke] installed the tarball into a fresh host repo");
-    await stubSyncInInstalledPackage({
-      hostDir,
-      installedDirectory,
-      parentEnv: process.env,
-    });
-    console.log("[pack-smoke] stubbed the sync step with fixture data");
 
     const port = await freePort();
-    // This ticket's boundary is the Vite config-loading path, so the smoke
-    // boots the installed package the way bin.mjs does — `vp dev` from the
-    // package directory against the fixture source root — but resolves the
-    // binary itself and skips bin.mjs's sync step. Sync is isolated per the
-    // ticket's own instruction ("isolate/stub sync … so any earlier startup
-    // problem does not hide it"): scripts/tracker imports src/lib/*.ts, and
-    // Node refuses to type-strip files under node_modules, so the installed
-    // sync currently fails before dev for reasons outside this ticket. When
-    // that defect is fixed, switch back to spawning bin.mjs for an
-    // end-to-end boot.
-    const require = createRequire(join(installedDirectory, "package.json"));
-    const vitePlusDirectory = dirname(require.resolve("vite-plus/package.json"));
-    const { bin } = JSON.parse(readFileSync(join(vitePlusDirectory, "package.json"), "utf8"));
-    const vp = join(vitePlusDirectory, typeof bin === "string" ? bin : bin.vp);
-    // --host pins the loopback interface: a bare `localhost` bind resolves
-    // IPv6-first on CI runners, and the probe below speaks IPv4.
-    child = spawn(vp, ["dev", "--host", "127.0.0.1", "--port", String(port), "--strictPort"], {
-      cwd: installedDirectory,
+    // The full installed pipeline: bin.mjs runs the sync (raw Node, from
+    // node_modules — the exact graph GH-195 made importable), formats the
+    // generated snapshot, and starts the dev server against the fixture
+    // source root.
+    const installedBin = join(hostDir, "node_modules", "@quick-release", "workbench", "bin.mjs");
+    child = spawn(process.execPath, [installedBin], {
+      cwd: hostDir,
       env: await bootEnv({ hostDir, port }),
       stdio: ["ignore", "pipe", "pipe"],
       detached: true,
     });
     await awaitServing(child, port, BOOT_TIMEOUT_MS);
-    console.log("[pack-smoke] installed dev server serves / and /api/skills with 200");
+    console.log("[pack-smoke] installed CLI serves / and /api/skills with 200");
   } finally {
     await stopTree(child);
     await rm(workspace, { recursive: true, force: true });

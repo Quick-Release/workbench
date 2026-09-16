@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import { resolve } from "node:path";
 import { promisify } from "node:util";
 
-import { mattPocockSkillSource } from "../../../src/lib/skills.ts";
+import { mattPocockSkillSource } from "../../../src/lib/skills.mjs";
 import { skillsStatus } from "../../host/skills.mjs";
 
 import { guardedApi, methodMismatch, sendJson } from "../middleware/api-shared.mjs";

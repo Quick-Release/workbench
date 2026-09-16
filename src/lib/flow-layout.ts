@@ -10,7 +10,7 @@
 // ids keep their slot; upstream-new (unclassified) ids append after the lane
 // alphabetically, so an upstream arrival never displaces a curated node.
 
-import { curatedPenOrder, curatedShelfOrder, skillClassification } from "../data/skill-flow";
+import { curatedPenOrder, curatedShelfOrder, skillClassification } from "../data/skill-flow.mjs";
 
 export type FlowRegion = "spine" | "detour" | "onramp" | "underlay" | "shelf" | "pen";
 

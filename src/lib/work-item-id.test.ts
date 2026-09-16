@@ -7,7 +7,7 @@ import {
   workItemIdNamespace,
   workItemIdNumber,
   workItemIdNumberText,
-} from "./work-item-id";
+} from "./work-item-id.mjs";
 
 describe("work-item id grammar", () => {
   it("parses the tracker namespace and number", () => {
