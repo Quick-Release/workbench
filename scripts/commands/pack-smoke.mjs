@@ -21,6 +21,7 @@ const appDirectory = join(dirname(fileURLToPath(import.meta.url)), "../..");
 
 const BOOT_TIMEOUT_MS = 120_000;
 const POLL_INTERVAL_MS = 500;
+const REQUEST_TIMEOUT_MS = 5_000;
 // Workers test resources must never ride in the artifact: worker/ is the
 // runtime test source tree, and vite.worker.config.ts is the test-only
 // config that imports the dev-only plugin. The shipped vite config must not
@@ -36,16 +37,23 @@ export const shippedConfigViolations = (configText) =>
 
 const delay = (ms) => new Promise((resolveDelay) => setTimeout(resolveDelay, ms));
 
-const freePort = () =>
-  new Promise((resolvePort, rejectPort) => {
-    const server = netCreateServer();
-    server.unref();
-    server.on("error", rejectPort);
-    server.listen(0, "127.0.0.1", () => {
-      const { port } = server.address();
-      server.close(() => resolvePort(port));
+// A port outside the OS ephemeral range: this smoke's own npm install and
+// the dev server's dependency fetches fill the ephemeral range with outbound
+// connections, and a vite dev server bound into that range has been observed
+// to drop its listener at the post-optimizer reload (GH-195 follow-up).
+// Bind-test candidates on loopback and hand back the first free one.
+const freePort = async () => {
+  for (let candidate = 40600 + Math.floor(Math.random() * 300); candidate < 40999; candidate += 1) {
+    const free = await new Promise((resolvePort) => {
+      const server = netCreateServer();
+      server.unref();
+      server.once("error", () => resolvePort(false));
+      server.listen(candidate, "127.0.0.1", () => server.close(() => resolvePort(true)));
     });
-  });
+    if (free) return candidate;
+  }
+  throw new Error("no free port found in the 40600-40999 range");
+};
 
 const run = (name, args, options = {}) =>
   execFileSync(name, args, {
@@ -138,12 +146,10 @@ const bootEnv = async ({ hostDir, port, parentEnv }) => ({
 });
 
 // Boots the installed CLI and polls until both the dashboard and one
-// read-only API endpoint answer 200. The probe tries both loopback spellings:
-// a bare `localhost` bind resolves IPv6-first on some CI runners, and bin.mjs
-// passes no --host. Returns a captured output tail for failure messages;
-// throws (with that tail) on early exit, wrong status, or deadline. Startup
-// failures surface here because the CLI's startup path is exactly what
-// tickets #113/#195 protect.
+// read-only API endpoint answer 200. Returns a captured output tail for
+// failure messages; throws (with that tail) on early exit or deadline.
+// Startup failures surface here because the CLI's startup path is exactly
+// what tickets #113/#195 protect.
 const awaitServing = async (child, port, timeoutMs) => {
   const output = [];
   const capture = (chunk) => {
@@ -156,6 +162,37 @@ const awaitServing = async (child, port, timeoutMs) => {
   const exited = new Promise((resolveExit) => {
     child.once("exit", (code, signal) => resolveExit({ code, signal }));
   });
+  // One request at a time, each hard-bounded: a cold-start request can hang
+  // (Vite's dependency optimizer accepts the connection, then reloads the
+  // server mid-flight), and an unbounded fetch would stall this loop past
+  // the deadline. bin.mjs passes no --host, so which loopback stack `localhost`
+  // binds first differs by platform (IPv6-first on CI runners); serving is
+  // confirmed when ANY one spelling answers 200 for both paths — never a
+  // conjunction across spellings, which can never all bind at once.
+  const serving = async () => {
+    for (const host of ["localhost", "127.0.0.1", "[::1]"]) {
+      let served = true;
+      for (const path of ["/", "/api/skills"]) {
+        try {
+          const response = await fetch(`http://${host}:${port}${path}`, {
+            signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+          });
+          // Drain the body — undici keeps the socket pooled until it is
+          // consumed, and an undrained probe would leak one per poll round.
+          await response.body?.cancel()?.catch(() => {});
+          if (response.status !== 200) served = false;
+        } catch {
+          served = false; // refused or hung — not the bound stack (or not ready yet)
+        }
+        if (!served) break;
+      }
+      if (served) return;
+    }
+    throw new Error(`no loopback spelling served / and /api/skills yet:\n${tail()}`);
+  };
+  // Two consecutive clean passes: the first can complete just before the
+  // optimizer's "dependencies changed, reloading" restart drops it.
+  let consecutivePasses = 0;
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const exitedEarly = await Promise.race([
@@ -164,18 +201,14 @@ const awaitServing = async (child, port, timeoutMs) => {
     ]);
     if (exitedEarly) throw new Error(`installed CLI exited before serving:\n${tail()}`);
     try {
-      for (const host of ["localhost", "127.0.0.1"]) {
-        for (const path of ["/", "/api/skills"]) {
-          const response = await fetch(`http://${host}:${port}${path}`);
-          if (response.status !== 200)
-            throw new Error(`${path} answered ${response.status}, expected 200:\n${tail()}`);
-        }
-      }
-    } catch (cause) {
-      if (cause.message.includes("expected 200")) throw cause;
+      await serving();
+      consecutivePasses += 1;
+    } catch {
+      consecutivePasses = 0;
       continue; // not serving yet — keep polling until the deadline
     }
-    return tail;
+    if (consecutivePasses >= 2) return tail;
+    await delay(1_000);
   }
   throw new Error(`installed CLI did not serve within ${timeoutMs}ms:\n${tail()}`);
 };
