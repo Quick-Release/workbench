@@ -37,16 +37,23 @@ export const shippedConfigViolations = (configText) =>
 
 const delay = (ms) => new Promise((resolveDelay) => setTimeout(resolveDelay, ms));
 
-const freePort = () =>
-  new Promise((resolvePort, rejectPort) => {
-    const server = netCreateServer();
-    server.unref();
-    server.on("error", rejectPort);
-    server.listen(0, "127.0.0.1", () => {
-      const { port } = server.address();
-      server.close(() => resolvePort(port));
+// A port outside the OS ephemeral range: this smoke's own npm install and
+// the dev server's dependency fetches fill the ephemeral range with outbound
+// connections, and a vite dev server bound into that range has been observed
+// to drop its listener at the post-optimizer reload (GH-195 follow-up).
+// Bind-test candidates on loopback and hand back the first free one.
+const freePort = async () => {
+  for (let candidate = 40600 + Math.floor(Math.random() * 300); candidate < 40999; candidate += 1) {
+    const free = await new Promise((resolvePort) => {
+      const server = netCreateServer();
+      server.unref();
+      server.once("error", () => resolvePort(false));
+      server.listen(candidate, "127.0.0.1", () => server.close(() => resolvePort(true)));
     });
-  });
+    if (free) return candidate;
+  }
+  throw new Error("no free port found in the 40600-40999 range");
+};
 
 const run = (name, args, options = {}) =>
   execFileSync(name, args, {
@@ -139,12 +146,10 @@ const bootEnv = async ({ hostDir, port, parentEnv }) => ({
 });
 
 // Boots the installed CLI and polls until both the dashboard and one
-// read-only API endpoint answer 200. The probe tries both loopback spellings:
-// a bare `localhost` bind resolves IPv6-first on some CI runners, and bin.mjs
-// passes no --host. Returns a captured output tail for failure messages;
-// throws (with that tail) on early exit, wrong status, or deadline. Startup
-// failures surface here because the CLI's startup path is exactly what
-// tickets #113/#195 protect.
+// read-only API endpoint answer 200. Returns a captured output tail for
+// failure messages; throws (with that tail) on early exit or deadline.
+// Startup failures surface here because the CLI's startup path is exactly
+// what tickets #113/#195 protect.
 const awaitServing = async (child, port, timeoutMs) => {
   const output = [];
   const capture = (chunk) => {
@@ -160,17 +165,27 @@ const awaitServing = async (child, port, timeoutMs) => {
   // One request at a time, each hard-bounded: a cold-start request can hang
   // (Vite's dependency optimizer accepts the connection, then reloads the
   // server mid-flight), and an unbounded fetch would stall this loop past
-  // the deadline.
+  // the deadline. bin.mjs passes no --host, so which loopback stack `localhost`
+  // binds first differs by platform (IPv6-first on CI runners); serving is
+  // confirmed when ANY one spelling answers 200 for both paths — never a
+  // conjunction across spellings, which can never all bind at once.
   const serving = async () => {
-    for (const host of ["localhost", "127.0.0.1"]) {
+    for (const host of ["localhost", "127.0.0.1", "[::1]"]) {
+      let served = true;
       for (const path of ["/", "/api/skills"]) {
-        const response = await fetch(`http://${host}:${port}${path}`, {
-          signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-        });
-        if (response.status !== 200)
-          throw new Error(`${path} answered ${response.status}, expected 200:\n${tail()}`);
+        try {
+          const response = await fetch(`http://${host}:${port}${path}`, {
+            signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+          });
+          if (response.status !== 200) served = false;
+        } catch {
+          served = false; // refused or hung — not the bound stack (or not ready yet)
+        }
+        if (!served) break;
       }
+      if (served) return;
     }
+    throw new Error(`no loopback spelling served / and /api/skills yet:\n${tail()}`);
   };
   // Two consecutive clean passes: the first can complete just before the
   // optimizer's "dependencies changed, reloading" restart drops it.
@@ -185,8 +200,7 @@ const awaitServing = async (child, port, timeoutMs) => {
     try {
       await serving();
       consecutivePasses += 1;
-    } catch (cause) {
-      if (cause.message.includes("expected 200")) throw cause;
+    } catch {
       consecutivePasses = 0;
       continue; // not serving yet — keep polling until the deadline
     }

@@ -15,6 +15,12 @@ function sourceFiles(dir: string): string[] {
   return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
     const full = join(dir, entry.name);
     if (entry.isDirectory()) return sourceFiles(full);
+    // The generated snapshot embeds tracker content — issue bodies, PR
+    // descriptions, commit messages, arbitrary host-repo text — so any
+    // literal in this file is data that tripped the scan (GH-195 follow-up:
+    // a PR body containing `fetch("/")` failed CI). It is generated, never
+    // hand-written source; the invariant applies to code only.
+    if (entry.name === "data.generated.ts") return [];
     return /\.(ts|tsx)$/.test(entry.name) && !/\.test\.(ts|tsx)$/.test(entry.name) ? [full] : [];
   });
 }
