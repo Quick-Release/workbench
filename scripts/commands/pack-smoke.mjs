@@ -10,7 +10,7 @@
 // the per-commit gate (`pnpm test`) deliberately does not run it.
 import { execFileSync, spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { chmod, mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import { chmod, copyFile, mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { createServer as netCreateServer } from "node:net";
 import { tmpdir } from "node:os";
@@ -111,10 +111,11 @@ const seedGhStub = async (stubDir) => {
   await chmod(stub, 0o700);
 };
 
-// The env the installed CLI boots under: fixture source root, chosen port,
-// no service tokens, stubbed gh first on PATH, and CI=1 so the package's
-// prepare script never points the fixture repo's git hooks at the install.
-const bootEnv = async ({ hostDir, port, parentEnv = process.env }) => {
+// The offline env shared by the fixture sync and the boot: fixture source
+// root, no service tokens, stubbed gh first on PATH, and CI=1 so the
+// package's prepare script never points the fixture repo's git hooks at the
+// install.
+const offlineEnv = async ({ hostDir, parentEnv = process.env }) => {
   const env = { ...parentEnv };
   for (const key of [
     "GITHUB_TOKEN",
@@ -127,10 +128,32 @@ const bootEnv = async ({ hostDir, port, parentEnv = process.env }) => {
     delete env[key];
   env.CI = "1";
   env.WORKBENCH_SOURCE_ROOT = hostDir;
-  env.WORKBENCH_PORT = String(port);
   await seedGhStub(join(hostDir, ".smoke-stub"));
   env.PATH = `${join(hostDir, ".smoke-stub")}:${env.PATH ?? ""}`;
   return env;
+};
+
+const bootEnv = async ({ hostDir, port, parentEnv }) => ({
+  ...(await offlineEnv({ hostDir, parentEnv })),
+  WORKBENCH_PORT: String(port),
+});
+
+// Stub for the sync step bin.mjs runs before the dev server: the dashboard's
+// src/data.generated.ts is generated, never shipped, and the installed sync
+// cannot run (its scripts import src/lib/*.ts, which Node refuses to
+// type-strip under node_modules — the separate defect this smoke isolates).
+// So generate the module with the checkout's generator against the fixture
+// host repo — the same output sync would produce — and place it into the
+// installed package.
+const stubSyncInInstalledPackage = async ({ hostDir, installedDirectory, parentEnv }) => {
+  run(process.execPath, [join(appDirectory, "scripts/commands/sync-data.mjs")], {
+    cwd: appDirectory,
+    env: await offlineEnv({ hostDir, parentEnv }),
+  });
+  await copyFile(
+    join(appDirectory, "src/data.generated.ts"),
+    join(installedDirectory, "src/data.generated.ts"),
+  );
 };
 
 // Boots the installed CLI and polls until both the dashboard and one
@@ -199,13 +222,19 @@ const main = async () => {
     console.log(`[pack-smoke] packed ${tarballPath}`);
 
     await seedHostRepo(hostDir);
+    const installedDirectory = join(hostDir, "node_modules", "@quick-release", "workbench");
     run("npm", ["install", "--no-audit", "--no-fund", "--loglevel=error", tarballPath], {
       cwd: hostDir,
     });
     console.log("[pack-smoke] installed the tarball into a fresh host repo");
+    await stubSyncInInstalledPackage({
+      hostDir,
+      installedDirectory,
+      parentEnv: process.env,
+    });
+    console.log("[pack-smoke] stubbed the sync step with fixture data");
 
     const port = await freePort();
-    const installedDirectory = join(hostDir, "node_modules", "@quick-release", "workbench");
     // This ticket's boundary is the Vite config-loading path, so the smoke
     // boots the installed package the way bin.mjs does — `vp dev` from the
     // package directory against the fixture source root — but resolves the
