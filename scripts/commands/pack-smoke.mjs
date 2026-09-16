@@ -249,7 +249,9 @@ const main = async () => {
     const vitePlusDirectory = dirname(require.resolve("vite-plus/package.json"));
     const { bin } = JSON.parse(readFileSync(join(vitePlusDirectory, "package.json"), "utf8"));
     const vp = join(vitePlusDirectory, typeof bin === "string" ? bin : bin.vp);
-    child = spawn(vp, ["dev", "--port", String(port), "--strictPort"], {
+    // --host pins the loopback interface: a bare `localhost` bind resolves
+    // IPv6-first on CI runners, and the probe below speaks IPv4.
+    child = spawn(vp, ["dev", "--host", "127.0.0.1", "--port", String(port), "--strictPort"], {
       cwd: installedDirectory,
       env: await bootEnv({ hostDir, port }),
       stdio: ["ignore", "pipe", "pipe"],
