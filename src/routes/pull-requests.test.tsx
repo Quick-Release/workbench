@@ -122,9 +122,15 @@ describe("the pull-requests route's list on fixtures", () => {
   });
 
   const renderList = async (pullRequests: PullRequestRecord[]) => {
+    // Healthy probes, so the list assertions stand on a settled page rather
+    // than one mid-degradation.
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => ({ ok: false, status: 503, json: async () => ({}) }) as Response),
+      vi.fn(async (url: string) => {
+        if (url === "/api/review/health")
+          return { ok: true, status: 200, json: async () => reviewHealthReady } as Response;
+        return { ok: true, status: 200, json: async () => ({ configured: false }) } as Response;
+      }),
     );
     (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
     const container = document.createElement("div");
@@ -135,7 +141,7 @@ describe("the pull-requests route's list on fixtures", () => {
     });
     await act(async () => {});
     return {
-      html: container.innerHTML,
+      html: () => container.innerHTML,
       rows: container.querySelectorAll('[data-slot="pull-request-row"]'),
       unmount: async () => {
         await act(async () => {
@@ -149,18 +155,18 @@ describe("the pull-requests route's list on fixtures", () => {
   it("renders the fixture's rows with their number, title, draft badge, and head→base", async () => {
     const page = await renderList(routePullRequests);
     expect(page.rows).toHaveLength(2);
-    expect(page.html).toContain("Overview rebuild");
-    expect(page.html).toContain("agent/build-overview → main");
-    expect(page.html).toContain("vvaz");
+    expect(page.html()).toContain("Overview rebuild");
+    expect(page.html()).toContain("agent/build-overview → main");
+    expect(page.html()).toContain("vvaz");
     expect(page.rows[1]?.getAttribute("data-pr")).toBe("41");
-    expect(page.html).toContain("draft");
+    expect(page.rows[1]?.innerHTML).toContain(">draft</span>");
     await page.unmount();
   });
 
   it("renders no rows and the empty state when zero pull requests were collected", async () => {
     const page = await renderList([]);
     expect(page.rows).toHaveLength(0);
-    expect(page.html).toContain("No open pull requests");
+    expect(page.html()).toContain("No open pull requests");
     await page.unmount();
   });
 });
