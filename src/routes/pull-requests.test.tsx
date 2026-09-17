@@ -4,12 +4,38 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
+import type { PullRequestRecord } from "../types";
 import { PullRequestsRoute } from "./pull-requests";
 
 // The route's own contract (ticket #24): on load it probes both health
 // endpoints through the localhost seam and hands the verdicts down as data.
 // A probe that fails leaves the verdict unknown — the page degrades rather
 // than guessing — and the fetches stay literal /api/ calls (ADR 0005).
+
+// #117: the list is a fixed fixture, never the freshly synced live snapshot —
+// these tests must pass on a host with zero real open pull requests.
+const routePullRequests: PullRequestRecord[] = [
+  {
+    number: 34,
+    title: "Overview rebuild",
+    url: "https://github.com/Quick-Release/workbench/pull/34",
+    head: "agent/build-overview",
+    base: "main",
+    author: "vvaz",
+    isDraft: false,
+    body: "The overview rebuild.",
+  },
+  {
+    number: 41,
+    title: "Draft: decisions grouping",
+    url: "https://github.com/Quick-Release/workbench/pull/41",
+    head: "agent/decisions-grouping",
+    base: "main",
+    author: "vvaz",
+    isDraft: true,
+    body: "The decisions grouping draft.",
+  },
+];
 
 const reviewHealth = {
   engines: [
@@ -29,7 +55,7 @@ const renderRoute = async () => {
   document.body.appendChild(container);
   const root = createRoot(container);
   await act(async () => {
-    root.render(<PullRequestsRoute />);
+    root.render(<PullRequestsRoute pullRequests={routePullRequests} />);
   });
   await act(async () => {});
   return {
@@ -84,6 +110,57 @@ describe("the pull-requests route on load", () => {
       "an unreachable probe stays unknown, never a guessed verdict",
     );
     strictEqual(page.html().includes("data-engine-state="), false);
+    await page.unmount();
+  });
+});
+
+// #117: the list itself is exercised explicitly on fixtures — both states,
+// so the route's correctness never depends on the live repo's PR count.
+describe("the pull-requests route's list on fixtures", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  const renderList = async (pullRequests: PullRequestRecord[]) => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({ ok: false, status: 503, json: async () => ({}) }) as Response),
+    );
+    (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    await act(async () => {
+      root.render(<PullRequestsRoute pullRequests={pullRequests} />);
+    });
+    await act(async () => {});
+    return {
+      html: container.innerHTML,
+      rows: container.querySelectorAll('[data-slot="pull-request-row"]'),
+      unmount: async () => {
+        await act(async () => {
+          root.unmount();
+        });
+        container.remove();
+      },
+    };
+  };
+
+  it("renders the fixture's rows with their number, title, draft badge, and head→base", async () => {
+    const page = await renderList(routePullRequests);
+    expect(page.rows).toHaveLength(2);
+    expect(page.html).toContain("Overview rebuild");
+    expect(page.html).toContain("agent/build-overview → main");
+    expect(page.html).toContain("vvaz");
+    expect(page.rows[1]?.getAttribute("data-pr")).toBe("41");
+    expect(page.html).toContain("draft");
+    await page.unmount();
+  });
+
+  it("renders no rows and the empty state when zero pull requests were collected", async () => {
+    const page = await renderList([]);
+    expect(page.rows).toHaveLength(0);
+    expect(page.html).toContain("No open pull requests");
     await page.unmount();
   });
 });
@@ -152,7 +229,7 @@ describe("the pull-requests route's review flow", () => {
     document.body.appendChild(container);
     const root = createRoot(container);
     await act(async () => {
-      root.render(<PullRequestsRoute />);
+      root.render(<PullRequestsRoute pullRequests={routePullRequests} />);
     });
     await act(async () => {});
     return {
@@ -172,6 +249,7 @@ describe("the pull-requests route's review flow", () => {
     const row = page.container.querySelector('[data-slot="pull-request-row"]');
     expect(row).toBeTruthy();
     const pr = Number(row?.getAttribute("data-pr"));
+    strictEqual(pr, 34, "the reviewed PR is the fixture's, never the live snapshot's");
 
     const reviewButton = [...(row?.querySelectorAll("button") ?? [])].find((button) =>
       button.textContent?.includes("Review · coderabbit"),
@@ -255,7 +333,7 @@ describe("the pull-requests route's review flow", () => {
     document.body.appendChild(container);
     const root = createRoot(container);
     await act(async () => {
-      root.render(<PullRequestsRoute />);
+      root.render(<PullRequestsRoute pullRequests={routePullRequests} />);
     });
     await act(async () => {});
     const unmount = async () => {
@@ -367,7 +445,7 @@ describe("the pull-requests route's review flow", () => {
     document.body.appendChild(container);
     const root = createRoot(container);
     await act(async () => {
-      root.render(<PullRequestsRoute />);
+      root.render(<PullRequestsRoute pullRequests={routePullRequests} />);
     });
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 20));
@@ -422,7 +500,7 @@ describe("the pull-requests route's review flow", () => {
     document.body.appendChild(container);
     const root = createRoot(container);
     await act(async () => {
-      root.render(<PullRequestsRoute />);
+      root.render(<PullRequestsRoute pullRequests={routePullRequests} />);
     });
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 20));
@@ -465,7 +543,7 @@ describe("the pull-requests route's review flow", () => {
     document.body.appendChild(container);
     const root = createRoot(container);
     await act(async () => {
-      root.render(<PullRequestsRoute />);
+      root.render(<PullRequestsRoute pullRequests={routePullRequests} />);
     });
     await act(async () => {});
     const row = container.querySelector('[data-slot="pull-request-row"]');
