@@ -190,6 +190,12 @@ export type WorkItemRecord = {
   // items and decision tickets, and wherever the events read failed or was
   // capped: unknown, never zero time. The display falls back to `updatedAt`.
   phaseSince?: string;
+  // GH-115: how completely the record's native blocker list was read at the
+  // last sync. The collector writes "unknown" only when the read failed or
+  // stopped at its page cap; absence means the list was read completely or
+  // the issue declared no blockers. An unknown read withholds the item from
+  // the frontier — a prefix of blockers never proves an omitted one closed.
+  blockersRead?: "unknown";
 };
 
 // The closed lens' bounded, label-specific history read (GH-136): recent

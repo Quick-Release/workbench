@@ -122,6 +122,15 @@ describe("display-state derivation", () => {
     ]);
   });
 
+  it("caveats an incomplete blocker read as the reason the frontier withholds it (GH-115)", () => {
+    const withheld = deriveDisplayState(workItem({ blockersRead: "unknown" }), false);
+    expect(withheld.caveats.map((caveat) => caveat.kind)).toEqual(["blockers-unknown"]);
+    expect(withheld.caveats[0].message).toContain("withheld from the frontier");
+
+    const clean = deriveDisplayState(workItem({}), false);
+    expect(clean.caveats).toEqual([]);
+  });
+
   it("derives a new state without relabelling or writing back to the record", () => {
     const record = workItem({ kind: "task", phase: "implementing", triageState: "needs-info" });
     const snapshot = structuredClone(record);

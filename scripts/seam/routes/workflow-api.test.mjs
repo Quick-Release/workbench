@@ -1,7 +1,7 @@
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { deepStrictEqual, ok, rejects, strictEqual } from "node:assert";
+import { deepStrictEqual, match, ok, rejects, strictEqual } from "node:assert";
 import test from "node:test";
 
 import { handleWorkflowApi, loadWorkflowState, workflowApiPlugin } from "./workflow-api.mjs";
@@ -1144,6 +1144,88 @@ test("an edge add resolves the blocker's database id, posts the native gate, and
     },
   ]);
   ok(/GH-66.*GH-64/.test(handled.json.message), handled.json.message);
+});
+
+// GH-115: the read-back walks every page of the blocked-by list within its
+// cap, so a host with more blockers than one page cannot look less blocked
+// than it is — and a failed page, a later-page failure, or a cap-stopped
+// walk is a typed failure, never a partial list served as complete.
+const fullPage = (start) =>
+  JSON.stringify(Array.from({ length: 100 }, (_, i) => ({ number: start + i })));
+const edgeAddWithReadBack = async (readBackResponses) => {
+  const directory = await withSnapshot(snapshot([workItem(66), workItem(64)], [], []), []);
+  const { calls, run } = runStub([{ stdout: "89161\n" }, {}, ...readBackResponses]);
+  return {
+    handled: await handleWorkflowApi({
+      method: "POST",
+      pathname: "/api/workflow/edge/add",
+      body: JSON.stringify({ blockedId: "GH-66", blockerId: "GH-64" }),
+      appDirectory: directory,
+      hostRoot: HOST_ROOT,
+      run,
+    }),
+    calls,
+  };
+};
+
+test("a multi-page blocked-by read-back merges every page into the refreshed edges", async () => {
+  const { handled, calls } = await edgeAddWithReadBack([
+    { stdout: fullPage(1) },
+    { stdout: JSON.stringify([{ number: 500 }]) },
+  ]);
+
+  strictEqual(handled.status, 200);
+  const edges = handled.json.state.blockerEdges;
+  strictEqual(edges.length, 101, "page one's 100 blockers plus page two's one");
+  strictEqual(edges[0].blockerId, "GH-1");
+  strictEqual(edges[99].blockerId, "GH-100");
+  strictEqual(edges[100].blockerId, "GH-500");
+  ok(calls[2].args[1].endsWith("dependencies/blocked_by?per_page=100&page=1"), calls[2].args[1]);
+  ok(calls[3].args[1].endsWith("dependencies/blocked_by?per_page=100&page=2"), calls[3].args[1]);
+});
+
+test("a short page stops the read-back walk — no extra page call", async () => {
+  const { handled, calls } = await edgeAddWithReadBack([
+    { stdout: JSON.stringify([{ number: 64 }]) },
+  ]);
+
+  strictEqual(handled.status, 200);
+  strictEqual(calls.length, 3, "database id, the write, and one read-back page");
+});
+
+test("a failed first read-back page is a typed failure, not an empty list", async () => {
+  const { handled } = await edgeAddWithReadBack(["HTTP 403: forbidden"]);
+
+  strictEqual(handled.status, 502);
+  match(handled.json.message, /reading GH-66's blockers back failed/);
+  match(handled.json.message, /HTTP 403/);
+});
+
+test("a failed later read-back page fails the whole read", async () => {
+  const { handled } = await edgeAddWithReadBack([
+    { stdout: fullPage(1) },
+    "HTTP 500: server error",
+  ]);
+
+  strictEqual(handled.status, 502);
+  match(handled.json.message, /reading GH-66's blockers back failed/);
+  match(handled.json.message, /HTTP 500/);
+});
+
+test("a read-back stopped at the page cap is a typed failure, never a prefix", async () => {
+  const { handled } = await edgeAddWithReadBack(
+    Array.from({ length: 10 }, (_, page) => ({ stdout: fullPage(1 + page * 100) })),
+  );
+
+  strictEqual(handled.status, 502);
+  match(handled.json.message, /stopped at the 10-page cap/);
+});
+
+test("a read-back page that is not a JSON list is a typed failure", async () => {
+  const { handled } = await edgeAddWithReadBack([{ stdout: "<html>gateway timeout</html>" }]);
+
+  strictEqual(handled.status, 502);
+  match(handled.json.message, /was not (JSON|a list)/);
 });
 
 test("an edge removal without confirmation is rejected without shelling out", async () => {

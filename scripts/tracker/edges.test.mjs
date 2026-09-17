@@ -28,12 +28,15 @@ const issue = (number, overrides = {}) => ({
 });
 
 // Routes the tracker's read shapes, including the native blocked-by lists.
+// `blockedBy` answers every page with one list; `blockedByPages` routes
+// page-by-page, where a page that is a number answers with that HTTP status.
 const routeFetch = ({
   openPages = [[]],
   maps = [],
   subIssues = {},
   singles = {},
   blockedBy = {},
+  blockedByPages = {},
   blockedByStatus = 200,
   status = 200,
 } = {}) => {
@@ -44,6 +47,12 @@ const routeFetch = ({
     calls.push(u);
     if (u.pathname.endsWith("/dependencies/blocked_by")) {
       const number = u.pathname.match(/\/issues\/(\d+)\/dependencies\/blocked_by$/)[1];
+      if (blockedByPages[number]) {
+        const page = Number(u.searchParams.get("page") ?? "1");
+        const body = blockedByPages[number][page - 1];
+        if (Array.isArray(body)) return jsonResponse(body);
+        return jsonResponse([], typeof body === "number" ? body : 500);
+      }
       return jsonResponse(blockedBy[number] ?? [], blockedByStatus);
     }
     if (u.searchParams.get("labels") === "wayfinder:map") return jsonResponse(maps, status);
@@ -279,7 +288,7 @@ test("where the dependencies feature is silent, `Blocked by:` lines are the sole
   match(joined, /dangling|unknown/i);
 });
 
-test("a failing blocked-by read degrades with a warning and never fails sync", async () => {
+test("a failing blocked-by read degrades with a warning, never fails sync, and marks the record unknown", async () => {
   const { fetchImpl } = routeFetch({
     openPages: [
       [issue(56, { issue_dependencies_summary: { blocked_by: 2, total_blocked_by: 2 } })],
@@ -287,12 +296,68 @@ test("a failing blocked-by read degrades with a warning and never fails sync", a
     blockedByStatus: 500,
   });
 
-  const { blockerEdges, warnings } = await collect({ fetchImpl });
+  const { blockerEdges, workItems, warnings } = await collect({ fetchImpl });
 
   deepStrictEqual(blockerEdges, []);
   strictEqual(warnings.length, 1);
   match(warnings[0], /GH-56/);
   match(warnings[0], /HTTP 500/);
+  // GH-115: the failed read must never read as "no blockers" — the record
+  // itself carries the incompleteness, so readiness withholds the item.
+  const withheld = workItems.find((item) => item.id === "GH-56");
+  strictEqual(withheld?.blockersRead, "unknown");
+});
+
+test("a blocked-by read stopped at its page cap marks the record unknown too", async () => {
+  const fullPage = Array.from({ length: 100 }, (_, i) => issue(1000 + i));
+  const { fetchImpl } = routeFetch({
+    openPages: [
+      [issue(56, { issue_dependencies_summary: { blocked_by: 100, total_blocked_by: 100 } })],
+    ],
+    blockedByPages: { 56: [fullPage] },
+  });
+
+  const { workItems, warnings } = await collect({ fetchImpl, maxPages: 1 });
+
+  const withheld = workItems.find((item) => item.id === "GH-56");
+  strictEqual(withheld?.blockersRead, "unknown");
+  match(warnings.join("\n"), /GH-56.*cap|cap.*GH-56/);
+});
+
+test("a later-page failure keeps the earlier pages' edges and still marks the read unknown", async () => {
+  const fullPage = Array.from({ length: 100 }, (_, i) => issue(1000 + i));
+  const { fetchImpl } = routeFetch({
+    openPages: [
+      [issue(56, { issue_dependencies_summary: { blocked_by: 101, total_blocked_by: 101 } })],
+    ],
+    blockedByPages: { 56: [fullPage, 500] },
+    maxPages: 2,
+  });
+
+  const { blockerEdges, workItems } = await collect({ fetchImpl });
+
+  // The prefix edges are real blockers and stay; the omitted tail is the
+  // danger, and the unknown flag is what withholds the item.
+  strictEqual(blockerEdges.length, 100);
+  ok(blockerEdges.every((edge) => edge.blockedId === "GH-56"));
+  const withheld = workItems.find((item) => item.id === "GH-56");
+  strictEqual(withheld?.blockersRead, "unknown");
+});
+
+test("a successfully read empty blocked-by list is complete: no flag, unblocked work", async () => {
+  const { fetchImpl } = routeFetch({
+    openPages: [
+      [issue(56, { issue_dependencies_summary: { blocked_by: 0, total_blocked_by: 3 } })],
+    ],
+    blockedBy: { 56: [] },
+  });
+
+  const { blockerEdges, workItems, warnings } = await collect({ fetchImpl });
+
+  deepStrictEqual(blockerEdges, []);
+  deepStrictEqual(warnings, []);
+  const clean = workItems.find((item) => item.id === "GH-56");
+  strictEqual(clean?.blockersRead, undefined);
 });
 
 test("a repo with no dependency summaries and no body lines collects no edges and no warnings", async () => {

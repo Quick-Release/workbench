@@ -129,6 +129,25 @@ describe("the recommendation engine", () => {
     expect(recommendation?.issueId).toBe("GH-34");
   });
 
+  it("withholds an implementation-frontier item whose blocker read was incomplete (GH-115)", () => {
+    const recommendation = recommendNextAction(
+      state([
+        item(34, { phase: "ticketed", triageState: "ready-for-agent", blockersRead: "unknown" }),
+      ]),
+    );
+    expect(recommendation).toBeNull();
+  });
+
+  it("still recommends a cleanly read sibling while withholding the unknown-read item", () => {
+    const recommendation = recommendNextAction(
+      state([
+        item(34, { phase: "ticketed", triageState: "ready-for-agent", blockersRead: "unknown" }),
+        item(35, { phase: "ticketed", triageState: "ready-for-agent" }),
+      ]),
+    );
+    expect(recommendation?.issueId).toBe("GH-35");
+  });
+
   it("recommends the map frontier head in map order, with the kind's skill", () => {
     const recommendation = recommendNextAction(
       state(
