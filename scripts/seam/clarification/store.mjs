@@ -60,9 +60,11 @@ CREATE TABLE IF NOT EXISTS runs (
   run_id TEXT PRIMARY KEY,
   host_repo TEXT NOT NULL,
   issue_id TEXT NOT NULL,
+  request_id TEXT NOT NULL,
   state TEXT NOT NULL,
   created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
+  updated_at TEXT NOT NULL,
+  UNIQUE (host_repo, request_id)
 );
 CREATE TABLE IF NOT EXISTS attempts (
   attempt_id TEXT PRIMARY KEY,
@@ -109,7 +111,7 @@ export const openClarificationStore = ({
   }
 
   const insertRun = database.prepare(
-    "INSERT INTO runs (run_id, host_repo, issue_id, state, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+    "INSERT INTO runs (run_id, host_repo, issue_id, request_id, state, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
   );
   const insertAttempt = database.prepare(
     "INSERT INTO attempts (attempt_id, run_id, host_repo, request_id, dispatch_intent, state, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
@@ -122,6 +124,7 @@ export const openClarificationStore = ({
           runId: row.run_id,
           hostRepo: row.host_repo,
           issueId: row.issue_id,
+          requestId: row.request_id,
           state: row.state,
           createdAt: row.created_at,
           updatedAt: row.updated_at,
@@ -162,26 +165,98 @@ export const openClarificationStore = ({
       );
   };
 
+  // One compare-and-set transition for runs and attempts: the UPDATE only
+  // lands while the row still sits in the state the check read, so two
+  // writers can never drive a forbidden state (last write wins is not a
+  // transition). A lost race re-reads and reports against reality.
+  const transitionState = ({ table, idColumn, what, notFoundCode }) => {
+    const select = `SELECT * FROM ${table} WHERE ${idColumn} = ? AND host_repo = ?`;
+    const update = `UPDATE ${table} SET state = ?, updated_at = ? WHERE ${idColumn} = ? AND host_repo = ? AND state = ?`;
+    const rowMapper = table === "runs" ? runRow : attemptRow;
+    return ({ id, to }) => {
+      const row = database.prepare(select).get(id, hostRepo);
+      if (row === undefined)
+        throw storeError(notFoundCode, `no ${what} "${id}" is visible to this host repo`);
+      applyTransition({ current: row.state, to, what });
+      const result = database.prepare(update).run(to, clock(), id, hostRepo, row.state);
+      if (result.changes === 0) {
+        const reality = database.prepare(select).get(id, hostRepo);
+        throw storeError(
+          "illegal_transition",
+          `a ${what} in state "${reality?.state ?? "???"}" cannot move to "${to}" — another writer moved it first`,
+        );
+      }
+      return rowMapper(database.prepare(select).get(id, hostRepo));
+    };
+  };
+
+  const transitionRun = transitionState({
+    table: "runs",
+    idColumn: "run_id",
+    what: "run",
+    notFoundCode: "run_not_found",
+  });
+  const transitionAttempt = transitionState({
+    table: "attempts",
+    idColumn: "attempt_id",
+    what: "attempt",
+    notFoundCode: "attempt_not_found",
+  });
+
   return {
     close() {
       database.close();
     },
 
-    // One Operational run record per approved work intent.
-    createRun({ issueId }) {
+    // One Operational run record per approved work intent. The approval
+    // travels as the client's run request id — a replayed approval (the same
+    // request across a reconnect) returns the existing run with created:
+    // false, never a second Operational record.
+    createRun({ issueId, requestId }) {
       if (!issueId || typeof issueId !== "string")
         throw storeError("invalid_request", "a run needs an issue id");
+      if (requestId === undefined || typeof requestId !== "string" || requestId.trim() === "")
+        throw storeError("invalid_request", "a run needs a non-empty request id");
+
+      const replayed = database
+        .prepare("SELECT * FROM runs WHERE host_repo = ? AND request_id = ?")
+        .get(hostRepo, requestId);
+      if (replayed !== undefined) return { run: runRow(replayed), created: false };
+
       const now = clock();
       const run = {
         runId: `run_${randomUUID()}`,
         hostRepo,
         issueId,
+        requestId,
         state: "active",
         createdAt: now,
         updatedAt: now,
       };
-      insertRun.run(run.runId, run.hostRepo, run.issueId, run.state, run.createdAt, run.updatedAt);
-      return run;
+      try {
+        insertRun.run(
+          run.runId,
+          run.hostRepo,
+          run.issueId,
+          run.requestId,
+          run.state,
+          run.createdAt,
+          run.updatedAt,
+        );
+      } catch (error) {
+        // A concurrent opener won the (host_repo, request_id) race: the
+        // constraint is the dedup, and the winner's run is the answer.
+        if (!/UNIQUE constraint failed/.test(String(error?.message))) throw error;
+        return {
+          run: runRow(
+            database
+              .prepare("SELECT * FROM runs WHERE host_repo = ? AND request_id = ?")
+              .get(hostRepo, requestId),
+          ),
+          created: false,
+        };
+      }
+      return { run, created: true };
     },
 
     getRun(runId) {
@@ -196,14 +271,7 @@ export const openClarificationStore = ({
     },
 
     updateRunState({ runId, to }) {
-      const row = ownRun(runId);
-      if (row === undefined)
-        throw storeError("run_not_found", `no run "${runId}" is visible to this host repo`);
-      applyTransition({ current: row.state, to, what: "run" });
-      database
-        .prepare("UPDATE runs SET state = ?, updated_at = ? WHERE run_id = ? AND host_repo = ?")
-        .run(to, clock(), runId, hostRepo);
-      return runRow(ownRun(runId));
+      return transitionRun({ id: runId, to });
     },
 
     // The durable dispatch intent: the attempt identity, the deduplicated
@@ -247,16 +315,33 @@ export const openClarificationStore = ({
         createdAt: now,
         updatedAt: now,
       };
-      insertAttempt.run(
-        attempt.attemptId,
-        attempt.runId,
-        attempt.hostRepo,
-        attempt.requestId,
-        JSON.stringify(attempt.dispatchIntent),
-        attempt.state,
-        attempt.createdAt,
-        attempt.updatedAt,
-      );
+      try {
+        insertAttempt.run(
+          attempt.attemptId,
+          attempt.runId,
+          attempt.hostRepo,
+          attempt.requestId,
+          JSON.stringify(attempt.dispatchIntent),
+          attempt.state,
+          attempt.createdAt,
+          attempt.updatedAt,
+        );
+      } catch (error) {
+        // A concurrent opener won the (run_id, request_id) race between the
+        // replay check and the insert: the constraint is the dedup, and the
+        // winner's attempt is the answer.
+        if (!/UNIQUE constraint failed/.test(String(error?.message))) throw error;
+        return {
+          attempt: attemptRow(
+            database
+              .prepare(
+                "SELECT * FROM attempts WHERE run_id = ? AND request_id = ? AND host_repo = ?",
+              )
+              .get(runId, requestId, hostRepo),
+          ),
+          created: false,
+        };
+      }
       return { attempt, created: true };
     },
 
@@ -274,19 +359,7 @@ export const openClarificationStore = ({
     },
 
     updateAttemptState({ attemptId, to }) {
-      const row = ownAttempt(attemptId);
-      if (row === undefined)
-        throw storeError(
-          "attempt_not_found",
-          `no attempt "${attemptId}" is visible to this host repo`,
-        );
-      applyTransition({ current: row.state, to, what: "attempt" });
-      database
-        .prepare(
-          "UPDATE attempts SET state = ?, updated_at = ? WHERE attempt_id = ? AND host_repo = ?",
-        )
-        .run(to, clock(), attemptId, hostRepo);
-      return attemptRow(ownAttempt(attemptId));
+      return transitionAttempt({ id: attemptId, to });
     },
   };
 };

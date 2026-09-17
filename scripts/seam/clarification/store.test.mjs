@@ -33,7 +33,7 @@ const intent = { adapter: "pi-managed/v1", contextDigest: "sha-256:abc123" };
 test("a created run is durable and reads back across a close and reopen", async () => {
   await withStore(async ({ databasePath }) => {
     const first = open({ databasePath });
-    const run = first.createRun({ issueId: "GH-42" });
+    const { run } = first.createRun({ issueId: "GH-42", requestId: "approve-1" });
     strictEqual(run.hostRepo, "example/project");
     strictEqual(run.issueId, "GH-42");
     strictEqual(run.state, "active");
@@ -50,7 +50,20 @@ test("a created run is durable and reads back across a close and reopen", async 
 test("a retry is a new attempt; a repeated run request never creates a second attempt", async () => {
   await withStore(async ({ databasePath }) => {
     const store = open({ databasePath });
-    const run = store.createRun({ issueId: "GH-42" });
+    const approved = store.createRun({ issueId: "GH-42", requestId: "approve-1" });
+    strictEqual(approved.created, true);
+
+    // The same approval replayed across a reconnect: one Operational record.
+    const replayed = store.createRun({ issueId: "GH-42", requestId: "approve-1" });
+    strictEqual(replayed.created, false);
+    strictEqual(replayed.run.runId, approved.run.runId);
+
+    // A genuinely new approval of the same issue is a new intent, a new run.
+    const reapproved = store.createRun({ issueId: "GH-42", requestId: "approve-2" });
+    strictEqual(reapproved.created, true);
+    ok(reapproved.run.runId !== approved.run.runId);
+
+    const run = approved.run;
 
     const first = store.createAttempt({ runId: run.runId, requestId: "req-1", intent });
     strictEqual(first.created, true);
@@ -75,7 +88,7 @@ test("a retry is a new attempt; a repeated run request never creates a second at
 test("the dispatch intent is durable before any side effect", async () => {
   await withStore(async ({ databasePath }) => {
     const first = open({ databasePath });
-    const run = first.createRun({ issueId: "GH-42" });
+    const { run } = first.createRun({ issueId: "GH-42", requestId: "r-durable" });
     const { attempt } = first.createAttempt({
       runId: run.runId,
       requestId: "req-1",
@@ -109,7 +122,7 @@ test("every lifecycle state is representable from active", async () => {
       quarantined: ["reconciling", "quarantined"],
     };
     for (const [state, path] of Object.entries(paths)) {
-      const run = store.createRun({ issueId: "GH-42" });
+      const { run } = store.createRun({ issueId: "GH-42", requestId: `r-${state}` });
       for (const to of path) store.updateRunState({ runId: run.runId, to });
       strictEqual(store.getRun(run.runId).state, state, state);
     }
@@ -122,7 +135,7 @@ test("illegal lifecycle transitions are rejected with a typed error", async () =
     const store = open({ databasePath });
 
     // Terminal is absorbing: nothing comes back from it.
-    const ended = store.createRun({ issueId: "GH-42" });
+    const { run: ended } = store.createRun({ issueId: "GH-42", requestId: "r-ended" });
     store.updateRunState({ runId: ended.runId, to: "terminal" });
     throws(
       () => store.updateRunState({ runId: ended.runId, to: "active" }),
@@ -134,7 +147,7 @@ test("illegal lifecycle transitions are rejected with a typed error", async () =
     );
 
     // Quarantine cannot reactivate: ownership is uncertain until resolved.
-    const quarantined = store.createRun({ issueId: "GH-42" });
+    const { run: quarantined } = store.createRun({ issueId: "GH-42", requestId: "r-qrt" });
     store.updateRunState({ runId: quarantined.runId, to: "reconciling" });
     store.updateRunState({ runId: quarantined.runId, to: "quarantined" });
     throws(
@@ -143,7 +156,7 @@ test("illegal lifecycle transitions are rejected with a typed error", async () =
     );
 
     // An unknown target state is its own typed rejection, never a write.
-    const run = store.createRun({ issueId: "GH-42" });
+    const { run } = store.createRun({ issueId: "GH-42", requestId: "r-unknown-target" });
     throws(
       () => store.updateRunState({ runId: run.runId, to: "paused" }),
       (error) => error.code === "unknown_state",
@@ -167,7 +180,7 @@ test("illegal lifecycle transitions are rejected with a typed error", async () =
 test("records are host-repo-scoped: another repo's records are invisible", async () => {
   await withStore(async ({ databasePath }) => {
     const own = open({ databasePath, hostRepo: "example/project" });
-    const run = own.createRun({ issueId: "GH-42" });
+    const { run } = own.createRun({ issueId: "GH-42", requestId: "r-scoped" });
     own.createAttempt({ runId: run.runId, requestId: "req-1", intent });
     own.close();
 
@@ -199,14 +212,14 @@ test("records are host-repo-scoped: another repo's records are invisible", async
 test("attempts cannot start on a run that is not active", async () => {
   await withStore(async ({ databasePath }) => {
     const store = open({ databasePath });
-    const awaiting = store.createRun({ issueId: "GH-42" });
+    const { run: awaiting } = store.createRun({ issueId: "GH-42", requestId: "r-awaiting" });
     store.updateRunState({ runId: awaiting.runId, to: "awaiting-human" });
     throws(
       () => store.createAttempt({ runId: awaiting.runId, requestId: "req-1", intent }),
       (error) => error.code === "run_not_active",
     );
 
-    const done = store.createRun({ issueId: "GH-42" });
+    const { run: done } = store.createRun({ issueId: "GH-42", requestId: "r-done" });
     store.updateRunState({ runId: done.runId, to: "terminal" });
     throws(
       () => store.createAttempt({ runId: done.runId, requestId: "req-1", intent }),
@@ -232,7 +245,7 @@ test("operations on runs that do not exist are typed rejections", async () => {
       (error) => error.code === "attempt_not_found",
     );
     // An empty request id could never be deduplicated, so it is not one.
-    const run = store.createRun({ issueId: "GH-42" });
+    const run = store.createRun({ issueId: "GH-42", requestId: "r-validation" });
     throws(
       () => store.createAttempt({ runId: run.runId, requestId: "  ", intent }),
       (error) => error.code === "invalid_request",
@@ -250,7 +263,7 @@ test("operations on runs that do not exist are typed rejections", async () => {
 test("an unsupported schema version fails closed", async () => {
   await withStore(async ({ databasePath }) => {
     const store = open({ databasePath });
-    store.createRun({ issueId: "GH-42" });
+    store.createRun({ issueId: "GH-42", requestId: "r-version" });
     store.close();
 
     // A future store wrote this file: this version must not guess.
