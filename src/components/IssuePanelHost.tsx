@@ -1,3 +1,4 @@
+import { useClarificationPosture } from "../hooks/use-clarification-posture";
 import { useIssueActionRunner } from "../hooks/use-issue-actions";
 import { useWorkflowMode, useWorkflowState } from "../hooks/use-workflow-state";
 import { panelIdFor } from "../lib/issue-param";
@@ -20,6 +21,7 @@ export function IssuePanelHost({
   const state = useWorkflowState();
   const mode = useWorkflowMode();
   const { pending, message, run } = useIssueActionRunner();
+  const clarificationPosture = useClarificationPosture();
   return (
     <IssueDetailPanel
       issueId={panelIdFor(issueParam)}
@@ -27,6 +29,7 @@ export function IssuePanelHost({
       mode={mode}
       pending={pending}
       message={message}
+      clarificationPosture={clarificationPosture}
       onOpenChange={(open) => {
         if (!open) onParamChange(undefined);
       }}
