@@ -69,6 +69,8 @@ const routeFetch = ({
   return { fetchImpl, calls };
 };
 
+const fullPage = (start = 1000) => Array.from({ length: 100 }, (_, i) => issue(start + i));
+
 const collect = (overrides = {}) =>
   collectTrackerState({
     repo: "example/project",
@@ -309,12 +311,11 @@ test("a failing blocked-by read degrades with a warning, never fails sync, and m
 });
 
 test("a blocked-by read stopped at its page cap marks the record unknown too", async () => {
-  const fullPage = Array.from({ length: 100 }, (_, i) => issue(1000 + i));
   const { fetchImpl } = routeFetch({
     openPages: [
       [issue(56, { issue_dependencies_summary: { blocked_by: 100, total_blocked_by: 100 } })],
     ],
-    blockedByPages: { 56: [fullPage] },
+    blockedByPages: { 56: [fullPage()] },
   });
 
   const { workItems, warnings } = await collect({ fetchImpl, maxPages: 1 });
@@ -325,12 +326,11 @@ test("a blocked-by read stopped at its page cap marks the record unknown too", a
 });
 
 test("a later-page failure keeps the earlier pages' edges and still marks the read unknown", async () => {
-  const fullPage = Array.from({ length: 100 }, (_, i) => issue(1000 + i));
   const { fetchImpl } = routeFetch({
     openPages: [
       [issue(56, { issue_dependencies_summary: { blocked_by: 101, total_blocked_by: 101 } })],
     ],
-    blockedByPages: { 56: [fullPage, 500] },
+    blockedByPages: { 56: [fullPage(), 500] },
     maxPages: 2,
   });
 
@@ -344,7 +344,11 @@ test("a later-page failure keeps the earlier pages' edges and still marks the re
   strictEqual(withheld?.blockersRead, "unknown");
 });
 
-test("a successfully read empty blocked-by list is complete: no flag, unblocked work", async () => {
+test("a short read against the declared count is incomplete even when every page ended cleanly", async () => {
+  // The list endpoint returns closed blockers too, so a complete read
+  // returns every blocker the summary declares. A clean walk that comes
+  // back short (a clamped or lying page size) is the silent-truncation
+  // case the count cross-check exists to catch (GH-115).
   const { fetchImpl } = routeFetch({
     openPages: [
       [issue(56, { issue_dependencies_summary: { blocked_by: 0, total_blocked_by: 3 } })],
@@ -355,9 +359,9 @@ test("a successfully read empty blocked-by list is complete: no flag, unblocked 
   const { blockerEdges, workItems, warnings } = await collect({ fetchImpl });
 
   deepStrictEqual(blockerEdges, []);
-  deepStrictEqual(warnings, []);
-  const clean = workItems.find((item) => item.id === "GH-56");
-  strictEqual(clean?.blockersRead, undefined);
+  const withheld = workItems.find((item) => item.id === "GH-56");
+  strictEqual(withheld?.blockersRead, "unknown");
+  match(warnings.join("\n"), /0 of the 3 declared blockers/);
 });
 
 test("a repo with no dependency summaries and no body lines collects no edges and no warnings", async () => {

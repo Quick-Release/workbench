@@ -1147,7 +1147,7 @@ test("an edge add resolves the blocker's database id, posts the native gate, and
 });
 
 // GH-115: the read-back walks every page of the blocked-by list within its
-// cap, so a host with more blockers than one page cannot look less blocked
+// cap, so a host repo with more blockers than one page cannot look less blocked
 // than it is — and a failed page, a later-page failure, or a cap-stopped
 // walk is a typed failure, never a partial list served as complete.
 const fullPage = (start) =>
