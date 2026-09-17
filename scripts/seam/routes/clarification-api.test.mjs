@@ -1,7 +1,11 @@
 import { deepStrictEqual, match, strictEqual } from "node:assert";
 import test from "node:test";
 
-import { handleClarificationApi, isClarificationApiRoute } from "./clarification-api.mjs";
+import {
+  clarificationPostureLoader,
+  handleClarificationApi,
+  isClarificationApiRoute,
+} from "./clarification-api.mjs";
 
 const loopback = { host: "localhost:4051", origin: "http://localhost:4051" };
 const disabled = { posture: "disabled", available: false };
@@ -125,6 +129,38 @@ test("start takes no fields", async () => {
   const malformed = await handleClarificationApi(start({ posture: enabled, body: "not json" }));
   strictEqual(malformed.status, 400);
   match(malformed.json.message, /not valid JSON/);
+});
+
+test("a dormant install answers nothing but its typed denial, whatever the body", async () => {
+  // The policy denial precedes request validation: a malformed body on a
+  // disabled install must not leak a generic 400 past the posture gate.
+  const malformed = await handleClarificationApi(start({ body: "not json" }));
+  strictEqual(malformed.status, 403);
+  strictEqual(malformed.json.error, "clarification_disabled");
+
+  const extra = await handleClarificationApi(start({ posture: invalid, body: '{"x":1}' }));
+  strictEqual(extra.status, 403);
+  strictEqual(extra.json.error, "clarification_posture_invalid");
+});
+
+test("the posture loader names an unreadable config as its own invalid posture", async () => {
+  const failing = clarificationPostureLoader(async () => {
+    throw new Error("EACCES: config is not readable");
+  });
+  const posture = await failing();
+  strictEqual(posture.posture, "invalid");
+  strictEqual(posture.available, false);
+  deepStrictEqual(posture.reasons, [
+    "the clarification configuration could not be read: EACCES: config is not readable",
+  ]);
+
+  const working = clarificationPostureLoader(async () => ({
+    enabled: true,
+    provider: "openai-codex-oauth",
+    dataDestination: "https://api.openai.com",
+    problems: [],
+  }));
+  deepStrictEqual(await working(), { posture: "enabled", available: false });
 });
 
 test("the start route answers POST only", async () => {

@@ -38,9 +38,11 @@ test("an enabled block missing a posture element is invalid, naming each", () =>
 });
 
 test("an enabled block reports its problems and its missing elements together", () => {
+  // provider rides as `null` (present but invalid): its own problem names
+  // the defect, and the evaluator must not also falsely call it missing.
   const posture = evaluateClarificationPosture({
     enabled: true,
-    provider: " ",
+    provider: null,
     dataDestination: undefined,
     problems: ["clarification.provider must be a non-empty string"],
   });

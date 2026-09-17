@@ -35,4 +35,7 @@ export declare const handleClarificationApi: (input: {
   body?: string | undefined;
   posture: ClarificationPosture;
 }) => Promise<ApiResponse>;
+export declare const clarificationPostureLoader: (
+  loadClarificationConfig: () => Promise<unknown>,
+) => () => Promise<ClarificationPosture>;
 export declare const clarificationApiPlugin: () => Plugin;

@@ -12,9 +12,11 @@ export const evaluateClarificationPosture = (clarification) => {
   const reasons = [...(clarification?.problems ?? [])];
   const enabled = clarification?.enabled === true;
   if (enabled) {
-    if (!clarification.provider)
+    // `null` fields are present-but-invalid — their own problem already
+    // names the defect; only a truly absent field is called missing.
+    if (clarification.provider === undefined)
       reasons.push("clarification.provider is required when clarification is enabled");
-    if (!clarification.dataDestination)
+    if (clarification.dataDestination === undefined)
       reasons.push("clarification.dataDestination is required when clarification is enabled");
   }
   if (reasons.length > 0) return { posture: "invalid", reasons, available: false };

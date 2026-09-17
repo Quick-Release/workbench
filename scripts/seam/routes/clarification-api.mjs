@@ -11,13 +11,13 @@ import { gateRejection } from "../middleware/request-gate.mjs";
 
 // The clarification API middleware (spec #221, ticket #222): the
 // Owned-clarification slice of the execution seam, in its ship-dark
-// posture. Every route gates on the posture before anything else — a
+// posture. Both action denials precede any request-body reading — a
 // disabled install and an invalid one get typed policy denials, never a
-// generic error — and even an enabled install can only be told the honest
-// truth: the clarification runtime is not part of this build yet. The
-// handlers are pure — request parts in, a response part out, success
-// results through the Effect Schema — and the posture is injected, so
-// tests substitute one and nothing reads the host config.
+// generic validation error — and even an enabled install can only be told
+// the honest truth: the clarification runtime is not part of this build
+// yet. The handlers are pure — request parts in, a response part out,
+// success results through the Effect Schema — and the posture is injected,
+// so tests substitute one and nothing reads the host config.
 
 const STATUS_ROUTE = /^\/api\/clarification\/?$/;
 const START_ROUTE = /^\/api\/clarification\/start\/?$/;
@@ -58,6 +58,28 @@ export const handleClarificationStart = ({ method, pathname, host, origin, body,
 
   if (method !== "POST") return methodMismatch("POST");
 
+  // The posture denials come before the body is even parsed: a dormant
+  // install must never learn anything but the typed denial, whatever the
+  // request carried.
+  if (posture.posture === "disabled")
+    return {
+      status: 403,
+      json: {
+        error: "clarification_disabled",
+        message:
+          "owned clarification is not enabled on this install — the clarification block in workbench.config.json opts an internal install in",
+      },
+    };
+  if (posture.posture === "invalid")
+    return {
+      status: 403,
+      json: {
+        error: "clarification_posture_invalid",
+        reasons: [...posture.reasons],
+        message: `the clarification configuration is incomplete: ${posture.reasons.join("; ")}`,
+      },
+    };
+
   let raw;
   try {
     raw = JSON.parse(body ?? "");
@@ -84,24 +106,6 @@ export const handleClarificationStart = ({ method, pathname, host, origin, body,
       json: { error: "invalid_request", message: "a clarification start takes no fields" },
     };
 
-  if (posture.posture === "disabled")
-    return {
-      status: 403,
-      json: {
-        error: "clarification_disabled",
-        message:
-          "owned clarification is not enabled on this install — the clarification block in workbench.config.json opts an internal install in",
-      },
-    };
-  if (posture.posture === "invalid")
-    return {
-      status: 403,
-      json: {
-        error: "clarification_posture_invalid",
-        reasons: [...posture.reasons],
-        message: `the clarification configuration is incomplete: ${posture.reasons.join("; ")}`,
-      },
-    };
   return {
     status: 501,
     json: { error: "clarification_unavailable", message: NOT_AVAILABLE_MESSAGE },
@@ -111,28 +115,35 @@ export const handleClarificationStart = ({ method, pathname, host, origin, body,
 export const handleClarificationApi = async (deps) =>
   (await handleClarificationStatus(deps)) ?? (await handleClarificationStart(deps));
 
+// Turns the host's config block into the posture, with the unreadable-config
+// case as its own invalid posture — a config that cannot be read at all is
+// never a boot failure: the capability stays dark and the denial names why.
+// Extracted so tests can inject a loader instead of a host checkout.
+export const clarificationPostureLoader = (loadClarificationConfig) => async () => {
+  try {
+    return evaluateClarificationPosture(await loadClarificationConfig());
+  } catch (error) {
+    return {
+      posture: "invalid",
+      available: false,
+      reasons: [
+        `the clarification configuration could not be read: ${String(error?.message ?? error)}`,
+      ],
+    };
+  }
+};
+
 export const clarificationApiPlugin = () => ({
   name: "workbench-clarification-api",
   configureServer(server) {
     // The posture resolves per request from the host repo's
     // workbench.config.json — the same source-root resolution the other
     // seam middlewares use, so a config edit shows up without a restart.
-    // A config that cannot be read at all is an invalid posture, never a
-    // boot failure: the capability stays dark and the denial names why.
     const hostRoot = resolve(process.env.WORKBENCH_SOURCE_ROOT || server.config.root);
-    const resolvePosture = async () => {
-      try {
-        return evaluateClarificationPosture((await loadWorkbenchConfig(hostRoot)).clarification);
-      } catch (error) {
-        return {
-          posture: "invalid",
-          available: false,
-          reasons: [
-            `the clarification configuration could not be read: ${String(error?.message ?? error)}`,
-          ],
-        };
-      }
-    };
+    const resolvePosture = clarificationPostureLoader(async () => {
+      const config = await loadWorkbenchConfig(hostRoot);
+      return config.clarification;
+    });
     server.middlewares.use(
       guardedApi(async (request, response, next, url) => {
         if (!isClarificationApiRoute(url.pathname)) return next();

@@ -195,19 +195,22 @@ const normalizeSessions = (value) => {
 // ships dark and fails closed without failing boot — a malformed or
 // incomplete block must leave the dashboard up, the capability hidden,
 // and the seam answering typed denials — so its problems are collected
-// here instead of thrown like the other blocks'. The posture evaluator
+// here instead of thrown like the other blocks'. A string field is
+// `undefined` when absent and `null` when present but invalid — the
+// posture evaluator uses that distinction to name a missing element
+// without also falsely calling an invalid one missing. The evaluator
 // (scripts/seam/clarification/posture.mjs) turns the normalized block and
 // its problems into the one typed state the seam and dashboard read.
 const postureString = (value, name, problems, { maxLength = 200 } = {}) => {
   if (value === undefined) return undefined;
   if (typeof value !== "string" || value.trim().length === 0) {
     problems.push(`${name} must be a non-empty string`);
-    return undefined;
+    return null;
   }
   const result = value.trim();
   if (result.length > maxLength) {
     problems.push(`${name} must be at most ${maxLength} characters`);
-    return undefined;
+    return null;
   }
   return result;
 };
