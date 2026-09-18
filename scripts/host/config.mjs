@@ -191,6 +191,54 @@ const normalizeSessions = (value) => {
   return { enabled, databasePath };
 };
 
+// Owned clarification posture (spec #221, ticket #222): the capability
+// ships dark and fails closed without failing boot — a malformed or
+// incomplete block must leave the dashboard up, the capability hidden,
+// and the seam answering typed denials — so its problems are collected
+// here instead of thrown like the other blocks'. A string field is
+// `undefined` when absent and `null` when present but invalid — the
+// posture evaluator uses that distinction to name a missing element
+// without also falsely calling an invalid one missing. The evaluator
+// (scripts/seam/clarification/posture.mjs) turns the normalized block and
+// its problems into the one typed state the seam and dashboard read.
+const postureString = (value, name, problems, { maxLength = 200 } = {}) => {
+  if (value === undefined) return undefined;
+  if (typeof value !== "string" || value.trim().length === 0) {
+    problems.push(`${name} must be a non-empty string`);
+    return null;
+  }
+  const result = value.trim();
+  if (result.length > maxLength) {
+    problems.push(`${name} must be at most ${maxLength} characters`);
+    return null;
+  }
+  return result;
+};
+
+const normalizeClarification = (value) => {
+  const problems = [];
+  if (value === undefined)
+    return { enabled: false, provider: undefined, dataDestination: undefined, problems };
+  if (!isRecord(value)) {
+    problems.push("clarification must be an object");
+    return { enabled: false, provider: undefined, dataDestination: undefined, problems };
+  }
+  let enabled = value.enabled ?? false;
+  if (typeof enabled !== "boolean") {
+    problems.push("clarification.enabled must be a boolean");
+    enabled = false;
+  }
+  const provider = postureString(value.provider, "clarification.provider", problems, {
+    maxLength: 100,
+  });
+  const dataDestination = postureString(
+    value.dataDestination,
+    "clarification.dataDestination",
+    problems,
+  );
+  return { enabled, provider, dataDestination, problems };
+};
+
 export const loadWorkbenchConfig = async (rootDirectory) => {
   const path = join(rootDirectory, "workbench.config.json");
   let text;
@@ -207,6 +255,12 @@ export const loadWorkbenchConfig = async (rootDirectory) => {
       theme: { ...DEFAULT_THEME },
       services: [],
       sessions: { enabled: false, databasePath: undefined },
+      clarification: {
+        enabled: false,
+        provider: undefined,
+        dataDestination: undefined,
+        problems: [],
+      },
       path,
     };
   }
@@ -228,6 +282,7 @@ export const loadWorkbenchConfig = async (rootDirectory) => {
     theme: normalizeTheme(value.theme),
     services: normalizeServices(value.services),
     sessions: normalizeSessions(value.sessions),
+    clarification: normalizeClarification(value.clarification),
     path,
   };
 };

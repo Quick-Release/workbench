@@ -6,6 +6,10 @@ export type FrontierItem = {
   id: string;
   open: boolean;
   assignees: readonly string[];
+  // GH-115: "unknown" when the item's native blocker list was read
+  // incompletely at the last sync. Such an item is never grabbable — a
+  // prefix of blockers never proves an omitted one closed.
+  blockersRead?: "unknown";
 };
 
 export type ItemsById = Map<string, FrontierItem>;
@@ -14,6 +18,7 @@ export const frontierItemFromWorkItem = (record: WorkItemRecord): FrontierItem =
   id: record.id,
   open: record.state === "open",
   assignees: record.assignees,
+  ...(record.blockersRead === "unknown" ? { blockersRead: "unknown" as const } : {}),
 });
 
 export const itemsById = (items: readonly FrontierItem[]): ItemsById =>
@@ -42,8 +47,10 @@ export const openBlockers = (
 };
 
 // The frontier is computed, never stored: open ∧ unassigned ∧ all blockers
-// closed, closed-is-closed. Map children keep their map order ("first in map
-// order wins"); everything else falls back to issue number ascending.
+// closed, closed-is-closed. An item whose blocker list was read
+// incompletely (GH-115) is withheld outright — an absent edge cannot prove
+// an absent blocker. Map children keep their map order ("first in map order
+// wins"); everything else falls back to issue number ascending.
 export const frontier = (
   workItems: readonly FrontierItem[],
   blockerEdges: readonly BlockerEdgeRecord[],
@@ -53,6 +60,7 @@ export const frontier = (
   const compare = byMapOrderThenNumber(mapOrderIndex(maps));
 
   const grabbable = workItems.filter((item) => {
+    if (item.blockersRead === "unknown") return false;
     if (!item.open || item.assignees.length > 0) return false;
     const { open, dangling } = openBlockers(item.id, blockerEdges, byId);
     return open.length === 0 && dangling.length === 0;

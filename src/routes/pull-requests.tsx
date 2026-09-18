@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { PullRequestsPage } from "../components/PullRequestsPage";
 import { overviewData } from "../data";
 import { parseAiHealth, parseReviewHealth } from "../schema";
-import type { ReviewEngineHealth } from "../types";
+import type { PullRequestRecord, ReviewEngineHealth } from "../types";
 
 export const Route = createFileRoute("/pull-requests")({
   component: PullRequestsRoute,
@@ -31,9 +31,15 @@ const probeVerdict = async <T,>(
   }
 };
 
-// Exported for the route's own probe-on-load tests; the router wires it
-// through Route above.
-export function PullRequestsRoute() {
+// Exported for the route's own tests; the router wires it through Route
+// above. The PR list is injectable so the route's tests run on fixed
+// fixtures instead of the freshly synced live snapshot (#117) — production
+// always reads the generated snapshot.
+export function PullRequestsRoute({
+  pullRequests = overviewData.pullRequests,
+}: {
+  pullRequests?: readonly PullRequestRecord[];
+} = {}) {
   const [aiConfigured, setAiConfigured] = useState<boolean | null>(null);
   const [engineHealth, setEngineHealth] = useState<readonly ReviewEngineHealth[] | null>(null);
 
@@ -48,7 +54,7 @@ export function PullRequestsRoute() {
 
   return (
     <PullRequestsPage
-      pullRequests={overviewData.pullRequests}
+      pullRequests={pullRequests}
       aiConfigured={aiConfigured}
       engineHealth={engineHealth}
     />

@@ -16,6 +16,7 @@ import type {
 import {
   artifactKinds,
   blockerEdgeSources,
+  clarificationPostures,
   clientTicketKinds,
   decisionTicketKinds,
   startDenialReasons,
@@ -138,6 +139,10 @@ export const WorkItemRecordSchema = Schema.Struct({
   // event. Optional like the other GH-136 metadata: an older snapshot's
   // absence is unknown, never zero time in phase.
   phaseSince: Schema.optional(Schema.String),
+  // GH-115: written only when the native blocker list was read incompletely
+  // (failed or capped). Absence means the read was complete — a successful
+  // empty list is complete, never unknown.
+  blockersRead: Schema.optional(Schema.Literals(["unknown"])),
 });
 
 export const ClientTicketKindSchema = Schema.Literals(clientTicketKinds);
@@ -800,6 +805,35 @@ export type ReviewCancelRequest = Schema.Schema.Type<typeof ReviewCancelRequestS
 
 export const parseReviewCancelRequest: (input: unknown) => ReviewCancelRequest =
   Schema.decodeUnknownSync(ReviewCancelRequestSchema, { onExcessProperty: "error" });
+
+// Owned clarification posture (spec #221, ticket #222): what the seam's
+// status route reports and every clarification action route gates on.
+// `reasons` rides only when the posture is invalid — one entry per
+// offending configuration element — and the honest not-yet-available
+// `message` only when it is enabled.
+export const ClarificationStatusResultSchema = Schema.Struct({
+  posture: Schema.Literals(clarificationPostures),
+  available: Schema.optional(Schema.Boolean),
+  reasons: Schema.optional(Schema.Array(Schema.String)),
+  message: Schema.optional(Schema.String),
+});
+
+export type ClarificationStatusResult = Schema.Schema.Type<typeof ClarificationStatusResultSchema>;
+
+export const parseClarificationStatusResult: (input: unknown) => ClarificationStatusResult =
+  Schema.decodeUnknownSync(ClarificationStatusResultSchema, { onExcessProperty: "error" });
+
+// The clarification start request (spec #221): the first slice takes no
+// fields — the target issue, context packet, and approval manifest arrive
+// with the clarification coordinator (ticket 09 of the clarification
+// build). Until then the route exists so its denials are real, not
+// hypothetical.
+export const ClarificationStartRequestSchema = Schema.Struct({});
+
+export type ClarificationStartRequest = Schema.Schema.Type<typeof ClarificationStartRequestSchema>;
+
+export const parseClarificationStartRequest: (input: unknown) => ClarificationStartRequest =
+  Schema.decodeUnknownSync(ClarificationStartRequestSchema, { onExcessProperty: "error" });
 
 // The run's event stream (epic #20, ticket #26; issue #40): the runner's
 // typed events as the UI consumes them — a started echo of the request (the

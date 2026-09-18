@@ -12,7 +12,8 @@ export type DisplayCaveatKind =
   | "implementing-needs-info"
   | "shipped-open"
   | "grilling-wontfix"
-  | "closed-without-shipped";
+  | "closed-without-shipped"
+  | "blockers-unknown";
 
 export type DisplayCaveat = {
   kind: DisplayCaveatKind;
@@ -70,6 +71,15 @@ export const deriveDisplayState = (workItem: WorkItemRecord, blocked: boolean): 
     caveats.push({
       kind: "closed-without-shipped",
       message: `Closed while phase is "${phase}" — closed without shipped.`,
+    });
+
+  // GH-115: the sync could not read the item's native blocker list
+  // completely. The frontier withholds the item; the caveat says why.
+  if (workItem.blockersRead === "unknown")
+    caveats.push({
+      kind: "blockers-unknown",
+      message:
+        "Its blocker list could not be read completely at the last sync — withheld from the frontier until a sync reads it cleanly.",
     });
 
   return {
