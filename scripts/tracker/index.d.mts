@@ -6,11 +6,10 @@
 export declare const collectTrackerState: (input: {
   repo: string;
   env?: Record<string, string | undefined>;
-  fetchImpl?: (url: string) => Promise<{
-    ok: boolean;
-    status: number;
-    json: () => Promise<unknown>;
-  }>;
+  fetchImpl?: (
+    url: string | URL,
+    init?: { headers?: Record<string, string>; signal?: AbortSignal },
+  ) => Promise<{ ok: boolean; status: number; json: () => Promise<unknown> }>;
   ghToken?: () => Promise<string>;
   apiBaseUrl?: string;
   tokenEnv?: string;
