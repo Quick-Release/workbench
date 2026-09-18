@@ -1,11 +1,11 @@
-import { deepStrictEqual, ok, rejects, strictEqual, throws } from "node:assert";
+import { deepStrictEqual, match, ok, rejects, strictEqual, throws } from "node:assert";
 import { appendFile, mkdtemp, rm } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { ADAPTER_VERSION, startManagedSession } from "./pi-managed.mjs";
+import { ADAPTER_VERSION, SESSION_STATES, startManagedSession } from "./pi-managed.mjs";
 
 // Contract tests for the pi-managed/v1 adapter (spec #221, tickets #227 +
 // #228, ADR 0018): everything runs against a scripted fake JSONL child — the
@@ -74,6 +74,14 @@ const fakeRuntime = () => {
 };
 
 const testEnv = { PATH: "/usr/bin" };
+
+// A turn's two promises reject together in every terminal path; handlers
+// attach at birth so a rejection is never handled late.
+const rejectBoth = (turn, code) =>
+  Promise.all([
+    rejects(turn.accepted, (error) => error.code === code),
+    rejects(turn.settled, (error) => error.code === code),
+  ]);
 
 const hello = (protocol = "1") => JSON.stringify({ type: "hello", protocol });
 
@@ -334,10 +342,7 @@ test("dispose rejects the unsettled live turn through the same end path as EOF",
     const fake = fakeRuntime();
     const session = await start(fake, { sessionRoot });
     const turn = session.sendPrompt("Will dispose settle me?");
-    const rejected = Promise.all([
-      rejects(turn.accepted, (error) => error.code === "runtime_ended_unsettled"),
-      rejects(turn.settled, (error) => error.code === "runtime_ended_unsettled"),
-    ]);
+    const rejected = rejectBoth(turn, "runtime_ended_unsettled");
     await session.dispose();
     await rejected;
     strictEqual(session.state(), "ended");
@@ -357,10 +362,7 @@ test("a second prompt before settlement is a typed rejection, not a silent queue
     await drain();
     const next = session.sendPrompt("now the floor is free");
     strictEqual(next.requestId.startsWith("req_"), true);
-    const floorRejection = Promise.all([
-      rejects(next.accepted, (error) => error.code === "runtime_ended_unsettled"),
-      rejects(next.settled, (error) => error.code === "runtime_ended_unsettled"),
-    ]);
+    const floorRejection = rejectBoth(next, "runtime_ended_unsettled");
     await session.dispose();
     await floorRejection;
   });
@@ -402,10 +404,7 @@ test("a runtime that ends before settling never reports a settled turn", async (
     const fake = fakeRuntime();
     const session = await start(fake, { sessionRoot });
     const turn = session.sendPrompt("Will you settle?");
-    const endedUnsettled = Promise.all([
-      rejects(turn.accepted, (error) => error.code === "runtime_ended_unsettled"),
-      rejects(turn.settled, (error) => error.code === "runtime_ended_unsettled"),
-    ]);
+    const endedUnsettled = rejectBoth(turn, "runtime_ended_unsettled");
 
     fake.end();
     await endedUnsettled;
@@ -621,10 +620,11 @@ test("follow-ups queue explicitly behind the live turn and deliver in order as f
     fake.push(JSON.stringify({ type: "agent_settled" }));
     await drain();
     deepStrictEqual(await live.settled, { requestId: live.requestId });
-    // The first follow-up is delivered as its own prompt — acceptance and
-    // delivery remain separate, and it settles on its own settle signal.
+    // The first follow-up rides Pi's follow_up operation as its own turn —
+    // acceptance and delivery remain separate, and it settles on its own
+    // settle signal.
     deepStrictEqual(lastFrame(fake), {
-      type: "prompt",
+      type: "follow_up",
       id: first.requestId,
       text: "first follow-up",
     });
@@ -636,7 +636,7 @@ test("follow-ups queue explicitly behind the live turn and deliver in order as f
     await drain();
     deepStrictEqual(await first.settled, { requestId: first.requestId });
     deepStrictEqual(lastFrame(fake), {
-      type: "prompt",
+      type: "follow_up",
       id: second.requestId,
       text: "second follow-up",
     });
@@ -644,9 +644,14 @@ test("follow-ups queue explicitly behind the live turn and deliver in order as f
     fake.push(JSON.stringify({ type: "agent_settled" }));
     await drain();
     deepStrictEqual(await second.settled, { requestId: second.requestId });
-    const prompts = frames(fake).filter((frame) => frame.type === "prompt");
+    const delivered = frames(fake).filter((frame) => ["prompt", "follow_up"].includes(frame.type));
     deepStrictEqual(
-      prompts.map((frame) => frame.text),
+      delivered.map((frame) => frame.type),
+      ["prompt", "follow_up", "follow_up"],
+      "a follow-up rides Pi's follow_up operation, not a second prompt",
+    );
+    deepStrictEqual(
+      delivered.map((frame) => frame.text),
       ["the live turn", "first follow-up", "second follow-up"],
       "delivery is FIFO and nothing jumps the queue",
     );
@@ -664,10 +669,8 @@ test("clear-queue drops queued work explicitly and tells the runtime", async () 
     // The handlers attach before the clear: a rejection is never handled
     // late, and a cleared follow-up rejects both of its promises.
     const clearedRejections = Promise.all([
-      rejects(first.accepted, (error) => error.code === "cancelled"),
-      rejects(first.settled, (error) => error.code === "cancelled"),
-      rejects(second.accepted, (error) => error.code === "cancelled"),
-      rejects(second.settled, (error) => error.code === "cancelled"),
+      rejectBoth(first, "cancelled"),
+      rejectBoth(second, "cancelled"),
     ]);
 
     const { cleared } = session.clearQueue();
@@ -700,10 +703,7 @@ test("stop-turn clears the queue first, then aborts; the settle after abort is a
     const live = session.sendPrompt("the live turn");
     const liveCancelled = rejects(live.settled, (error) => error.code === "cancelled");
     const doomed = session.queueFollowUp("never delivers");
-    const doomedRejected = Promise.all([
-      rejects(doomed.accepted, (error) => error.code === "cancelled"),
-      rejects(doomed.settled, (error) => error.code === "cancelled"),
-    ]);
+    const doomedRejected = rejectBoth(doomed, "cancelled");
     const stopped = session.stopTurn();
 
     deepStrictEqual(
@@ -742,10 +742,7 @@ test("a runtime end after an explicit stop is cancelled, not unknown", async () 
     const fake = fakeRuntime();
     const session = await start(fake, { sessionRoot });
     const live = session.sendPrompt("stopped then the runtime dies");
-    const cancelled = Promise.all([
-      rejects(live.accepted, (error) => error.code === "cancelled"),
-      rejects(live.settled, (error) => error.code === "cancelled"),
-    ]);
+    const cancelled = rejectBoth(live, "cancelled");
     session.stopTurn();
     fake.end();
     await cancelled;
@@ -899,10 +896,7 @@ test("process death is the evidence unknown-outcome reconciliation needs; nothin
     const fake = fakeRuntime();
     const session = await start(fake, { sessionRoot });
     const turn = session.sendPrompt("will the runtime survive?");
-    const unsettled = Promise.all([
-      rejects(turn.accepted, (error) => error.code === "runtime_ended_unsettled"),
-      rejects(turn.settled, (error) => error.code === "runtime_ended_unsettled"),
-    ]);
+    const unsettled = rejectBoth(turn, "runtime_ended_unsettled");
 
     const framesBefore = fake.stdinFrames.length;
     const spawnCallsBefore = fake.calls.length;
@@ -1041,6 +1035,121 @@ test("a provider failure before acceptance rejects the acceptance and holds the 
       "queued work never delivers without an explicit human decision",
     );
     await session.dispose();
+  });
+});
+
+test("an error correlated to an un-acknowledged turn is that turn's rejection, not a provider failure", async () => {
+  await withSessionRoot(async ({ sessionRoot }) => {
+    const fake = fakeRuntime();
+    const session = await start(fake, { sessionRoot });
+
+    const turn = session.sendPrompt("will be rejected in preflight");
+    const followUp = session.queueFollowUp("survives the rejection");
+    const outcomes = Promise.all([
+      turn.accepted.then(
+        () => "accepted",
+        (error) => error,
+      ),
+      turn.settled.then(
+        () => "settled",
+        (error) => error,
+      ),
+    ]);
+    // The held follow-up's promises ride to delivery or to the end.
+    const followUpSettled = followUp.settled.then(
+      (value) => value,
+      (error) => error,
+    );
+    fake.push(JSON.stringify({ type: "error", id: turn.requestId, detail: "preflight failed" }));
+    await drain();
+    const [acceptedOutcome, settledOutcome] = await outcomes;
+    strictEqual(acceptedOutcome.code, "rejected");
+    strictEqual(settledOutcome.code, "rejected");
+    strictEqual(
+      settledOutcome.evidence.detail,
+      "preflight failed",
+      "the Pi error travels verbatim",
+    );
+    strictEqual(session.state(), "ready", "a command rejection never parks the session");
+    const clearFrames = frames(fake).filter((frame) => frame.type === "clear_queue");
+    strictEqual(clearFrames.length, 0, "the queue is not cleared behind a rejection");
+
+    // A settle that settles nothing delivers nothing: the follow-up stays
+    // held while the floor is free — the coordinator owns what runs next.
+    fake.push(JSON.stringify({ type: "agent_settled" }));
+    await drain();
+    ok(
+      frames(fake).some((frame) => frame.type === "follow_up") === false,
+      "a rejection settles nothing, so queued work stays held",
+    );
+
+    // The next real settle delivers the held follow-up.
+    const next = session.sendPrompt("the floor is free after a rejection");
+    fake.push(JSON.stringify({ type: "accepted", id: next.requestId }));
+    fake.push(JSON.stringify({ type: "agent_settled" }));
+    await drain();
+    deepStrictEqual(await next.settled, { requestId: next.requestId });
+    ok(
+      frames(fake).some((frame) => frame.type === "follow_up" && frame.id === followUp.requestId),
+      "the held follow-up delivers on the next real settle",
+    );
+    fake.push(JSON.stringify({ type: "accepted", id: followUp.requestId }));
+    fake.push(JSON.stringify({ type: "agent_settled" }));
+    await drain();
+    deepStrictEqual(await followUpSettled, { requestId: followUp.requestId });
+    await session.dispose();
+  });
+});
+
+test("a policy denial is a typed denial, never a provider park", async () => {
+  await withSessionRoot(async ({ sessionRoot }) => {
+    const fake = fakeRuntime();
+    const session = await start(fake, { sessionRoot });
+
+    const turn = session.sendPrompt("touches an unapproved capability");
+    const denied = rejectBoth(turn, "policy_denied");
+    fake.push(
+      JSON.stringify({ type: "error", kind: "policy_denied", capability: "tracker-write" }),
+    );
+    await drain();
+    await denied;
+    strictEqual(session.state(), "ready", "a policy denial is typed, not awaiting-human");
+    await session.dispose();
+  });
+});
+
+test("a steer the runtime settles without acknowledging rejects instead of dangling", async () => {
+  await withSessionRoot(async ({ sessionRoot }) => {
+    const fake = fakeRuntime();
+    const session = await start(fake, { sessionRoot });
+    const turn = session.sendPrompt("the live turn");
+    const steer = session.steer("mid-turn guidance");
+    const steerOutcome = steer.accepted.then(
+      () => "accepted",
+      (error) => error,
+    );
+    const turnSettled = turn.settled;
+
+    fake.push(JSON.stringify({ type: "agent_settled" }));
+    await drain();
+    deepStrictEqual(await turnSettled, { requestId: turn.requestId });
+    const steerFailure = await steerOutcome;
+    strictEqual(steerFailure.code, "rejected");
+    match(steerFailure.message, /without acknowledging/);
+    await session.dispose();
+  });
+});
+
+test("state() only speaks SESSION_STATES", async () => {
+  await withSessionRoot(async ({ sessionRoot }) => {
+    const fake = fakeRuntime();
+    const session = await start(fake, { sessionRoot });
+    ok(SESSION_STATES.includes(session.state()));
+    fake.push(JSON.stringify({ type: "confirm", id: "d9" }));
+    await drain();
+    ok(SESSION_STATES.includes(session.state()));
+    await session.dispose();
+    ok(SESSION_STATES.includes(session.state()));
   });
 });
 

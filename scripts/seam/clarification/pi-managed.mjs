@@ -29,15 +29,23 @@ import { join } from "node:path";
 // The control surface is explicit and Pi-shaped (steer, follow-up queue,
 // clear-queue, stop-turn, terminate-runtime are distinct operations —
 // nothing is implicit): steer rides the live turn; a follow-up queues
-// behind it (bounded, FIFO, delivered as its own accepted-versus-settled
-// turn); clear-queue drops queued work and tells the runtime; stop-turn
-// clears the queue FIRST, then aborts, and the settle that follows an abort
-// is a cancelled outcome; terminate-runtime is destructive and typed-
-// confirmed. Auth and quota failures park the session awaiting-human with
-// the provider-reported usage preserved verbatim — nothing is retried,
-// re-targeted, or silently fallen back. Process death is recorded as exit
-// evidence and the unsettled turn rejects with an unknown-after-process-
-// loss outcome for reconciliation; no restart, no prompt replay.
+// behind it (bounded, FIFO) and rides Pi's `follow_up` operation once the
+// floor frees, its ack its acceptance and the next settle its delivery's
+// completion; clear-queue drops queued work and tells the runtime;
+// stop-turn clears the queue FIRST, then aborts, and the settle that
+// follows an abort is a cancelled outcome; terminate-runtime is destructive
+// and typed-confirmed.
+//
+// The failure mapping is classified. An error frame correlated by id to an
+// un-acknowledged command is that command's typed `rejected` — the Pi error
+// travels verbatim and nothing parks. A `policy_denied` is a typed denial,
+// never a park. Only an uncorrelated provider condition parks the session
+// awaiting-human (auth and quota are named kinds, anything else is a
+// provider failure all the same) with the provider-reported usage preserved
+// verbatim — nothing is retried, re-targeted, or silently fallen back.
+// Process death is recorded as exit evidence and the unsettled turn rejects
+// with the documented Unknown outcome for reconciliation; no restart, no
+// prompt replay.
 //
 // Extension UI: `select`, `confirm`, `input`, and `editor` dialogs surface
 // as typed pending questions with cancellation and a bounded timeout (the
@@ -216,19 +224,35 @@ export const startManagedSession = ({
       child.stdin.write(`${JSON.stringify(frame)}\n`);
     };
 
+    const disarmDialogTimeout = (dialogId) => {
+      const handle = dialogTimeouts.get(dialogId);
+      if (handle !== undefined) {
+        cancelTimeout(handle);
+        dialogTimeouts.delete(dialogId);
+      }
+    };
+
     // The typed cancellation of one pending dialog — the explicit cancel,
     // the bounded timeout, and the end drain all land here. Never a default
     // answer: the runtime is told the dialog was cancelled.
     const cancelDialogInternal = ({ dialogId }) => {
       if (pendingDialogs.get(dialogId) === undefined) return false;
       pendingDialogs.delete(dialogId);
-      const handle = dialogTimeouts.get(dialogId);
-      if (handle !== undefined) {
-        cancelTimeout(handle);
-        dialogTimeouts.delete(dialogId);
-      }
+      disarmDialogTimeout(dialogId);
       writeFrame({ type: "dialog_response", id: dialogId, cancelled: true });
       return true;
+    };
+
+    // One acceptance channel: an ack resolves it; a typed rejection, the
+    // settle drain, or the end drain rejects it — it never dangles.
+    const makeAcceptance = () => {
+      let onAccepted;
+      let onAcceptRejected;
+      const accepted = new Promise((resolve, reject) => {
+        onAccepted = resolve;
+        onAcceptRejected = reject;
+      });
+      return { accepted, onAccepted, onAcceptRejected };
     };
 
     // One prompt-shaped turn: fresh identity, acceptance and settlement as
@@ -236,35 +260,37 @@ export const startManagedSession = ({
     // a queued follow-up's promises travel to its caller at queue time and
     // only ride the wire when the floor frees.
     const makeTurn = (requestId) => {
-      let acceptResolve;
-      let acceptReject;
       let settleResolve;
       let settleReject;
-      const accepted = new Promise((resolve, reject) => {
-        acceptResolve = resolve;
-        acceptReject = reject;
-      });
       const settled = new Promise((resolve, reject) => {
         settleResolve = resolve;
         settleReject = reject;
       });
-      return {
-        promises: { accepted, settled },
-        turn: {
-          requestId,
-          stopped: false,
-          onAccepted: () => acceptResolve(),
-          onAcceptRejected: acceptReject,
-          onSettled: () => settleResolve({ requestId }),
-          onSettleRejected: settleReject,
+      const { accepted, onAccepted, onAcceptRejected } = makeAcceptance();
+      const turn = {
+        requestId,
+        stopped: false,
+        accepted: false,
+        onAccepted: () => {
+          turn.accepted = true;
+          onAccepted();
         },
+        onAcceptRejected,
+        onSettled: () => settleResolve({ requestId }),
+        onSettleRejected: settleReject,
       };
+      return { promises: { accepted, settled }, turn };
     };
 
     const rejectQueuedEntry = (entry, why) => {
       entry.turn.onAcceptRejected(why);
       entry.turn.onSettleRejected(why);
     };
+
+    // A turn the Developer explicitly stopped never reports an outcome of
+    // its own: cancelled, whatever the runtime does next.
+    const stoppedTurnRejection = () =>
+      adapterError("cancelled", "the turn was explicitly stopped — the outcome is cancelled");
 
     const dispatchPrompt = (turn, text) => {
       liveTurns.push(turn);
@@ -274,7 +300,12 @@ export const startManagedSession = ({
     const dispatchNextFollowUp = () => {
       if (ended || liveTurns.length > 0) return;
       const next = followUps.shift();
-      if (next !== undefined) dispatchPrompt(next.turn, next.text);
+      if (next === undefined) return;
+      // A queued follow-up rides Pi's own follow_up operation once the
+      // floor frees: its ack is its acceptance, the next settle is its
+      // delivery's completion — acceptance and delivery remain separate.
+      liveTurns.push(next.turn);
+      writeFrame({ type: "follow_up", id: next.turn.requestId, text: next.text });
     };
 
     // The queue clear: queued work is dropped outright — it will never
@@ -307,17 +338,27 @@ export const startManagedSession = ({
         if (commandIndex !== -1) pendingCommands.splice(commandIndex, 1)[0].onAccepted();
       }
       if (event.type === "agent_settled") {
+        // Queued work delivers only when a turn actually settles: a settle
+        // that leaves the floor free some other way (a rejection, a park)
+        // delivers nothing — the coordinator owns what runs next then.
+        let settledTurn = false;
         for (const turn of liveTurns.splice(0)) {
-          if (turn.stopped)
-            turn.onSettleRejected(
-              adapterError(
-                "cancelled",
-                "the turn was explicitly stopped and the runtime settled the abort — the outcome is cancelled",
-              ),
-            );
-          else turn.onSettled();
+          if (turn.stopped) turn.onSettleRejected(stoppedTurnRejection());
+          else {
+            turn.onSettled();
+            settledTurn = true;
+          }
         }
-        dispatchNextFollowUp();
+        // A command the runtime settled without acknowledging will never be
+        // acknowledged: its acceptance rejects rather than dangles.
+        for (const command of pendingCommands.splice(0))
+          command.onRejected(
+            adapterError(
+              "rejected",
+              "the runtime settled the turn without acknowledging the command",
+            ),
+          );
+        if (settledTurn) dispatchNextFollowUp();
       }
       if (DIALOG_KINDS.includes(event.type)) {
         const dialogId =
@@ -344,38 +385,80 @@ export const startManagedSession = ({
         else seen.count += 1;
       }
       if (event.type === "error") {
-        // The failure mapping: auth and quota are named kinds, anything
-        // else is a provider failure all the same. The session parks
-        // awaiting-human with the provider-reported usage preserved
-        // verbatim — nothing retries, re-targets, falls back, or delivers
-        // queued work without an explicit human decision.
-        const reason = PROVIDER_FAILURE_KINDS.includes(event.kind)
-          ? event.kind
-          : "provider_failure";
-        awaitingHuman = true;
-        const failure = typedError(
-          reason,
-          `the provider reported ${reason} — the session is parked awaiting a human decision; nothing is retried or re-targeted`,
-          {
-            failure: {
-              status: "awaiting-human",
+        // The failure mapping, classified. An error correlated by id to an
+        // un-acknowledged command or turn is THAT command's typed rejection
+        // — the Pi error travels verbatim, the floor frees, and nothing
+        // parks; the coordinator decides what a rejected command means. A
+        // `policy_denied` is a Workbench-owned denial: typed, no park. Only
+        // an uncorrelated provider condition parks the session
+        // awaiting-human — auth and quota are named kinds, anything else is
+        // a provider failure all the same — with the provider-reported
+        // usage preserved verbatim; nothing retries, re-targets, falls
+        // back, or delivers queued work without an explicit human decision.
+        const correlatedTurn =
+          event.id !== undefined
+            ? liveTurns.find((turn) => turn.requestId === event.id && !turn.accepted)
+            : undefined;
+        if (event.kind === "policy_denied") {
+          const denial = typedError("policy_denied", "the broker denied a capability", {
+            evidence: event,
+          });
+          if (correlatedTurn !== undefined) {
+            liveTurns.splice(liveTurns.indexOf(correlatedTurn), 1);
+            correlatedTurn.onAcceptRejected(denial);
+            correlatedTurn.onSettleRejected(denial);
+          } else {
+            for (const turn of liveTurns.splice(0)) {
+              turn.onAcceptRejected(denial);
+              turn.onSettleRejected(denial);
+            }
+          }
+        } else if (correlatedTurn !== undefined) {
+          const rejection = typedError("rejected", "the runtime rejected the command", {
+            evidence: event,
+          });
+          liveTurns.splice(liveTurns.indexOf(correlatedTurn), 1);
+          correlatedTurn.onAcceptRejected(rejection);
+          correlatedTurn.onSettleRejected(rejection);
+        } else {
+          const correlatedCommand = pendingCommands.findIndex(
+            (command) => command.requestId === event.id,
+          );
+          if (correlatedCommand !== -1) {
+            const [command] = pendingCommands.splice(correlatedCommand, 1);
+            command.onRejected(
+              typedError("rejected", "the runtime rejected the command", { evidence: event }),
+            );
+          } else {
+            const reason = PROVIDER_FAILURE_KINDS.includes(event.kind)
+              ? event.kind
+              : "provider_failure";
+            awaitingHuman = true;
+            const failure = typedError(
               reason,
-              usage: event.usage ?? null,
-              evidence: event,
-            },
-          },
-        );
-        for (const turn of liveTurns.splice(0)) {
-          turn.onAcceptRejected(failure);
-          turn.onSettleRejected(failure);
+              `the provider reported ${reason} — the session is parked awaiting a human decision; nothing is retried or re-targeted`,
+              {
+                failure: {
+                  status: "awaiting-human",
+                  reason,
+                  usage: event.usage ?? null,
+                  evidence: event,
+                },
+              },
+            );
+            for (const turn of liveTurns.splice(0)) {
+              turn.onAcceptRejected(failure);
+              turn.onSettleRejected(failure);
+            }
+            clearQueuedWork(
+              adapterError(
+                "cancelled",
+                "the session parked awaiting-human — queued work never delivers without an explicit human decision",
+              ),
+            );
+            for (const command of pendingCommands.splice(0)) command.onRejected(failure);
+          }
         }
-        clearQueuedWork(
-          adapterError(
-            "cancelled",
-            "the session parked awaiting-human — queued work never delivers without an explicit human decision",
-          ),
-        );
-        for (const command of pendingCommands.splice(0)) command.onRejected(failure);
       }
       for (const waiter of eventWaiters.splice(0)) waiter();
       return envelope;
@@ -464,15 +547,8 @@ export const startManagedSession = ({
         );
       for (const turn of liveTurns.splice(0)) {
         if (turn.stopped) {
-          turn.onAcceptRejected(
-            adapterError("cancelled", "the turn was explicitly stopped — it was never settled"),
-          );
-          turn.onSettleRejected(
-            adapterError(
-              "cancelled",
-              "the turn was explicitly stopped and the runtime ended before settling — the outcome is cancelled",
-            ),
-          );
+          turn.onAcceptRejected(stoppedTurnRejection());
+          turn.onSettleRejected(stoppedTurnRejection());
         } else {
           turn.onAcceptRejected(unknown());
           turn.onSettleRejected(unknown());
@@ -487,7 +563,7 @@ export const startManagedSession = ({
     };
     onEnd(rejectUnsettled);
 
-    const turnNotInFlight = () => adapterError("turn_not_in_flight", "no turn is live");
+    const idleTurnRejection = () => adapterError("turn_not_in_flight", "no turn is live");
 
     // Stops the runtime and releases the writer claim through the same
     // end path as EOF: unsettled turns reject, waiters drain. The
@@ -547,17 +623,12 @@ export const startManagedSession = ({
       // interruption and never a second prompt.
       steer(text) {
         if (ended) throw adapterError("runtime_ended", "the managed runtime has ended");
-        if (liveTurns.length === 0) throw turnNotInFlight();
+        if (liveTurns.length === 0) throw idleTurnRejection();
         if (typeof text !== "string" || text.trim() === "")
           throw adapterError("invalid_request", "a steer needs a non-empty text");
         const requestId = `req_${randomUUID()}`;
-        let acceptResolve;
-        let acceptReject;
-        const accepted = new Promise((resolve, reject) => {
-          acceptResolve = resolve;
-          acceptReject = reject;
-        });
-        pendingCommands.push({ requestId, onAccepted: acceptResolve, onRejected: acceptReject });
+        const { accepted, onAccepted, onAcceptRejected } = makeAcceptance();
+        pendingCommands.push({ requestId, onAccepted, onRejected: onAcceptRejected });
         writeFrame({ type: "steer", id: requestId, text });
         return { requestId, accepted };
       },
@@ -581,7 +652,7 @@ export const startManagedSession = ({
           );
         const requestId = `req_${randomUUID()}`;
         const { turn, promises } = makeTurn(requestId);
-        followUps.push({ requestId, text, turn, promises });
+        followUps.push({ text, turn });
         return { requestId, ...promises };
       },
 
@@ -596,7 +667,7 @@ export const startManagedSession = ({
           ),
         );
         return {
-          cleared: cleared.map((entry) => ({ requestId: entry.requestId, text: entry.text })),
+          cleared: cleared.map((entry) => ({ requestId: entry.turn.requestId, text: entry.text })),
         };
       },
 
@@ -606,7 +677,7 @@ export const startManagedSession = ({
       stopTurn() {
         if (ended) throw adapterError("runtime_ended", "the managed runtime has ended");
         const turn = liveTurns[0];
-        if (turn === undefined) throw turnNotInFlight();
+        if (turn === undefined) throw idleTurnRejection();
         const cleared = clearQueuedWork(
           adapterError(
             "cancelled",
@@ -618,7 +689,7 @@ export const startManagedSession = ({
         writeFrame({ type: "abort", id: requestId });
         return {
           requestId,
-          cleared: cleared.map((entry) => ({ requestId: entry.requestId, text: entry.text })),
+          cleared: cleared.map((entry) => ({ requestId: entry.turn.requestId, text: entry.text })),
         };
       },
 
@@ -638,11 +709,7 @@ export const startManagedSession = ({
         const dialog = pendingDialogs.get(dialogId);
         if (dialog === undefined)
           throw adapterError("dialog_not_found", `no pending dialog "${dialogId}"`);
-        const handle = dialogTimeouts.get(dialogId);
-        if (handle !== undefined) {
-          cancelTimeout(handle);
-          dialogTimeouts.delete(dialogId);
-        }
+        disarmDialogTimeout(dialogId);
         pendingDialogs.delete(dialogId);
         writeFrame({ type: "dialog_response", id: dialogId, value });
         return { dialogId, answered: true };
@@ -698,9 +765,8 @@ export const startManagedSession = ({
           .map((line) => decodeLine(line));
       },
 
-      // Stops the runtime and releases the writer claim through the same
-      // end path as EOF: unsettled turns reject, waiters drain. The
-      // transcript stays for inspection; nothing is deleted.
+      // Stops the runtime and releases the writer claim — the same end
+      // path as EOF (see stopRuntime). The transcript stays for inspection.
       async dispose() {
         await stopRuntime();
       },
