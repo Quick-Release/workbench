@@ -228,6 +228,47 @@ describe("the panel's phase move (ticket #148)", () => {
   });
 });
 
+describe("the clarification entry point (spec #221, ticket #222)", () => {
+  const enabledPosture = {
+    posture: "enabled" as const,
+    available: false,
+    message: "owned clarification is enabled, but its runtime is not part of this build yet",
+  };
+
+  it("renders the entry point honestly unavailable when the posture is enabled", () => {
+    const html = renderPanel({ issueId: "GH-7", clarificationPosture: enabledPosture });
+    expect(html).toContain('data-slot="panel-clarification"');
+    expect(html).toContain("not part of this build");
+    const button = html.match(/<button[^>]*aria-label="Clarify GH-7"[^>]*>/)?.[0] ?? "";
+    expect(button).toContain("disabled");
+  });
+
+  it("renders nothing when the posture is absent, disabled, or invalid", () => {
+    expect(renderPanel({ issueId: "GH-7" })).not.toContain("panel-clarification");
+    expect(
+      renderPanel({
+        issueId: "GH-7",
+        clarificationPosture: { posture: "disabled", available: false },
+      }),
+    ).not.toContain("panel-clarification");
+    expect(
+      renderPanel({
+        issueId: "GH-7",
+        clarificationPosture: { posture: "invalid", available: false, reasons: ["x"] },
+      }),
+    ).not.toContain("panel-clarification");
+  });
+
+  it("renders nothing in static mode even when the posture is enabled", () => {
+    const html = renderPanel({
+      issueId: "GH-7",
+      mode: "static",
+      clarificationPosture: enabledPosture,
+    });
+    expect(html).not.toContain("panel-clarification");
+  });
+});
+
 describe("create mode and unknown references", () => {
   it("renders the create form for ?issue=new", () => {
     const html = renderPanel({ issueId: "new" });

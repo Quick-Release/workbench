@@ -8,6 +8,7 @@ import { skillsApiPlugin } from "./scripts/seam/routes/skills-api.mjs";
 import { toolsApiPlugin } from "./scripts/seam/routes/tools-api.mjs";
 import { workflowApiPlugin } from "./scripts/seam/routes/workflow-api.mjs";
 import { aiApiPlugin } from "./scripts/seam/routes/ai-api.mjs";
+import { clarificationApiPlugin } from "./scripts/seam/routes/clarification-api.mjs";
 import { llmApiPlugin } from "./scripts/seam/routes/llm-api.mjs";
 import { submissionsApiPlugin } from "./scripts/seam/routes/submissions-api.mjs";
 import { reviewApiPlugin } from "./scripts/seam/routes/review-api.mjs";
@@ -31,6 +32,7 @@ const dashboardPlugins = [
   skillsApiPlugin(),
   workflowApiPlugin(),
   aiApiPlugin(),
+  clarificationApiPlugin(),
   llmApiPlugin(),
   submissionsApiPlugin(),
   reviewApiPlugin(),

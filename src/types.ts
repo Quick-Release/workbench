@@ -554,6 +554,7 @@ export type OverviewData = {
 // schema import is type-only — no runtime cycle, no schema code in the bundle.
 import type { Schema } from "effect";
 import type {
+  ClarificationStatusResultSchema,
   ReviewCommentRequestSchema,
   ReviewCommentResultSchema,
   ReviewEngineHealthSchema,
@@ -585,3 +586,17 @@ export type ReviewCommentResult = Schema.Schema.Type<typeof ReviewCommentResultS
 export type ReviewHistoryEntry = Schema.Schema.Type<typeof ReviewHistoryEntrySchema>;
 
 export type ReviewHistory = Schema.Schema.Type<typeof ReviewHistorySchema>;
+
+// Owned clarification's posture vocabulary (spec #221, ticket #222): the
+// ship-dark capability is either disabled (the block is absent or switched
+// off — public installs live here by construction, ADR 0013), invalid (it
+// asked to be enabled but is incomplete or malformed; the reasons name each
+// offending element), or enabled (the posture names provider and data
+// destination). Enabled is posture, not availability: the clarification
+// runtime ships in a later ticket, so the status result's `available` stays
+// false and the panel renders the honest not-yet-available state.
+export const clarificationPostures = ["disabled", "invalid", "enabled"] as const;
+
+export type ClarificationPosture = (typeof clarificationPostures)[number];
+
+export type ClarificationStatusResult = Schema.Schema.Type<typeof ClarificationStatusResultSchema>;
