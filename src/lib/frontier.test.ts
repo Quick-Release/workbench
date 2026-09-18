@@ -88,6 +88,15 @@ describe("frontier selector", () => {
     expect(openBlockers("GH-1", edges, byId(items))).toEqual({ open: [], dangling: [] });
   });
 
+  it("withholds an item whose blocker list was read incompletely — an absent edge is not an absent blocker (GH-115)", () => {
+    const items = [
+      frontierItemFromWorkItem(workItem("GH-1", { blockersRead: "unknown" })),
+      frontierItemFromWorkItem(workItem("GH-2")),
+    ];
+
+    expect(frontier(items, [], []).map((item) => item.id)).toEqual(["GH-2"]);
+  });
+
   it("gates on direct blockers only — a closed blocker's own history does not matter", () => {
     const items = [
       frontierItemFromWorkItem(workItem("GH-1")),
