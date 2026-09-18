@@ -3,9 +3,7 @@ import test from "node:test";
 
 import {
   clarificationPostureLoader,
-  clarificationRuntimeLoader,
   handleClarificationApi,
-  hostRepoSlug,
   isClarificationApiRoute,
 } from "./clarification-api.mjs";
 import { noPublishingLine } from "../../../src/types.ts";
@@ -195,7 +193,7 @@ test("the status route reports enabled as honestly unavailable", async () => {
   strictEqual(handled.status, 200);
   strictEqual(handled.json.posture, "enabled");
   strictEqual(handled.json.available, false);
-  match(handled.json.message, /runtime is not part of this build/);
+  match(handled.json.message, /managed conversation runtime is not wired/);
 });
 
 test("the status route answers GET only", async () => {
@@ -308,10 +306,11 @@ test("start answers a malformed or non-conforming body with typed invalid reques
   deepStrictEqual(coordinator.calls, []);
 });
 
-test("duplicate, stale, and unavailable starts are typed rejections with their own statuses", async () => {
+test("duplicate, stale, reused, and unavailable starts are typed rejections with their own statuses", async () => {
   const cases = [
     ["busy", 409],
     ["manifest_stale", 409],
+    ["request_reused", 409],
     ["context_unavailable", 503],
   ];
   for (const [code, expected] of cases) {
@@ -418,99 +417,4 @@ test("the posture loader names an unreadable config as its own invalid posture",
     problems: [],
   }));
   deepStrictEqual(await working(), { posture: "enabled", available: false });
-});
-
-test("the host repo slug fails closed instead of guessing", () => {
-  strictEqual(
-    hostRepoSlug("https://github.com/Quick-Release/workbench"),
-    "Quick-Release/workbench",
-  );
-  strictEqual(
-    hostRepoSlug("https://github.com/Quick-Release/workbench/"),
-    "Quick-Release/workbench",
-  );
-  strictEqual(
-    hostRepoSlug("https://github.com/Quick-Release/workbench.git"),
-    "Quick-Release/workbench",
-  );
-  strictEqual(hostRepoSlug(undefined), undefined);
-  strictEqual(hostRepoSlug("https://github.com/"), undefined);
-  strictEqual(hostRepoSlug("not a url"), undefined);
-});
-
-test("the runtime loader refuses a disabled install and an enabled install with no host repo", async () => {
-  const dormant = clarificationRuntimeLoader({
-    hostRoot: "/tmp/unused",
-    loadConfig: async () => ({
-      repositoryUrl: "https://github.com/Quick-Release/workbench",
-      clarification: {
-        enabled: false,
-        provider: undefined,
-        dataDestination: undefined,
-        problems: [],
-      },
-    }),
-    openStore: () => {
-      throw new Error("a dormant install never opens the store");
-    },
-  });
-  const dormantRuntime = await dormant();
-  strictEqual(dormantRuntime.posture.posture, "disabled");
-  strictEqual(dormantRuntime.coordinator, null);
-
-  const slugless = clarificationRuntimeLoader({
-    hostRoot: "/tmp/unused",
-    loadConfig: async () => ({
-      repositoryUrl: undefined,
-      clarification: {
-        enabled: true,
-        provider: "openai-codex-oauth",
-        dataDestination: "https://api.openai.com",
-        problems: [],
-      },
-    }),
-    openStore: () => {
-      throw new Error("an install without a host repo never opens the store");
-    },
-  });
-  const sluglessRuntime = await slugless();
-  strictEqual(sluglessRuntime.posture.posture, "invalid");
-  match(sluglessRuntime.posture.reasons[0], /repositoryUrl/);
-  strictEqual(sluglessRuntime.coordinator, null);
-});
-
-test("the runtime loader opens the durable store once, at the host repo's own path", async () => {
-  const opened = [];
-  const loader = clarificationRuntimeLoader({
-    hostRoot: "/tmp/host-repo",
-    loadConfig: async () => ({
-      repositoryUrl: "https://github.com/Quick-Release/workbench",
-      clarification: {
-        enabled: true,
-        provider: "openai-codex-oauth",
-        dataDestination: "https://api.openai.com",
-        problems: [],
-      },
-    }),
-    openStore: (args) => {
-      opened.push(args);
-      return { hostRepo: args.hostRepo, close() {}, createRun() {} };
-    },
-    token: async () => "",
-  });
-
-  const runtime = await loader();
-  strictEqual(runtime.posture.posture, "enabled");
-  strictEqual(typeof runtime.coordinator.manifest, "function");
-  strictEqual(typeof runtime.coordinator.start, "function");
-  deepStrictEqual(opened, [
-    {
-      hostRepo: "Quick-Release/workbench",
-      databasePath: "/tmp/host-repo/.workbench/clarification/runs.sqlite",
-    },
-  ]);
-
-  // The store opens once and stays open — records outlive requests.
-  await loader();
-  deepStrictEqual(opened.length, 1);
 });

@@ -38,7 +38,7 @@ const fakeStore = (overrides = {}, log = []) => {
     calls,
     createRun: ({ issueId, requestId }) => {
       calls.push(["createRun", { issueId, requestId }]);
-      const replayed = runs.find((r) => r.issueId === issueId && r.requestId === requestId);
+      const replayed = runs.find((r) => r.requestId === requestId);
       if (replayed) return { run: replayed, created: false };
       const run = {
         runId: `run_${runs.length + 1}`,
@@ -524,4 +524,31 @@ test("an expired cursor's explicit gap travels through the run section", async (
   // No gap when the cursor is healthy — history is never dramatized.
   const healthy = await coordinator({ store }).runSection({ runId: "run_1", afterCursor: 0 });
   strictEqual(healthy.gap, undefined);
+});
+
+test("a request id already spent on another issue is a typed rejection, never the other run", async () => {
+  const store = fakeStore({
+    runs: [durableRun({ runId: "run_9", issueId: "231", requestId: "req-1" })],
+  });
+  await rejects(
+    () =>
+      coordinator({ store }).start({
+        issueNumber: 230,
+        requestId: "req-1",
+        revision: matchingRevision,
+      }),
+    (error) => error.code === "request_reused",
+  );
+  // Nothing durable was touched answering the collision.
+  strictEqual(store.calls.filter(([kind]) => kind !== "listRuns").length, 0);
+});
+
+test("the start denial evidence carries the coordinator clock's stamp", async () => {
+  const log = [];
+  const store = fakeStore({}, log);
+  await coordinator({ store, sessions: deniedSessions({}, log) })
+    .start({ issueNumber: 230, requestId: "req-1", revision: matchingRevision })
+    .catch(() => {});
+  const recorded = log.find(([kind]) => kind === "recordAttemptResult")[1];
+  strictEqual(recorded.result.deniedAt, clock());
 });

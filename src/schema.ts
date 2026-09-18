@@ -824,6 +824,14 @@ export type ClarificationStatusResult = Schema.Schema.Type<typeof ClarificationS
 export const parseClarificationStatusResult: (input: unknown) => ClarificationStatusResult =
   Schema.decodeUnknownSync(ClarificationStatusResultSchema, { onExcessProperty: "error" });
 
+// The pinned issue revision, as the pre-start manifest renders it and the
+// start presents it back: the tracker's own last-update stamp plus the
+// body hash — together, what "unchanged since the manifest" means.
+const ClarificationRevisionSchema = Schema.Struct({
+  updatedAt: Schema.String,
+  bodyHash: Schema.String,
+});
+
 // The clarification pre-start manifest (spec #221, ticket #230): the fixed
 // display contract an enabled install's issue panel renders before any
 // start — the pinned issue revision, the declared provider and data
@@ -835,10 +843,7 @@ export const ClarificationManifestResultSchema = Schema.Struct({
   issue: Schema.Struct({
     number: Schema.Number,
     title: Schema.String,
-    revision: Schema.Struct({
-      updatedAt: Schema.String,
-      bodyHash: Schema.String,
-    }),
+    revision: ClarificationRevisionSchema,
   }),
   provider: Schema.String,
   dataDestination: Schema.String,
@@ -863,10 +868,7 @@ export const parseClarificationManifestResult: (input: unknown) => Clarification
 export const ClarificationStartRequestSchema = Schema.Struct({
   issue: Schema.Number,
   requestId: Schema.String,
-  revision: Schema.Struct({
-    updatedAt: Schema.String,
-    bodyHash: Schema.String,
-  }),
+  revision: ClarificationRevisionSchema,
 });
 
 export type ClarificationStartRequest = Schema.Schema.Type<typeof ClarificationStartRequestSchema>;

@@ -34,8 +34,6 @@ const BUDGET_LINE =
   "provider-reported usage is recorded verbatim; estimates and unknown " +
   "subscription availability stay labeled and never silently convert";
 
-export { noPublishingLine };
-
 export const clarificationError = (code, message, extra = {}) =>
   Object.assign(new Error(message), { code, ...extra });
 
@@ -106,7 +104,7 @@ export const createClarificationCoordinator = ({
   // The collected issue read the manifest and the start both fail closed
   // on: without the issue and its pinned revision there is no manifest to
   // approve and nothing to start — readiness is withheld, not guessed.
-  const collectedFor = async (issueNumber) => {
+  const requireCollectedContext = async (issueNumber) => {
     const collected = await tracker.readContext({ issueNumber });
     if (!collected || collected.failed || !collected.issue || !collected.revision)
       throw clarificationError(
@@ -137,7 +135,7 @@ export const createClarificationCoordinator = ({
     // rendered from the fresh collected read and the install's declared
     // provider and data destination, ending with the no-publishing line.
     async manifest({ issueNumber }) {
-      const collected = await collectedFor(issueNumber);
+      const collected = await requireCollectedContext(issueNumber);
       return {
         issue: {
           number: collected.issue.number,
@@ -166,6 +164,16 @@ export const createClarificationCoordinator = ({
       const issueId = String(issueNumber);
       return serializedFor(issueId, async () => {
         const runs = store.listRuns();
+        // A request id names one submission, one issue, forever: the store
+        // dedups on the request id alone, so a replay against a different
+        // issue must be a typed rejection — never the other issue's run
+        // presented as this start's answer.
+        const reused = runs.find((r) => r.requestId === requestId && r.issueId !== issueId);
+        if (reused)
+          throw clarificationError(
+            "request_reused",
+            `the request id "${requestId}" already started issue ${reused.issueId} — a request id is never reused across issues`,
+          );
         const own = runs.find((r) => r.issueId === issueId && r.requestId === requestId);
         if (own) {
           const attempt = store.listAttempts(own.runId).find((a) => a.requestId === requestId);
@@ -180,7 +188,7 @@ export const createClarificationCoordinator = ({
 
         // The manifest gate: the start travels only on the revision the
         // Developer saw. A drifted issue re-renders the manifest first.
-        const collected = await collectedFor(issueNumber);
+        const collected = await requireCollectedContext(issueNumber);
         if (!revisionMatches(revision, collected.revision))
           throw clarificationError(
             "manifest_stale",
@@ -188,6 +196,14 @@ export const createClarificationCoordinator = ({
           );
 
         const { run, created } = store.createRun({ issueId, requestId });
+        // The store dedups on the request id alone; if the answer is not
+        // this issue's run, the request id was spent elsewhere and nothing
+        // here may present it as this start's record.
+        if (!created && run.issueId !== issueId)
+          throw clarificationError(
+            "request_reused",
+            `the request id "${requestId}" already started issue ${run.issueId} — a request id is never reused across issues`,
+          );
         let lease;
         try {
           lease = store.acquireLease({ runId: run.runId, owner: LEASE_OWNER });
@@ -239,7 +255,12 @@ export const createClarificationCoordinator = ({
           const code = error?.code ?? "unknown";
           store.recordAttemptResult({
             attemptId: attempt.attemptId,
-            result: { kind: "start-denied", code, message: String(error?.message ?? error) },
+            result: {
+              kind: "start-denied",
+              code,
+              message: String(error?.message ?? error),
+              deniedAt: clock(),
+            },
             leaseToken: token,
           });
           store.appendEvent({
