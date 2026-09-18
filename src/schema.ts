@@ -139,6 +139,10 @@ export const WorkItemRecordSchema = Schema.Struct({
   // event. Optional like the other GH-136 metadata: an older snapshot's
   // absence is unknown, never zero time in phase.
   phaseSince: Schema.optional(Schema.String),
+  // GH-115: written only when the native blocker list was read incompletely
+  // (failed or capped). Absence means the read was complete — a successful
+  // empty list is complete, never unknown.
+  blockersRead: Schema.optional(Schema.Literals(["unknown"])),
 });
 
 export const ClientTicketKindSchema = Schema.Literals(clientTicketKinds);
