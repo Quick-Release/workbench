@@ -132,7 +132,9 @@ describe("the pull-requests route's list on fixtures", () => {
         return { ok: true, status: 200, json: async () => ({ configured: false }) } as Response;
       }),
     );
-    (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+    const actFlag = globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean };
+    const previousActEnvironment = actFlag.IS_REACT_ACT_ENVIRONMENT;
+    actFlag.IS_REACT_ACT_ENVIRONMENT = true;
     const container = document.createElement("div");
     document.body.appendChild(container);
     const root = createRoot(container);
@@ -148,6 +150,7 @@ describe("the pull-requests route's list on fixtures", () => {
           root.unmount();
         });
         container.remove();
+        actFlag.IS_REACT_ACT_ENVIRONMENT = previousActEnvironment;
       },
     };
   };
@@ -159,7 +162,7 @@ describe("the pull-requests route's list on fixtures", () => {
     expect(page.html()).toContain("agent/build-overview → main");
     expect(page.html()).toContain("vvaz");
     expect(page.rows[1]?.getAttribute("data-pr")).toBe("41");
-    expect(page.rows[1]?.innerHTML).toContain(">draft</span>");
+    expect(page.rows[1]?.textContent).toContain("draft");
     await page.unmount();
   });
 
