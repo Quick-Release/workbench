@@ -73,8 +73,18 @@ const issueUrl = (apiBase, repo, path = "", params = {}) => {
   return url;
 };
 
-const readJson = async (fetchImpl, url) => {
-  const response = await fetchImpl(url, { headers: { Accept: "application/vnd.github+json" } });
+// The standard tracker REST headers, credentials included: private host
+// repositories read only through the host's token, which stays inside this
+// adapter and never travels further (ADR 0016's credential boundary).
+const API_VERSION = "2022-11-28";
+const readJson = async (fetchImpl, url, token) => {
+  const response = await fetchImpl(url, {
+    headers: {
+      Accept: "application/vnd.github+json",
+      "X-GitHub-Api-Version": API_VERSION,
+      Authorization: `Bearer ${token}`,
+    },
+  });
   if (!response.ok) throw new Error(`tracker returned HTTP ${response.status}`);
   return response.json();
 };
@@ -96,6 +106,12 @@ export const readinessFor = ({
   manifest = null,
 }) => {
   const incompleteRead = !collected || collected.failed || collected.capped || !collected.revision;
+  // A closed blocker is a resolved planning record, not a hold: only
+  // blockers the tracker still reports unresolved carry a blocked reason —
+  // and anything without a recognizable closed state blocks, fail closed.
+  const openBlockers = incompleteRead
+    ? []
+    : collected.blockers.filter((entry) => entry.state !== "closed");
   const tracker = incompleteRead
     ? axis(
         "tracker-eligibility",
@@ -104,11 +120,11 @@ export const readinessFor = ({
           ? collected.warnings
           : ["the tracker read is incomplete; readiness is withheld"],
       )
-    : collected.blockers.length > 0
+    : openBlockers.length > 0
       ? axis(
           "tracker-eligibility",
           "needs-information",
-          collected.blockers.map((entry) => `blocked by GH-${entry.number}`),
+          openBlockers.map((entry) => `blocked by GH-${entry.number}`),
         )
       : axis("tracker-eligibility", "ready");
 
@@ -151,25 +167,18 @@ const packetError = (code, message) => Object.assign(new Error(message), { code 
 // Provenance is required, not decorative: source, locator, retrieval time,
 // and uncertainty are always present, and the item pins an observed
 // revision or an observed hash. Anything less is not evidence.
+const blank = (value) => typeof value !== "string" || value === "";
 const requireProvenance = (provenance, what) => {
   const missing =
     !provenance || typeof provenance !== "object"
       ? ["source", "locator", "observedRevision or observedHash", "retrievedAt", "uncertainty"]
       : [
-          ...(typeof provenance.source !== "string" || provenance.source === "" ? ["source"] : []),
-          ...(typeof provenance.locator !== "string" || provenance.locator === ""
-            ? ["locator"]
-            : []),
-          ...(!(
-            (typeof provenance.observedRevision === "string" &&
-              provenance.observedRevision !== "") ||
-            (typeof provenance.observedHash === "string" && provenance.observedHash !== "")
-          )
+          ...(blank(provenance.source) ? ["source"] : []),
+          ...(blank(provenance.locator) ? ["locator"] : []),
+          ...(blank(provenance.observedRevision) && blank(provenance.observedHash)
             ? ["observedRevision or observedHash"]
             : []),
-          ...(typeof provenance.retrievedAt !== "string" || provenance.retrievedAt === ""
-            ? ["retrievedAt"]
-            : []),
+          ...(blank(provenance.retrievedAt) ? ["retrievedAt"] : []),
           ...(typeof provenance.uncertainty !== "string" ? ["uncertainty"] : []),
         ];
   if (missing.length > 0)
@@ -406,7 +415,7 @@ const revisionOf = (issue) => ({
 // The complete paginated blocked-by walk: pages until a short page, the cap
 // with a truncation warning, or a failed page with a coverage warning —
 // never "no blockers" for evidence it did not collect.
-const walkBlockedBy = async ({ apiBase, repo, issueNumber, fetchImpl, clock, maxPages }) => {
+const walkBlockedBy = async ({ apiBase, repo, issueNumber, token, fetchImpl, clock, maxPages }) => {
   const blockers = [];
   const warnings = [];
   let capped = false;
@@ -420,6 +429,7 @@ const walkBlockedBy = async ({ apiBase, repo, issueNumber, fetchImpl, clock, max
           per_page: PER_PAGE,
           page,
         }),
+        token,
       );
     } catch (error) {
       failed = true;
@@ -465,13 +475,19 @@ export const collectTrackerContext = async ({
   repo,
   issueNumber,
   apiBase = "https://api.github.com",
+  token,
   fetchImpl,
   clock,
   maxPages = MAX_PAGES,
 }) => {
+  if (typeof token !== "string" || token === "")
+    throw packetError(
+      "invalid_request",
+      "the tracker read needs the host's tracker credentials — they stay inside the collector and never travel further",
+    );
   let issue;
   try {
-    issue = await readJson(fetchImpl, issueUrl(apiBase, repo, `/${issueNumber}`));
+    issue = await readJson(fetchImpl, issueUrl(apiBase, repo, `/${issueNumber}`), token);
   } catch (error) {
     return {
       repo,
@@ -499,7 +515,15 @@ export const collectTrackerContext = async ({
     uncertainty: "",
   };
 
-  const blockedBy = await walkBlockedBy({ apiBase, repo, issueNumber, fetchImpl, clock, maxPages });
+  const blockedBy = await walkBlockedBy({
+    apiBase,
+    repo,
+    issueNumber,
+    token,
+    fetchImpl,
+    clock,
+    maxPages,
+  });
   return {
     repo,
     issue: {

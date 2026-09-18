@@ -60,6 +60,7 @@ const collectedWith = async (blockedByPages, issueOverrides = {}) => {
     repo: "Quick-Release/workbench",
     issueNumber: 229,
     apiBase: "https://api.github.com",
+    token: "token",
     fetchImpl: fixtureFetch([issueRoute(issue), blockedByRoute(blockedByPages)]),
     clock: CLOCK,
   });
@@ -98,23 +99,24 @@ const HOST_ISSUE = {
   updated_at: "2026-09-18T10:00:00.000Z",
 };
 
-const blocker = (number, updatedAt = "2026-09-01T00:00:00.000Z") => ({
+const blocker = (number, overrides = {}) => ({
   number,
   title: `Blocker ${number}`,
   state: "open",
-  updated_at: updatedAt,
+  updated_at: "2026-09-01T00:00:00.000Z",
+  ...overrides,
 });
 
-// A fixture transport: [pathname, handler(url)] pairs, matched on the
+// A fixture transport: [pathname, handler(url, init)] pairs, matched on the
 // request's exact pathname so `/issues/229` never collides with
 // `/issues/229/dependencies/blocked_by`. The handler returns the JSON
 // payload, or an Error to fail that request. Anything unscripted is itself
 // a failure.
-const fixtureFetch = (routes) => async (url) => {
+const fixtureFetch = (routes) => async (url, init) => {
   const pathname = new URL(url).pathname;
   const route = routes.find(([pattern]) => pathname === pattern);
   if (!route) throw new Error(`unexpected request: ${pathname}`);
-  const payload = route[1](String(url));
+  const payload = route[1](String(url), init);
   if (payload instanceof Error) throw payload;
   return { ok: true, json: async () => payload };
 };
@@ -560,5 +562,47 @@ test("open blockers on a complete read make the tracker axis needs-information w
   for (const axis of readiness.axes) {
     ok(READINESS_VERDICTS.includes(axis.verdict), `${axis.verdict} is a typed verdict`);
     ok(axis.verdict !== "blocked", "blocked is never a verdict");
+  }
+});
+
+test("closed blockers ride the packet as resolved records and never hold the tracker axis", async () => {
+  const collected = await collect([
+    issueRoute(),
+    blockedByRoute([[blocker(225, { state: "closed" }), blocker(226)]]),
+  ]);
+
+  const tracker = readinessFor({ collected, posture: ENABLED_POSTURE }).axes.find(
+    (axis) => axis.axis === "tracker-eligibility",
+  );
+  strictEqual(tracker.verdict, "needs-information");
+  deepStrictEqual(tracker.reasons, ["blocked by GH-226"]);
+
+  const packet = assembleContextPacket({
+    collected,
+    posture: ENABLED_POSTURE,
+    manifest: MANIFEST,
+    clock: CLOCK,
+  });
+  strictEqual(packet.planningRecords.length, 2);
+});
+
+test("tracker reads carry the pinned credentials and API version", async () => {
+  const seen = [];
+  await collect([
+    issueRoute(),
+    [
+      "/repos/Quick-Release/workbench/issues/229/dependencies/blocked_by",
+      (url, init) => {
+        seen.push(init);
+        return [];
+      },
+    ],
+  ]);
+
+  ok(seen.length > 0, "the blocked-by read was made");
+  for (const init of seen) {
+    strictEqual(init.headers.Authorization, "Bearer token");
+    strictEqual(init.headers["X-GitHub-Api-Version"], "2022-11-28");
+    strictEqual(init.headers.Accept, "application/vnd.github+json");
   }
 });
