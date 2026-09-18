@@ -7,8 +7,8 @@ import test from "node:test";
 
 import { ADAPTER_VERSION, startManagedSession } from "./pi-managed.mjs";
 
-// Contract tests for the pi-managed/v1 adapter core (spec #221, ticket #227,
-// ADR 0018): everything runs against a scripted fake JSONL child — the
+// Contract tests for the pi-managed/v1 adapter (spec #221, tickets #227 +
+// #228, ADR 0018): everything runs against a scripted fake JSONL child — the
 // adapter code is real, the runtime is not. No timers: frames are pushed and
 // the test drains the consumption loop deterministically.
 
@@ -73,6 +73,8 @@ const fakeRuntime = () => {
   };
 };
 
+const testEnv = { PATH: "/usr/bin" };
+
 const hello = (protocol = "1") => JSON.stringify({ type: "hello", protocol });
 
 const withSessionRoot = async (fn) => {
@@ -85,18 +87,57 @@ const withSessionRoot = async (fn) => {
   }
 };
 
-const start = async (fake, { sessionRoot, sessionId, eventBufferLimit } = {}) => {
+const start = async (
+  fake,
+  {
+    sessionRoot,
+    sessionId,
+    eventBufferLimit,
+    dialogTimeoutMs,
+    scheduleTimeout,
+    cancelTimeout,
+  } = {},
+) => {
   const started = startManagedSession({
     spawn: fake.spawn,
     command: "pi",
     sessionRoot,
+    env: testEnv,
     ...(sessionId !== undefined ? { sessionId } : {}),
     ...(eventBufferLimit !== undefined ? { eventBufferLimit } : {}),
+    ...(dialogTimeoutMs !== undefined ? { dialogTimeoutMs } : {}),
+    ...(scheduleTimeout !== undefined ? { scheduleTimeout } : {}),
+    ...(cancelTimeout !== undefined ? { cancelTimeout } : {}),
   });
   await drain();
   fake.push(hello());
   await drain();
   return started;
+};
+
+// Injected timer port: expiry is arithmetic the test drives, never a sleep.
+const manualTimers = () => {
+  const pending = new Map();
+  let nextHandle = 1;
+  return {
+    schedule: (fn, ms) => {
+      const handle = nextHandle;
+      nextHandle += 1;
+      pending.set(handle, { fn, ms });
+      return handle;
+    },
+    cancel: (handle) => {
+      pending.delete(handle);
+    },
+    fire: (upToMs) => {
+      for (const [handle, timer] of [...pending]) {
+        if (timer.ms > upToMs) continue;
+        pending.delete(handle);
+        timer.fn();
+      }
+    },
+    size: () => pending.size,
+  };
 };
 
 test("spawns the runtime in RPC mode over a fresh dedicated session file", async () => {
@@ -136,6 +177,7 @@ test("a second writer over the same session file is a typed refusal", async () =
         spawn: secondFake.spawn,
         command: "pi",
         sessionRoot,
+        env: testEnv,
         sessionId: "conversation-1",
       }),
       (error) => error.code === "session_writer_exists",
@@ -157,6 +199,7 @@ test("an unsupported runtime protocol fails with a typed denial and no session",
       spawn: fake.spawn,
       command: "pi",
       sessionRoot,
+      env: testEnv,
     });
     await drain();
     fake.push(hello("9"));
@@ -173,6 +216,7 @@ test("a denial releases the writer claim, so a corrected runtime can retry", asy
       spawn: fake.spawn,
       command: "pi",
       sessionRoot,
+      env: testEnv,
       sessionId: "conversation-1",
     });
     await drain();
@@ -194,6 +238,7 @@ test("a runtime whose first frame is not a hello is a typed denial", async () =>
       spawn: fake.spawn,
       command: "pi",
       sessionRoot,
+      env: testEnv,
     });
     await drain();
     fake.push(JSON.stringify({ type: "message", text: "chatty before hello" }));
@@ -210,6 +255,7 @@ test("a runtime revision outside the reviewed pin is a typed denial", async () =
       spawn: fake.spawn,
       command: "pi",
       sessionRoot,
+      env: testEnv,
       allowedRuntimeVersions: ["5.2.1"],
     });
     await drain();
@@ -222,6 +268,7 @@ test("a runtime revision outside the reviewed pin is a typed denial", async () =
       spawn: pinnedFake.spawn,
       command: "pi",
       sessionRoot,
+      env: testEnv,
       allowedRuntimeVersions: ["5.2.1"],
     });
     await drain();
@@ -287,7 +334,10 @@ test("dispose rejects the unsettled live turn through the same end path as EOF",
     const fake = fakeRuntime();
     const session = await start(fake, { sessionRoot });
     const turn = session.sendPrompt("Will dispose settle me?");
-    const rejected = rejects(turn.settled, (error) => error.code === "runtime_ended_unsettled");
+    const rejected = Promise.all([
+      rejects(turn.accepted, (error) => error.code === "runtime_ended_unsettled"),
+      rejects(turn.settled, (error) => error.code === "runtime_ended_unsettled"),
+    ]);
     await session.dispose();
     await rejected;
     strictEqual(session.state(), "ended");
@@ -307,10 +357,10 @@ test("a second prompt before settlement is a typed rejection, not a silent queue
     await drain();
     const next = session.sendPrompt("now the floor is free");
     strictEqual(next.requestId.startsWith("req_"), true);
-    const floorRejection = rejects(
-      next.settled,
-      (error) => error.code === "runtime_ended_unsettled",
-    );
+    const floorRejection = Promise.all([
+      rejects(next.accepted, (error) => error.code === "runtime_ended_unsettled"),
+      rejects(next.settled, (error) => error.code === "runtime_ended_unsettled"),
+    ]);
     await session.dispose();
     await floorRejection;
   });
@@ -352,9 +402,13 @@ test("a runtime that ends before settling never reports a settled turn", async (
     const fake = fakeRuntime();
     const session = await start(fake, { sessionRoot });
     const turn = session.sendPrompt("Will you settle?");
+    const endedUnsettled = Promise.all([
+      rejects(turn.accepted, (error) => error.code === "runtime_ended_unsettled"),
+      rejects(turn.settled, (error) => error.code === "runtime_ended_unsettled"),
+    ]);
 
     fake.end();
-    await rejects(turn.settled, (error) => error.code === "runtime_ended_unsettled");
+    await endedUnsettled;
     throws(
       () => session.sendPrompt("after the end"),
       (error) => error.code === "runtime_ended",
@@ -475,6 +529,540 @@ test("history reads the runtime-owned transcript, malformed lines included", asy
       fake.stdinFrames.every((frame) => !frame.includes("from the transcript")),
       "the adapter never writes the transcript",
     );
+    await session.dispose();
+  });
+});
+
+// --- Ticket 07: the control surface and the failure mapping. ---
+
+const frames = (fake) => fake.stdinFrames.map((frame) => JSON.parse(frame));
+const lastFrame = (fake) => frames(fake)[fake.stdinFrames.length - 1];
+
+test("the child environment is exactly the sanitized env passed; nothing is inherited and retries are pinned off", async () => {
+  await withSessionRoot(async ({ sessionRoot }) => {
+    const sanitized = testEnv;
+
+    // Fail closed: no environment, no runtime. The host environment is
+    // never inherited by default — that is where credentials live.
+    const refused = fakeRuntime();
+    throws(
+      () => startManagedSession({ spawn: refused.spawn, command: "pi", sessionRoot }),
+      (error) => error.code === "invalid_adapter",
+    );
+    throws(
+      () =>
+        startManagedSession({
+          spawn: refused.spawn,
+          command: "pi",
+          sessionRoot,
+          env: "PATH=/usr/bin",
+        }),
+      (error) => error.code === "invalid_adapter",
+    );
+    strictEqual(refused.calls.length, 0, "no child is spawned without a sanitized environment");
+
+    const fake = fakeRuntime();
+    const session = await start(fake, { sessionRoot });
+    const call = fake.calls[0];
+    deepStrictEqual(call.env, sanitized, "the child gets exactly the env the caller passed");
+    ok(
+      call.args.includes("--no-retry"),
+      "pi automatic retries are pinned off — provider activity cannot escape accounting",
+    );
+    await session.dispose();
+  });
+});
+
+test("steer rides the live turn explicitly; idle steering is a typed rejection", async () => {
+  await withSessionRoot(async ({ sessionRoot }) => {
+    const fake = fakeRuntime();
+    const session = await start(fake, { sessionRoot });
+
+    throws(
+      () => session.steer("no one is running"),
+      (error) => error.code === "turn_not_in_flight",
+    );
+    strictEqual(fake.stdinFrames.length, 0, "an idle steer writes nothing");
+
+    const turn = session.sendPrompt("the live turn");
+    const steer = session.steer("focus on the acceptance criteria");
+    ok(steer.requestId.startsWith("req_"));
+    deepStrictEqual(lastFrame(fake), {
+      type: "steer",
+      id: steer.requestId,
+      text: "focus on the acceptance criteria",
+    });
+
+    fake.push(JSON.stringify({ type: "accepted", id: steer.requestId }));
+    await drain();
+    strictEqual(await steer.accepted.then(() => "accepted"), "accepted");
+    // Steering is not interruption: the live turn is still the live turn.
+    fake.push(JSON.stringify({ type: "agent_settled" }));
+    await drain();
+    deepStrictEqual(await turn.settled, { requestId: turn.requestId });
+    await session.dispose();
+  });
+});
+
+test("follow-ups queue explicitly behind the live turn and deliver in order as fresh turns", async () => {
+  await withSessionRoot(async ({ sessionRoot }) => {
+    const fake = fakeRuntime();
+    const session = await start(fake, { sessionRoot });
+
+    throws(
+      () => session.queueFollowUp("nothing is running"),
+      (error) => error.code === "turn_not_in_flight",
+    );
+
+    const live = session.sendPrompt("the live turn");
+    const first = session.queueFollowUp("first follow-up");
+    const second = session.queueFollowUp("second follow-up");
+
+    fake.push(JSON.stringify({ type: "agent_settled" }));
+    await drain();
+    deepStrictEqual(await live.settled, { requestId: live.requestId });
+    // The first follow-up is delivered as its own prompt — acceptance and
+    // delivery remain separate, and it settles on its own settle signal.
+    deepStrictEqual(lastFrame(fake), {
+      type: "prompt",
+      id: first.requestId,
+      text: "first follow-up",
+    });
+    fake.push(JSON.stringify({ type: "accepted", id: first.requestId }));
+    await drain();
+    strictEqual(await first.accepted.then(() => "accepted"), "accepted");
+
+    fake.push(JSON.stringify({ type: "agent_settled" }));
+    await drain();
+    deepStrictEqual(await first.settled, { requestId: first.requestId });
+    deepStrictEqual(lastFrame(fake), {
+      type: "prompt",
+      id: second.requestId,
+      text: "second follow-up",
+    });
+
+    fake.push(JSON.stringify({ type: "agent_settled" }));
+    await drain();
+    deepStrictEqual(await second.settled, { requestId: second.requestId });
+    const prompts = frames(fake).filter((frame) => frame.type === "prompt");
+    deepStrictEqual(
+      prompts.map((frame) => frame.text),
+      ["the live turn", "first follow-up", "second follow-up"],
+      "delivery is FIFO and nothing jumps the queue",
+    );
+    await session.dispose();
+  });
+});
+
+test("clear-queue drops queued work explicitly and tells the runtime", async () => {
+  await withSessionRoot(async ({ sessionRoot }) => {
+    const fake = fakeRuntime();
+    const session = await start(fake, { sessionRoot });
+    const live = session.sendPrompt("the live turn");
+    const first = session.queueFollowUp("doomed follow-up");
+    const second = session.queueFollowUp("also doomed");
+    // The handlers attach before the clear: a rejection is never handled
+    // late, and a cleared follow-up rejects both of its promises.
+    const clearedRejections = Promise.all([
+      rejects(first.accepted, (error) => error.code === "cancelled"),
+      rejects(first.settled, (error) => error.code === "cancelled"),
+      rejects(second.accepted, (error) => error.code === "cancelled"),
+      rejects(second.settled, (error) => error.code === "cancelled"),
+    ]);
+
+    const { cleared } = session.clearQueue();
+    deepStrictEqual(
+      cleared.map((entry) => entry.requestId),
+      [first.requestId, second.requestId],
+    );
+    deepStrictEqual(lastFrame(fake).type, "clear_queue", "the runtime's own queue is cleared too");
+    await clearedRejections;
+
+    fake.push(JSON.stringify({ type: "agent_settled" }));
+    await drain();
+    deepStrictEqual(await live.settled, { requestId: live.requestId });
+    const prompts = frames(fake).filter((frame) => frame.type === "prompt");
+    strictEqual(prompts.length, 1, "cleared work never delivers");
+    await session.dispose();
+  });
+});
+
+test("stop-turn clears the queue first, then aborts; the settle after abort is a cancelled outcome", async () => {
+  await withSessionRoot(async ({ sessionRoot }) => {
+    const fake = fakeRuntime();
+    const session = await start(fake, { sessionRoot });
+
+    throws(
+      () => session.stopTurn(),
+      (error) => error.code === "turn_not_in_flight",
+    );
+
+    const live = session.sendPrompt("the live turn");
+    const liveCancelled = rejects(live.settled, (error) => error.code === "cancelled");
+    const doomed = session.queueFollowUp("never delivers");
+    const doomedRejected = Promise.all([
+      rejects(doomed.accepted, (error) => error.code === "cancelled"),
+      rejects(doomed.settled, (error) => error.code === "cancelled"),
+    ]);
+    const stopped = session.stopTurn();
+
+    deepStrictEqual(
+      stopped.cleared.map((entry) => entry.requestId),
+      [doomed.requestId],
+      "stop-turn clears the queue first",
+    );
+    const tail = frames(fake).slice(-2);
+    deepStrictEqual(
+      tail.map((frame) => frame.type),
+      ["clear_queue", "abort"],
+      "the abort follows the queue clear, in that order, on the wire",
+    );
+    await doomedRejected;
+
+    // The floor stays occupied until the runtime is observed to settle.
+    throws(
+      () => session.sendPrompt("too soon"),
+      (error) => error.code === "turn_in_flight",
+    );
+    fake.push(JSON.stringify({ type: "agent_settled" }));
+    await drain();
+    await liveCancelled;
+
+    const next = session.sendPrompt("the floor is free after the observed settle");
+    fake.push(JSON.stringify({ type: "accepted", id: next.requestId }));
+    fake.push(JSON.stringify({ type: "agent_settled" }));
+    await drain();
+    deepStrictEqual(await next.settled, { requestId: next.requestId });
+    await session.dispose();
+  });
+});
+
+test("a runtime end after an explicit stop is cancelled, not unknown", async () => {
+  await withSessionRoot(async ({ sessionRoot }) => {
+    const fake = fakeRuntime();
+    const session = await start(fake, { sessionRoot });
+    const live = session.sendPrompt("stopped then the runtime dies");
+    const cancelled = Promise.all([
+      rejects(live.accepted, (error) => error.code === "cancelled"),
+      rejects(live.settled, (error) => error.code === "cancelled"),
+    ]);
+    session.stopTurn();
+    fake.end();
+    await cancelled;
+    await session.dispose();
+  });
+});
+
+test("extension dialogs arrive as typed questions, answered or cancelled through the sub-protocol", async () => {
+  await withSessionRoot(async ({ sessionRoot }) => {
+    const fake = fakeRuntime();
+    const session = await start(fake, { sessionRoot });
+
+    fake.push(
+      JSON.stringify({
+        type: "select",
+        id: "d1",
+        title: "Pick a source",
+        options: ["docs", "issue"],
+      }),
+    );
+    await drain();
+    deepStrictEqual(session.pendingDialogs(), [
+      {
+        dialogId: "d1",
+        kind: "select",
+        request: { type: "select", id: "d1", title: "Pick a source", options: ["docs", "issue"] },
+      },
+    ]);
+    strictEqual(session.state(), "waiting-for-input");
+
+    session.answerDialog({ dialogId: "d1", value: "docs" });
+    deepStrictEqual(lastFrame(fake), { type: "dialog_response", id: "d1", value: "docs" });
+    deepStrictEqual(session.pendingDialogs(), []);
+    strictEqual(session.state(), "ready");
+
+    fake.push(JSON.stringify({ type: "confirm", id: "d2", title: "Proceed?" }));
+    await drain();
+    session.cancelDialog({ dialogId: "d2" });
+    deepStrictEqual(lastFrame(fake), { type: "dialog_response", id: "d2", cancelled: true });
+    deepStrictEqual(session.pendingDialogs(), []);
+
+    throws(
+      () => session.answerDialog({ dialogId: "missing", value: "x" }),
+      (error) => error.code === "dialog_not_found",
+    );
+    throws(
+      () => session.answerDialog({ dialogId: "d2" }),
+      (error) => error.code === "invalid_request",
+    );
+    await session.dispose();
+  });
+});
+
+test("unsupported widgets surface as a capability list and are preserved verbatim as evidence", async () => {
+  await withSessionRoot(async ({ sessionRoot }) => {
+    const fake = fakeRuntime();
+    const session = await start(fake, { sessionRoot });
+
+    const widget = { type: "extension_widget", widget: "custom-tui", payload: { custom: true } };
+    fake.push(JSON.stringify(widget));
+    fake.push(
+      JSON.stringify({ type: "extension_widget", widget: "custom-tui", payload: { v2: true } }),
+    );
+    fake.push(JSON.stringify({ type: "extension_widget", widget: "tree-view" }));
+    await drain();
+
+    deepStrictEqual(
+      session.unsupportedCapabilities().map((entry) => [entry.capability, entry.count]),
+      [
+        ["custom-tui", 2],
+        ["tree-view", 1],
+      ],
+    );
+    strictEqual(
+      session.unsupportedCapabilities()[0].frame.payload.custom,
+      true,
+      "the first frame verbatim",
+    );
+
+    const seen = session
+      .observe()
+      .events.filter((envelope) => envelope.event.type === "extension_widget");
+    strictEqual(seen.length, 3, "nothing is dropped silently from the stream either");
+    await session.dispose();
+  });
+});
+
+test("auth and quota failures park the session awaiting-human with the budget preserved and no fallback", async () => {
+  await withSessionRoot(async ({ sessionRoot }) => {
+    const fake = fakeRuntime();
+    const session = await start(fake, { sessionRoot });
+
+    const quota = session.sendPrompt("will hit the quota");
+    // Outcome handlers attach at birth: a rejection is never handled late,
+    // and a pre-acceptance failure rejects both of the turn's promises.
+    const quotaOutcome = Promise.all([
+      quota.accepted.then(
+        () => "accepted",
+        (error) => error,
+      ),
+      quota.settled.then(
+        () => "settled",
+        (error) => error,
+      ),
+    ]);
+    const usage = { tokens: 42, source: "provider-reported" };
+    fake.push(JSON.stringify({ type: "error", kind: "quota", usage, detail: "rate limited" }));
+    await drain();
+    const [quotaAccepted, quotaSettled] = await quotaOutcome;
+    strictEqual(quotaAccepted.code, "quota");
+    strictEqual(quotaSettled.code, "quota");
+    deepStrictEqual(quotaSettled.failure, {
+      status: "awaiting-human",
+      reason: "quota",
+      usage,
+      evidence: { type: "error", kind: "quota", usage, detail: "rate limited" },
+    });
+    strictEqual(session.state(), "awaiting-human");
+    const promptsAfterQuota = frames(fake).filter((frame) => frame.type === "prompt").length;
+    strictEqual(promptsAfterQuota, 1, "no silent retry, no provider fallback");
+
+    const auth = session.sendPrompt("human decided to continue; now auth fails");
+    const authOutcome = auth.settled.then(
+      () => "settled",
+      (error) => error,
+    );
+    fake.push(JSON.stringify({ type: "accepted", id: auth.requestId }));
+    fake.push(JSON.stringify({ type: "error", kind: "auth_required" }));
+    await drain();
+    const authFailure = await authOutcome;
+    strictEqual(authFailure.code, "auth_required");
+    strictEqual(authFailure.failure.status, "awaiting-human");
+    strictEqual(authFailure.failure.usage, null, "no usage is invented when none is reported");
+
+    const generic = session.sendPrompt("and an unclassified provider error");
+    const genericOutcome = generic.settled.then(
+      () => "settled",
+      (error) => error,
+    );
+    fake.push(JSON.stringify({ type: "accepted", id: generic.requestId }));
+    fake.push(JSON.stringify({ type: "error", detail: "weird" }));
+    await drain();
+    const genericFailure = await genericOutcome;
+    strictEqual(genericFailure.code, "provider_failure");
+    await session.dispose();
+  });
+});
+
+test("process death is the evidence unknown-outcome reconciliation needs; nothing restarts or replays", async () => {
+  await withSessionRoot(async ({ sessionRoot }) => {
+    const fake = fakeRuntime();
+    const session = await start(fake, { sessionRoot });
+    const turn = session.sendPrompt("will the runtime survive?");
+    const unsettled = Promise.all([
+      rejects(turn.accepted, (error) => error.code === "runtime_ended_unsettled"),
+      rejects(turn.settled, (error) => error.code === "runtime_ended_unsettled"),
+    ]);
+
+    const framesBefore = fake.stdinFrames.length;
+    const spawnCallsBefore = fake.calls.length;
+    fake.end(1);
+    await unsettled;
+    deepStrictEqual(session.exit(), { code: 1, signal: null });
+    deepStrictEqual(session.exit(), { code: 1, signal: null });
+    strictEqual(session.state(), "ended");
+    strictEqual(fake.calls.length, spawnCallsBefore, "no automatic restart");
+    strictEqual(fake.stdinFrames.length, framesBefore, "no automatic prompt replay");
+  });
+});
+
+test("terminate-runtime is a confirmed operation", async () => {
+  await withSessionRoot(async ({ sessionRoot }) => {
+    const fake = fakeRuntime();
+    const session = await start(fake, { sessionRoot });
+    const lockPath = `${session.sessionFile}.writer`;
+
+    await rejects(
+      session.terminateRuntime({ confirmation: "the wrong value" }),
+      (error) => error.code === "termination_unconfirmed",
+    );
+    await rejects(session.terminateRuntime(), (error) => error.code === "termination_unconfirmed");
+    strictEqual(fake.killed.length, 0, "an unconfirmed termination kills nothing");
+    ok(existsSync(lockPath));
+
+    await session.terminateRuntime({ confirmation: session.sessionId });
+    strictEqual(fake.killed.length, 1);
+    ok(!existsSync(lockPath), "the writer claim is released with the runtime");
+    strictEqual(session.state(), "ended");
+    await rejects(
+      session.terminateRuntime({ confirmation: session.sessionId }),
+      (error) => error.code === "runtime_ended",
+    );
+    await fake.end();
+  });
+});
+
+test("agent_end, compaction, and retry observations are evidence, never settlement", async () => {
+  await withSessionRoot(async ({ sessionRoot }) => {
+    const fake = fakeRuntime();
+    const session = await start(fake, { sessionRoot });
+    const turn = session.sendPrompt("long-running turn");
+
+    fake.push(JSON.stringify({ type: "agent_end" }));
+    fake.push(JSON.stringify({ type: "compaction", detail: "context compacted" }));
+    fake.push(JSON.stringify({ type: "provider_retry", attempt: 2 }));
+    await drain();
+    const stillRunning = await Promise.race([
+      turn.settled.then(() => "settled"),
+      drain().then(() => "pending"),
+    ]);
+    strictEqual(stillRunning, "pending", "low-level boundaries settle nothing");
+
+    fake.push(JSON.stringify({ type: "agent_settled" }));
+    await drain();
+    deepStrictEqual(await turn.settled, { requestId: turn.requestId });
+    await session.dispose();
+  });
+});
+
+test("a pending dialog is bounded: the timeout cancels it typed, never answers it", async () => {
+  await withSessionRoot(async ({ sessionRoot }) => {
+    const timers = manualTimers();
+    const fake = fakeRuntime();
+    const session = await start(fake, {
+      sessionRoot,
+      dialogTimeoutMs: 5000,
+      scheduleTimeout: timers.schedule,
+      cancelTimeout: timers.cancel,
+    });
+
+    fake.push(JSON.stringify({ type: "input", id: "d1", title: "Clarify scope" }));
+    await drain();
+    strictEqual(session.pendingDialogs().length, 1);
+    strictEqual(timers.size(), 1, "the dialog is armed with its bounded timeout");
+
+    // An answer disarms the timeout.
+    session.answerDialog({ dialogId: "d1", value: "behavior + acceptance criteria" });
+    strictEqual(timers.size(), 0, "an answered dialog is no longer timed");
+    deepStrictEqual(session.pendingDialogs(), []);
+
+    fake.push(JSON.stringify({ type: "editor", id: "d2", title: "Edit the brief" }));
+    await drain();
+    strictEqual(timers.size(), 1);
+    timers.fire(5000);
+    await drain();
+    deepStrictEqual(session.pendingDialogs(), [], "the timed-out dialog is no longer pending");
+    deepStrictEqual(lastFrame(fake), { type: "dialog_response", id: "d2", cancelled: true });
+    const timeoutEvidence = session
+      .observe()
+      .events.find((envelope) => envelope.event.type === "dialog_timeout");
+    ok(timeoutEvidence, "the timeout itself is typed evidence");
+    deepStrictEqual(timeoutEvidence.event.dialogId, "d2");
+    strictEqual(session.state(), "ready");
+    await session.dispose();
+  });
+});
+
+test("a provider failure before acceptance rejects the acceptance and holds the queue", async () => {
+  await withSessionRoot(async ({ sessionRoot }) => {
+    const fake = fakeRuntime();
+    const session = await start(fake, { sessionRoot });
+
+    const turn = session.sendPrompt("never accepted");
+    const followUp = session.queueFollowUp("parked with it");
+    const outcomes = Promise.all([
+      turn.accepted.then(
+        () => "accepted",
+        (error) => error,
+      ),
+      turn.settled.then(
+        () => "settled",
+        (error) => error,
+      ),
+      rejects(followUp.accepted, (error) => error.code === "cancelled"),
+      rejects(followUp.settled, (error) => error.code === "cancelled"),
+    ]);
+    const promptsBefore = frames(fake).filter((frame) => frame.type === "prompt").length;
+
+    fake.push(JSON.stringify({ type: "error", kind: "quota" }));
+    await drain();
+    const [accepted, settled] = await outcomes;
+    strictEqual(accepted.code, "quota", "the acceptance carries the typed failure");
+    strictEqual(settled.code, "quota");
+    strictEqual(session.state(), "awaiting-human");
+
+    // The park holds: even a settle delivers nothing new.
+    fake.push(JSON.stringify({ type: "agent_settled" }));
+    await drain();
+    const promptsAfter = frames(fake).filter((frame) => frame.type === "prompt");
+    strictEqual(
+      promptsAfter.length,
+      promptsBefore,
+      "queued work never delivers without an explicit human decision",
+    );
+    await session.dispose();
+  });
+});
+
+test("a turn's acceptance rejects when the runtime dies before acknowledging", async () => {
+  await withSessionRoot(async ({ sessionRoot }) => {
+    const fake = fakeRuntime();
+    const session = await start(fake, { sessionRoot });
+    const turn = session.sendPrompt("never acked");
+    const accepted = turn.accepted.then(
+      () => "accepted",
+      (error) => error,
+    );
+    const settledRejected = rejects(
+      turn.settled,
+      (error) => error.code === "runtime_ended_unsettled",
+    );
+    fake.end();
+    const failure = await accepted;
+    strictEqual(failure.code, "runtime_ended_unsettled");
+    strictEqual(failure.outcome, "unknown");
+    deepStrictEqual(failure.exit, { code: 0, signal: null });
+    await settledRejected;
     await session.dispose();
   });
 });
