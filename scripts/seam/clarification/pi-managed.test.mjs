@@ -13,7 +13,7 @@ import { ADAPTER_VERSION, startManagedSession } from "./pi-managed.mjs";
 // the test drains the consumption loop deterministically.
 
 // Deterministic drain of the adapter's async consumption loop.
-const settle = async () => {
+const drain = async () => {
   for (let i = 0; i < 5; i += 1) await new Promise((resolve) => setImmediate(resolve));
 };
 
@@ -61,6 +61,10 @@ const fakeRuntime = () => {
       queue.push(`${line}\n`);
       wakeup?.();
     },
+    pushRaw: (chunk) => {
+      queue.push(chunk);
+      wakeup?.();
+    },
     end: (code = 0) => {
       closed = true;
       wakeup?.();
@@ -89,9 +93,9 @@ const start = async (fake, { sessionRoot, sessionId, eventBufferLimit } = {}) =>
     ...(sessionId !== undefined ? { sessionId } : {}),
     ...(eventBufferLimit !== undefined ? { eventBufferLimit } : {}),
   });
-  await settle();
+  await drain();
   fake.push(hello());
-  await settle();
+  await drain();
   return started;
 };
 
@@ -154,11 +158,161 @@ test("an unsupported runtime protocol fails with a typed denial and no session",
       command: "pi",
       sessionRoot,
     });
-    await settle();
+    await drain();
     fake.push(hello("9"));
     await rejects(started, (error) => error.code === "unsupported_protocol");
     ok(fake.killed.length > 0, "the unsupported runtime is stopped");
     await fake.end();
+  });
+});
+
+test("a denial releases the writer claim, so a corrected runtime can retry", async () => {
+  await withSessionRoot(async ({ sessionRoot }) => {
+    const fake = fakeRuntime();
+    const started = startManagedSession({
+      spawn: fake.spawn,
+      command: "pi",
+      sessionRoot,
+      sessionId: "conversation-1",
+    });
+    await drain();
+    fake.push(hello("9"));
+    await rejects(started, (error) => error.code === "unsupported_protocol");
+
+    const retryFake = fakeRuntime();
+    const retry = await start(retryFake, { sessionRoot, sessionId: "conversation-1" });
+    strictEqual(retry.state(), "ready");
+    await retry.dispose();
+    await retryFake.end();
+  });
+});
+
+test("a runtime whose first frame is not a hello is a typed denial", async () => {
+  await withSessionRoot(async ({ sessionRoot }) => {
+    const fake = fakeRuntime();
+    const started = startManagedSession({
+      spawn: fake.spawn,
+      command: "pi",
+      sessionRoot,
+    });
+    await drain();
+    fake.push(JSON.stringify({ type: "message", text: "chatty before hello" }));
+    await rejects(started, (error) => error.code === "handshake_violation");
+    ok(fake.killed.length > 0);
+    await fake.end();
+  });
+});
+
+test("a runtime revision outside the reviewed pin is a typed denial", async () => {
+  await withSessionRoot(async ({ sessionRoot }) => {
+    const fake = fakeRuntime();
+    const started = startManagedSession({
+      spawn: fake.spawn,
+      command: "pi",
+      sessionRoot,
+      allowedRuntimeVersions: ["5.2.1"],
+    });
+    await drain();
+    fake.push(JSON.stringify({ type: "hello", protocol: "1", runtime: "9.9.9" }));
+    await rejects(started, (error) => error.code === "unsupported_runtime");
+    await fake.end();
+
+    const pinnedFake = fakeRuntime();
+    const pinnedStarted = startManagedSession({
+      spawn: pinnedFake.spawn,
+      command: "pi",
+      sessionRoot,
+      allowedRuntimeVersions: ["5.2.1"],
+    });
+    await drain();
+    pinnedFake.push(JSON.stringify({ type: "hello", protocol: "1", runtime: "5.2.1" }));
+    const pinned = await pinnedStarted;
+    deepStrictEqual(pinned.runtime, { protocol: "1", version: "5.2.1" });
+    await pinned.dispose();
+    await pinnedFake.end();
+  });
+});
+
+test("a burst beyond the buffer keeps ordering, cursors, and gap accounting", async () => {
+  await withSessionRoot(async ({ sessionRoot }) => {
+    const fake = fakeRuntime();
+    const session = await start(fake, { sessionRoot, eventBufferLimit: 10 });
+
+    for (let i = 1; i <= 50; i += 1) {
+      fake.push(JSON.stringify({ type: "message", text: `m${i}` }));
+    }
+    await drain();
+
+    const observed = session.observe();
+    strictEqual(observed.latestCursor, 51);
+    strictEqual(observed.events.length, 10);
+    deepStrictEqual(
+      observed.events.map((envelope) => envelope.cursor),
+      [42, 43, 44, 45, 46, 47, 48, 49, 50, 51],
+    );
+    deepStrictEqual(observed.events[0].event.text, "m41");
+    deepStrictEqual(observed.events[9].event.text, "m50");
+
+    const afterGap = session.reconnect({ afterCursor: 20 });
+    strictEqual(afterGap.gap.firstRetainedCursor, 42);
+    strictEqual(afterGap.events.length, 10);
+    await session.dispose();
+  });
+});
+
+test("a multi-byte code point split across chunks decodes whole", async () => {
+  await withSessionRoot(async ({ sessionRoot }) => {
+    const fake = fakeRuntime();
+    const session = await start(fake, { sessionRoot });
+
+    const frame = Buffer.from(
+      `${JSON.stringify({ type: "message", text: "clarified \u2713 done" })}\n`,
+      "utf8",
+    );
+    const split = 10;
+    fake.pushRaw(frame.subarray(0, split));
+    await drain();
+    fake.pushRaw(frame.subarray(split));
+    await drain();
+
+    const events = session.observe().events.filter((envelope) => envelope.event.type === "message");
+    strictEqual(events.length, 1);
+    strictEqual(events[0].event.text, "clarified \u2713 done");
+    await session.dispose();
+  });
+});
+
+test("dispose rejects the unsettled live turn through the same end path as EOF", async () => {
+  await withSessionRoot(async ({ sessionRoot }) => {
+    const fake = fakeRuntime();
+    const session = await start(fake, { sessionRoot });
+    const turn = session.sendPrompt("Will dispose settle me?");
+    const rejected = rejects(turn.settled, (error) => error.code === "runtime_ended_unsettled");
+    await session.dispose();
+    await rejected;
+    strictEqual(session.state(), "ended");
+  });
+});
+
+test("a second prompt before settlement is a typed rejection, not a silent queue", async () => {
+  await withSessionRoot(async ({ sessionRoot }) => {
+    const fake = fakeRuntime();
+    const session = await start(fake, { sessionRoot });
+    session.sendPrompt("the live turn");
+    throws(
+      () => session.sendPrompt("a queued follow-up is ticket 07's concern"),
+      (error) => error.code === "turn_in_flight",
+    );
+    fake.push(JSON.stringify({ type: "agent_settled" }));
+    await drain();
+    const next = session.sendPrompt("now the floor is free");
+    strictEqual(next.requestId.startsWith("req_"), true);
+    const floorRejection = rejects(
+      next.settled,
+      (error) => error.code === "runtime_ended_unsettled",
+    );
+    await session.dispose();
+    await floorRejection;
   });
 });
 
@@ -170,7 +324,7 @@ test("acceptance and settlement are distinct; assistant text settles nothing", a
     const turn = session.sendPrompt("What does this issue mean?");
     const settledRace = Promise.race([
       turn.settled.then(() => "settled"),
-      settle().then(() => "pending"),
+      drain().then(() => "pending"),
     ]);
 
     // The request travels as a typed frame; the runtime acks it.
@@ -181,13 +335,13 @@ test("acceptance and settlement are distinct; assistant text settles nothing", a
     });
     fake.push(JSON.stringify({ type: "accepted", id: turn.requestId }));
     fake.push(JSON.stringify({ type: "message", text: "partial answer" }));
-    await settle();
+    await drain();
     strictEqual(await turn.accepted.then(() => "accepted"), "accepted");
     strictEqual(await settledRace, "pending", "assistant text is not settlement");
 
     // Only the runtime's settle signal settles the turn.
     fake.push(JSON.stringify({ type: "agent_settled" }));
-    await settle();
+    await drain();
     deepStrictEqual(await turn.settled, { requestId: turn.requestId });
     await session.dispose();
   });
@@ -217,7 +371,7 @@ test("events carry the versioned envelope and cursor; reconnect replays after th
     fake.push(JSON.stringify({ type: "message", text: "one" }));
     fake.push(JSON.stringify({ type: "message", text: "two" }));
     fake.push(JSON.stringify({ type: "message", text: "three" }));
-    await settle();
+    await drain();
 
     // The handshake's hello is evidence too — it pins the protocol version —
     // so the messages ride cursors 2..4 behind it.
@@ -252,7 +406,7 @@ test("an expired cursor reconnects with an explicit gap, never invented history"
     for (const text of ["one", "two", "three", "four", "five"]) {
       fake.push(JSON.stringify({ type: "message", text }));
     }
-    await settle();
+    await drain();
 
     const observed = session.observe();
     strictEqual(observed.latestCursor, 6);
@@ -264,7 +418,7 @@ test("an expired cursor reconnects with an explicit gap, never invented history"
     const afterGap = session.reconnect({ afterCursor: 0 });
     ok(afterGap.gap, "an expired cursor is an explicit gap");
     strictEqual(afterGap.gap.after, 0);
-    strictEqual(afterGap.gap.resumeFrom, 4);
+    strictEqual(afterGap.gap.firstRetainedCursor, 4);
     deepStrictEqual(
       afterGap.events.map((envelope) => envelope.event.text),
       ["three", "four", "five"],
@@ -281,7 +435,7 @@ test("malformed and unknown events are preserved as evidence and never stop the 
     fake.push("this is not json");
     fake.push(JSON.stringify({ type: "extension_widget", payload: { custom: true } }));
     fake.push(JSON.stringify({ type: "message", text: "still alive" }));
-    await settle();
+    await drain();
 
     const events = session.observe().events;
     strictEqual(events.length, 4);
@@ -312,7 +466,11 @@ test("history reads the runtime-owned transcript, malformed lines included", asy
     const entries = await session.history();
     strictEqual(entries.length, 2);
     deepStrictEqual(entries[0], { type: "message", text: "from the transcript" });
-    deepStrictEqual(entries[1], { type: "malformed", raw: "not json either" });
+    deepStrictEqual(entries[1], {
+      type: "malformed",
+      raw: "not json either",
+      origin: "adapter",
+    });
     ok(
       fake.stdinFrames.every((frame) => !frame.includes("from the transcript")),
       "the adapter never writes the transcript",
