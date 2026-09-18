@@ -23,6 +23,7 @@ import {
   decisionSources,
   decisionStatuses,
   engines,
+  noPublishingLine,
   reviewEngines,
   serviceStatuses,
   skillFlowEdgeKinds,
@@ -823,17 +824,116 @@ export type ClarificationStatusResult = Schema.Schema.Type<typeof ClarificationS
 export const parseClarificationStatusResult: (input: unknown) => ClarificationStatusResult =
   Schema.decodeUnknownSync(ClarificationStatusResultSchema, { onExcessProperty: "error" });
 
-// The clarification start request (spec #221): the first slice takes no
-// fields — the target issue, context packet, and approval manifest arrive
-// with the clarification coordinator (ticket 09 of the clarification
-// build). Until then the route exists so its denials are real, not
-// hypothetical.
-export const ClarificationStartRequestSchema = Schema.Struct({});
+// The clarification pre-start manifest (spec #221, ticket #230): the fixed
+// display contract an enabled install's issue panel renders before any
+// start — the pinned issue revision, the declared provider and data
+// destination, the read/research capability summary, the egress statement,
+// and the honest budget line. The no-publishing line is a schema literal:
+// the manifest can never be answerable without it, nor with a rewording of
+// it.
+export const ClarificationManifestResultSchema = Schema.Struct({
+  issue: Schema.Struct({
+    number: Schema.Number,
+    title: Schema.String,
+    revision: Schema.Struct({
+      updatedAt: Schema.String,
+      bodyHash: Schema.String,
+    }),
+  }),
+  provider: Schema.String,
+  dataDestination: Schema.String,
+  capabilitySummary: Schema.Array(Schema.String),
+  egressStatement: Schema.String,
+  budgetLine: Schema.String,
+  noPublishingLine: Schema.Literals([noPublishingLine]),
+});
+
+export type ClarificationManifestResult = Schema.Schema.Type<
+  typeof ClarificationManifestResultSchema
+>;
+
+export const parseClarificationManifestResult: (input: unknown) => ClarificationManifestResult =
+  Schema.decodeUnknownSync(ClarificationManifestResultSchema, { onExcessProperty: "error" });
+
+// The clarification start request (spec #221, ticket #230): the explicit
+// act on the visible manifest — the issue, the client request id that
+// deduplicates across reconnects, and the manifest's pinned revision the
+// Developer saw. A revision the tracker no longer reports is a typed
+// stale rejection and a re-rendered manifest.
+export const ClarificationStartRequestSchema = Schema.Struct({
+  issue: Schema.Number,
+  requestId: Schema.String,
+  revision: Schema.Struct({
+    updatedAt: Schema.String,
+    bodyHash: Schema.String,
+  }),
+});
 
 export type ClarificationStartRequest = Schema.Schema.Type<typeof ClarificationStartRequestSchema>;
 
 export const parseClarificationStartRequest: (input: unknown) => ClarificationStartRequest =
   Schema.decodeUnknownSync(ClarificationStartRequestSchema, { onExcessProperty: "error" });
+
+// The start's answer: whether this request created the attempt or was
+// answered from the durable record (a reconnect replay), over the run and
+// attempt identities. The display projection only — the dispatch intent,
+// the lease token, and the host-repo scoping stay behind the seam.
+const ClarificationRunViewSchema = Schema.Struct({
+  runId: Schema.String,
+  issueId: Schema.String,
+  state: Schema.String,
+  createdAt: Schema.String,
+  updatedAt: Schema.String,
+});
+
+const ClarificationAttemptViewSchema = Schema.Struct({
+  attemptId: Schema.String,
+  state: Schema.String,
+  createdAt: Schema.String,
+  updatedAt: Schema.String,
+});
+
+export const ClarificationStartResultSchema = Schema.Struct({
+  started: Schema.Boolean,
+  run: ClarificationRunViewSchema,
+  attempt: ClarificationAttemptViewSchema,
+});
+
+export type ClarificationStartResult = Schema.Schema.Type<typeof ClarificationStartResultSchema>;
+
+export const parseClarificationStartResult: (input: unknown) => ClarificationStartResult =
+  Schema.decodeUnknownSync(ClarificationStartResultSchema, { onExcessProperty: "error" });
+
+// The run section's snapshot read (live streaming arrives with the next
+// clarification ticket): the run's lifecycle, its attempts, the reconnect
+// snapshot baseline with its saved-at stamp, and the operational events
+// after the viewer's cursor — with an expired cursor's explicit gap riding
+// through, never a silently complete history.
+export const ClarificationRunResultSchema = Schema.Struct({
+  run: ClarificationRunViewSchema,
+  attempts: Schema.Array(ClarificationAttemptViewSchema),
+  snapshot: Schema.optional(Schema.Unknown),
+  snapshotSavedAt: Schema.optional(Schema.String),
+  events: Schema.Array(
+    Schema.Struct({
+      seq: Schema.Number,
+      kind: Schema.String,
+      data: Schema.Unknown,
+      createdAt: Schema.String,
+    }),
+  ),
+  gap: Schema.optional(
+    Schema.Struct({
+      afterCursor: Schema.Number,
+      firstRetainedCursor: Schema.Number,
+    }),
+  ),
+});
+
+export type ClarificationRunResult = Schema.Schema.Type<typeof ClarificationRunResultSchema>;
+
+export const parseClarificationRunResult: (input: unknown) => ClarificationRunResult =
+  Schema.decodeUnknownSync(ClarificationRunResultSchema, { onExcessProperty: "error" });
 
 // The run's event stream (epic #20, ticket #26; issue #40): the runner's
 // typed events as the UI consumes them — a started echo of the request (the

@@ -554,6 +554,9 @@ export type OverviewData = {
 // schema import is type-only — no runtime cycle, no schema code in the bundle.
 import type { Schema } from "effect";
 import type {
+  ClarificationManifestResultSchema,
+  ClarificationRunResultSchema,
+  ClarificationStartResultSchema,
   ClarificationStatusResultSchema,
   ReviewCommentRequestSchema,
   ReviewCommentResultSchema,
@@ -600,3 +603,18 @@ export const clarificationPostures = ["disabled", "invalid", "enabled"] as const
 export type ClarificationPosture = (typeof clarificationPostures)[number];
 
 export type ClarificationStatusResult = Schema.Schema.Type<typeof ClarificationStatusResultSchema>;
+
+// The pre-start manifest's fixed closing line (spec #221, ticket #230, ADR
+// 0014): every manifest of what a clarification start grants ends with this
+// exact sentence — starting a clarification conversation is never
+// authorizing a write. Pinned as the schema's literal so the display
+// contract cannot drift.
+export const noPublishingLine = "Publishing is NOT granted by this approval";
+
+export type ClarificationManifestResult = Schema.Schema.Type<
+  typeof ClarificationManifestResultSchema
+>;
+
+export type ClarificationStartResult = Schema.Schema.Type<typeof ClarificationStartResultSchema>;
+
+export type ClarificationRunResult = Schema.Schema.Type<typeof ClarificationRunResultSchema>;
