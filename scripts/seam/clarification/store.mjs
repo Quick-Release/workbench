@@ -1,30 +1,53 @@
 import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 
-// The durable clarification store (spec #221, ticket #225, ADR 0020): the
-// host-repo-scoped local SQLite metadata that everything else records into.
+// The durable clarification store (spec #221, tickets #225 + #226, ADR 0020):
+// the host-repo-scoped local SQLite metadata everything else records into.
 // One Operational run record per approved work intent; one Execution attempt
 // per dispatch, each with a fresh identity; client Run requests deduplicated
 // across reconnects. The lifecycle vocabulary and its legal transitions are
 // the store's own — an illegal transition is a typed rejection, never a
 // silent write.
 //
+// Ownership: every mutation below run creation travels under the run's
+// Controller lease — an opaque token bound to an owner and a fencing
+// generation; presenting the token is the owner match. The lease authorizes
+// writes; it is never a heartbeat: reads report ownership and expiry
+// arithmetic only, and the store never claims a process is alive or dead.
+// Lease expiry permits reconciliation but not adoption: an expired token
+// cannot write a late completion, cancellation, cleanup result, or retry
+// decision, and once a newer generation exists the old token is fenced in
+// full. Reconciliation — moving a run or attempt into `reconciling` and
+// resolving it to active/awaiting-human/unknown/quarantined — is the store's
+// own housekeeping on its own records: lease-free by design, fenced by
+// lifecycle legality, and never concluding a terminal outcome. A live lease
+// closes outcomes; reconciliation resolves uncertainty.
+//
+// Evidence: operational events go into a bounded, per-run sequenced ledger.
+// appendEvent commits (WAL, synchronous FULL) before it returns, so
+// persistence always precedes viewer publication. Readers resume after a
+// cursor; a cursor that predates the retained suffix reports an explicit gap
+// — history is never invented to fill one — and a cursor past the ledger's
+// end is refused. A per-run snapshot is the reconnect baseline the
+// events-after-cursor replay tops up; its write is fenced like every
+// mutation, its read is open.
+//
 // Durability posture: creating an attempt IS the durable dispatch intent —
 // the intent, the request id, and the fresh attempt identity commit
 // atomically before the coordinator touches any side effect, and they read
-// back across a close and reopen. The database runs WAL with synchronous
-// FULL, so a committed intent survives a crash.
+// back across a close and reopen.
 //
 // Host-repo scoping: the store is opened for exactly one host repo and every
 // row carries its own host_repo; all reads and writes filter on it. Another
 // repo's records — even in the very same file — are invisible,
 // indistinguishable from missing.
 //
-// The schema is versioned from day one: a file written by a newer store
-// fails closed rather than being guessed at. Read-compatible migrations are
-// ticket 05's contract; this ticket only stamps and checks the version.
+// The schema is versioned. A file written by a newer store fails closed
+// rather than being guessed at; older files migrate in place through
+// read-compatible steps, so data written before a disable or upgrade stays
+// interpretable.
 
-export const SCHEMA_VERSION = "1";
+export const SCHEMA_VERSION = "2";
 
 export const LIFECYCLE_STATES = [
   "active",
@@ -49,7 +72,46 @@ export const LIFECYCLE_TRANSITIONS = {
   terminal: [],
 };
 
+// Where reconciliation may land. Deliberately narrower than the lifecycle
+// graph allows from `reconciling`: terminal is excluded, because resolving
+// reconciliation is resolving uncertainty, never concluding an outcome.
+export const RECONCILIATION_RESOLUTIONS = ["active", "awaiting-human", "unknown", "quarantined"];
+
+export const DEFAULT_LEASE_TTL_MS = 30_000;
+
+export const EVENT_LEDGER_LIMIT = 1000;
+
 const storeError = (code, message) => Object.assign(new Error(message), { code });
+
+// The tables this ticket adds, defined once: the full schema and the v1→v2
+// migration must not drift.
+const LEASES_TABLE = `
+CREATE TABLE IF NOT EXISTS leases (
+  run_id TEXT PRIMARY KEY,
+  host_repo TEXT NOT NULL,
+  token TEXT NOT NULL,
+  generation INTEGER NOT NULL,
+  owner TEXT NOT NULL,
+  acquired_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL
+);`;
+const RUN_EVENTS_TABLE = `
+CREATE TABLE IF NOT EXISTS run_events (
+  run_id TEXT NOT NULL,
+  host_repo TEXT NOT NULL,
+  seq INTEGER NOT NULL,
+  kind TEXT NOT NULL,
+  data TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (run_id, seq)
+);`;
+const RUN_SNAPSHOTS_TABLE = `
+CREATE TABLE IF NOT EXISTS run_snapshots (
+  run_id TEXT PRIMARY KEY,
+  host_repo TEXT NOT NULL,
+  snapshot TEXT NOT NULL,
+  saved_at TEXT NOT NULL
+);`;
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS store_meta (
@@ -75,24 +137,65 @@ CREATE TABLE IF NOT EXISTS attempts (
   state TEXT NOT NULL,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
+  result TEXT,
   UNIQUE (run_id, request_id)
 );
+${LEASES_TABLE}
+${RUN_EVENTS_TABLE}
+${RUN_SNAPSHOTS_TABLE}
 `;
 
-// Opens the store for one host repo. `clock` is injected so timestamps are
-// deterministic under test; production uses wall time.
+// v1 → v2: exactly the delta above that version 1 lacks — the lease, event,
+// and snapshot tables are new, and attempts gain their result column. Rows
+// version 1 wrote keep reading back; nothing is rewritten or guessed.
+const MIGRATIONS = {
+  1: (database) => {
+    database.exec(`${LEASES_TABLE}
+${RUN_EVENTS_TABLE}
+${RUN_SNAPSHOTS_TABLE}
+ALTER TABLE attempts ADD COLUMN result TEXT;`);
+  },
+};
+
+const isPlainObject = (value) =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+const isToken = (value) => typeof value === "string" && value !== "";
+
+// Opens the store for one host repo. `clock` is injected so timestamps and
+// lease expiry are deterministic under test; production uses wall time.
+// `eventLimit` bounds each run's retained event suffix (the default is the
+// module constant); trimming is what makes an old cursor honestly expired.
 export const openClarificationStore = ({
   hostRepo,
   databasePath,
   clock = () => new Date().toISOString(),
+  eventLimit = EVENT_LEDGER_LIMIT,
 }) => {
   if (!hostRepo || typeof hostRepo !== "string")
     throw storeError("invalid_store", "the clarification store must be opened for a host repo");
+  if (!Number.isInteger(eventLimit) || eventLimit < 1)
+    throw storeError("invalid_store", "the event ledger limit must be a positive integer");
 
   const database = new DatabaseSync(databasePath);
   database.exec("PRAGMA journal_mode = WAL;");
   database.exec("PRAGMA synchronous = FULL;");
   database.exec("PRAGMA foreign_keys = ON;");
+
+  const tx = (fn) => {
+    database.exec("BEGIN IMMEDIATE");
+    try {
+      const result = fn();
+      database.exec("COMMIT");
+      return result;
+    } catch (error) {
+      database.exec("ROLLBACK");
+      throw error;
+    }
+  };
+
+  // Idempotent: on an older file the IF NOT EXISTS leaves the existing
+  // tables untouched, and the migration below adds only the delta.
   database.exec(SCHEMA);
 
   const versionRow = database
@@ -102,19 +205,31 @@ export const openClarificationStore = ({
     database
       .prepare("INSERT INTO store_meta (key, value) VALUES ('schema_version', ?)")
       .run(SCHEMA_VERSION);
-  } else if (versionRow.value !== SCHEMA_VERSION) {
-    database.close();
-    throw storeError(
-      "unsupported_schema_version",
-      `the clarification store was written by schema version ${versionRow.value}; this build reads ${SCHEMA_VERSION} and refuses to guess`,
-    );
+  } else {
+    const stored = Number(versionRow.value);
+    // Anything this store family never wrote — a newer build's file, or a
+    // stamp older than the first version, or garbage — fails closed.
+    if (!Number.isInteger(stored) || stored < 1 || stored > Number(SCHEMA_VERSION)) {
+      database.close();
+      throw storeError(
+        "unsupported_schema_version",
+        `the clarification store was written by schema version ${versionRow.value}; this build reads ${SCHEMA_VERSION} and refuses to guess`,
+      );
+    }
+    for (let version = stored; version < Number(SCHEMA_VERSION); version += 1)
+      tx(() => {
+        MIGRATIONS[version](database);
+        database
+          .prepare("UPDATE store_meta SET value = ? WHERE key = 'schema_version'")
+          .run(String(version + 1));
+      });
   }
 
   const insertRun = database.prepare(
     "INSERT INTO runs (run_id, host_repo, issue_id, request_id, state, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
   );
   const insertAttempt = database.prepare(
-    "INSERT INTO attempts (attempt_id, run_id, host_repo, request_id, dispatch_intent, state, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+    "INSERT INTO attempts (attempt_id, run_id, host_repo, request_id, dispatch_intent, state, created_at, updated_at, result) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)",
   );
 
   const runRow = (row) =>
@@ -142,6 +257,7 @@ export const openClarificationStore = ({
           state: row.state,
           createdAt: row.created_at,
           updatedAt: row.updated_at,
+          result: row.result === null || row.result === undefined ? null : JSON.parse(row.result),
         };
 
   // Reads and writes always carry the host repo: a run from another repo is
@@ -153,6 +269,48 @@ export const openClarificationStore = ({
     database
       .prepare("SELECT * FROM attempts WHERE attempt_id = ? AND host_repo = ?")
       .get(attemptId, hostRepo);
+
+  // The lease read model: ownership and expiry arithmetic, never the token
+  // (the token is a capability, not a display fact) and never an
+  // alive/dead claim (a lease is a claim on the record, not a heartbeat).
+  const leaseRow = (row) => ({
+    owner: row.owner,
+    generation: row.generation,
+    acquiredAt: row.acquired_at,
+    expiresAt: row.expires_at,
+    expired: Date.parse(row.expires_at) <= Date.parse(clock()),
+  });
+
+  const ownLease = (runId) =>
+    database
+      .prepare("SELECT * FROM leases WHERE run_id = ? AND host_repo = ?")
+      .get(runId, hostRepo);
+
+  // The gate every fenced mutation passes: the presented token must be the
+  // run's current lease, and the lease must be unexpired. Order matters —
+  // a superseded generation is told it is fenced even when the current
+  // lease has itself since expired.
+  const requireLiveLease = (runId, token) => {
+    if (!isToken(token))
+      throw storeError(
+        "lease_required",
+        `this mutation of run "${runId}" needs the controller lease token`,
+      );
+    const row = ownLease(runId);
+    if (row === undefined)
+      throw storeError("lease_required", `run "${runId}" holds no controller lease`);
+    if (row.token !== token)
+      throw storeError(
+        "lease_not_held",
+        `the token presented for run "${runId}" is not the current controller lease (generation ${row.generation}) — a stale generation cannot write`,
+      );
+    if (Date.parse(row.expires_at) <= Date.parse(clock()))
+      throw storeError(
+        "lease_expired",
+        `the controller lease for run "${runId}" expired at ${row.expires_at} — expiry permits reconciliation, not adoption`,
+      );
+    return row;
+  };
 
   const applyTransition = ({ current, to, what }) => {
     if (!LIFECYCLE_STATES.includes(to))
@@ -168,26 +326,31 @@ export const openClarificationStore = ({
   // One compare-and-set transition for runs and attempts: the UPDATE only
   // lands while the row still sits in the state the check read, so two
   // writers can never drive a forbidden state (last write wins is not a
-  // transition). A lost race re-reads and reports against reality.
+  // transition). A lost race re-reads and reports against reality. The
+  // lease gate and the write share one immediate transaction — the write
+  // lock spans both, so no other writer can slip a newer lease generation
+  // between the fence check and the row update.
   const transitionState = ({ table, idColumn, what, notFoundCode }) => {
     const select = `SELECT * FROM ${table} WHERE ${idColumn} = ? AND host_repo = ?`;
     const update = `UPDATE ${table} SET state = ?, updated_at = ? WHERE ${idColumn} = ? AND host_repo = ? AND state = ?`;
     const rowMapper = table === "runs" ? runRow : attemptRow;
-    return ({ id, to }) => {
-      const row = database.prepare(select).get(id, hostRepo);
-      if (row === undefined)
-        throw storeError(notFoundCode, `no ${what} "${id}" is visible to this host repo`);
-      applyTransition({ current: row.state, to, what });
-      const result = database.prepare(update).run(to, clock(), id, hostRepo, row.state);
-      if (result.changes === 0) {
-        const reality = database.prepare(select).get(id, hostRepo);
-        throw storeError(
-          "illegal_transition",
-          `a ${what} in state "${reality?.state ?? "???"}" cannot move to "${to}" — another writer moved it first`,
-        );
-      }
-      return rowMapper(database.prepare(select).get(id, hostRepo));
-    };
+    return ({ id, to, leaseToken }) =>
+      tx(() => {
+        const row = database.prepare(select).get(id, hostRepo);
+        if (row === undefined)
+          throw storeError(notFoundCode, `no ${what} "${id}" is visible to this host repo`);
+        requireLiveLease(row.run_id, leaseToken);
+        applyTransition({ current: row.state, to, what });
+        const result = database.prepare(update).run(to, clock(), id, hostRepo, row.state);
+        if (result.changes === 0) {
+          const reality = database.prepare(select).get(id, hostRepo);
+          throw storeError(
+            "illegal_transition",
+            `a ${what} in state "${reality?.state ?? "???"}" cannot move to "${to}" — another writer moved it first`,
+          );
+        }
+        return rowMapper(database.prepare(select).get(id, hostRepo));
+      });
   };
 
   const transitionRun = transitionState({
@@ -201,6 +364,117 @@ export const openClarificationStore = ({
     idColumn: "attempt_id",
     what: "attempt",
     notFoundCode: "attempt_not_found",
+  });
+
+  // Append inside an open transaction: the per-run sequence is the ledger's
+  // own, allocation and insert commit atomically with the caller's write,
+  // and the bound trims the oldest rows — which is what makes an old cursor
+  // honestly expired rather than silently rewritten.
+  const appendEventInTx = ({ runId, kind, data, at }) => {
+    const seq =
+      (database
+        .prepare("SELECT MAX(seq) AS max_seq FROM run_events WHERE run_id = ? AND host_repo = ?")
+        .get(runId, hostRepo)?.max_seq ?? 0) + 1;
+    database
+      .prepare(
+        "INSERT INTO run_events (run_id, host_repo, seq, kind, data, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+      )
+      .run(runId, hostRepo, seq, kind, JSON.stringify(data), at);
+    database
+      .prepare("DELETE FROM run_events WHERE run_id = ? AND host_repo = ? AND seq <= ?")
+      .run(runId, hostRepo, seq - eventLimit);
+    return { seq, kind, data, createdAt: at };
+  };
+
+  // The lease-free half of the fence: reconciliation moves through a
+  // compare-and-set transition and leaves its evidence in the ledger, in
+  // the same commit. It records Workbench's inspection of its own records —
+  // it claims no external effect, so it needs no live lease; it also cannot
+  // conclude one (terminal is not a resolution target).
+  const reconcile = ({ table, idColumn, what, notFoundCode, rowMapper, kindPrefix, idField }) => {
+    const select = `SELECT * FROM ${table} WHERE ${idColumn} = ? AND host_repo = ?`;
+    return {
+      begin: (id) => {
+        const row = database.prepare(select).get(id, hostRepo);
+        if (row === undefined)
+          throw storeError(notFoundCode, `no ${what} "${id}" is visible to this host repo`);
+        applyTransition({ current: row.state, to: "reconciling", what });
+        const at = clock();
+        return tx(() => {
+          const current = database.prepare(select).get(id, hostRepo);
+          if (current.state !== row.state)
+            throw storeError(
+              "illegal_transition",
+              `a ${what} in state "${current.state}" cannot move to "reconciling" — another writer moved it first`,
+            );
+          database
+            .prepare(
+              `UPDATE ${table} SET state = 'reconciling', updated_at = ? WHERE ${idColumn} = ? AND host_repo = ? AND state = ?`,
+            )
+            .run(at, id, hostRepo, row.state);
+          appendEventInTx({
+            runId: table === "runs" ? id : current.run_id,
+            kind: `${kindPrefix}.reconciliation.started`,
+            data: { [idField]: id, from: row.state },
+            at,
+          });
+          return rowMapper(database.prepare(select).get(id, hostRepo));
+        });
+      },
+      resolve: (id, to) => {
+        if (!LIFECYCLE_STATES.includes(to))
+          throw storeError("unknown_state", `"${to}" is not a lifecycle state`);
+        if (!RECONCILIATION_RESOLUTIONS.includes(to))
+          throw storeError(
+            "illegal_transition",
+            `reconciliation resolves uncertainty; it cannot conclude "${to}" — a live lease closes outcomes`,
+          );
+        const row = database.prepare(select).get(id, hostRepo);
+        if (row === undefined)
+          throw storeError(notFoundCode, `no ${what} "${id}" is visible to this host repo`);
+        applyTransition({ current: row.state, to, what });
+        const at = clock();
+        return tx(() => {
+          const current = database.prepare(select).get(id, hostRepo);
+          if (current.state !== "reconciling")
+            throw storeError(
+              "illegal_transition",
+              `a ${what} in state "${current.state}" is not being reconciled`,
+            );
+          database
+            .prepare(
+              `UPDATE ${table} SET state = ?, updated_at = ? WHERE ${idColumn} = ? AND host_repo = ? AND state = 'reconciling'`,
+            )
+            .run(to, at, id, hostRepo);
+          appendEventInTx({
+            runId: table === "runs" ? id : current.run_id,
+            kind: `${kindPrefix}.reconciliation.resolved`,
+            data: { [idField]: id, to },
+            at,
+          });
+          return rowMapper(database.prepare(select).get(id, hostRepo));
+        });
+      },
+    };
+  };
+
+  const runReconciliation = reconcile({
+    table: "runs",
+    idColumn: "run_id",
+    what: "run",
+    notFoundCode: "run_not_found",
+    rowMapper: runRow,
+    kindPrefix: "run",
+    idField: "runId",
+  });
+  const attemptReconciliation = reconcile({
+    table: "attempts",
+    idColumn: "attempt_id",
+    what: "attempt",
+    notFoundCode: "attempt_not_found",
+    rowMapper: attemptRow,
+    kindPrefix: "attempt",
+    idField: "attemptId",
   });
 
   return {
@@ -270,79 +544,171 @@ export const openClarificationStore = ({
         .map(runRow);
     },
 
-    updateRunState({ runId, to }) {
-      return transitionRun({ id: runId, to });
+    updateRunState({ runId, to, leaseToken }) {
+      return transitionRun({ id: runId, to, leaseToken });
+    },
+
+    // The Controller lease: an opaque token bound to an owner and a fencing
+    // generation. Acquisition is refused while a live lease stands (the
+    // caller learns who holds it and until when — the "controls moved"
+    // facts, with no liveness claim); an expired lease yields to a new
+    // generation, fencing every token before it.
+    acquireLease({ runId, owner, ttlMs = DEFAULT_LEASE_TTL_MS }) {
+      if (typeof owner !== "string" || owner.trim() === "")
+        throw storeError("invalid_request", "a lease needs a non-empty owner");
+      if (!Number.isInteger(ttlMs) || ttlMs <= 0)
+        throw storeError("invalid_request", "a lease needs a positive ttl in milliseconds");
+
+      return tx(() => {
+        if (ownRun(runId) === undefined)
+          throw storeError("run_not_found", `no run "${runId}" is visible to this host repo`);
+        const current = ownLease(runId);
+        const now = clock();
+        if (current !== undefined && Date.parse(current.expires_at) > Date.parse(now))
+          throw storeError(
+            "lease_held",
+            `the controller lease for run "${runId}" is held by "${current.owner}" until ${current.expires_at}`,
+          );
+        const lease = {
+          token: `lease_${randomUUID()}`,
+          generation: (current?.generation ?? 0) + 1,
+          owner,
+          acquiredAt: now,
+          expiresAt: new Date(Date.parse(now) + ttlMs).toISOString(),
+        };
+        database
+          .prepare(
+            "INSERT INTO leases (run_id, host_repo, token, generation, owner, acquired_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(run_id) DO UPDATE SET token = excluded.token, generation = excluded.generation, owner = excluded.owner, acquired_at = excluded.acquired_at, expires_at = excluded.expires_at",
+          )
+          .run(
+            runId,
+            hostRepo,
+            lease.token,
+            lease.generation,
+            lease.owner,
+            lease.acquiredAt,
+            lease.expiresAt,
+          );
+        return { lease };
+      });
+    },
+
+    // Renewal moves the window, never the identity or the generation: an
+    // expired lease cannot be revived in place — the holder re-enters
+    // through a new acquisition, and everything it wrote under the old
+    // generation stays fenced.
+    renewLease({ runId, token, ttlMs = DEFAULT_LEASE_TTL_MS }) {
+      if (!Number.isInteger(ttlMs) || ttlMs <= 0)
+        throw storeError("invalid_request", "a lease needs a positive ttl in milliseconds");
+      return tx(() => {
+        const row = ownLease(runId);
+        if (row === undefined)
+          throw storeError("lease_required", `run "${runId}" holds no controller lease`);
+        if (row.token !== token)
+          throw storeError(
+            "lease_not_held",
+            `the token presented for run "${runId}" is not the current controller lease (generation ${row.generation})`,
+          );
+        const now = clock();
+        if (Date.parse(row.expires_at) <= Date.parse(now))
+          throw storeError(
+            "lease_expired",
+            `the controller lease for run "${runId}" expired at ${row.expires_at} — acquire a new generation instead`,
+          );
+        const expiresAt = new Date(Date.parse(now) + ttlMs).toISOString();
+        database
+          .prepare("UPDATE leases SET expires_at = ? WHERE run_id = ? AND host_repo = ?")
+          .run(expiresAt, runId, hostRepo);
+        return {
+          lease: {
+            token: row.token,
+            generation: row.generation,
+            owner: row.owner,
+            acquiredAt: row.acquired_at,
+            expiresAt,
+          },
+        };
+      });
+    },
+
+    // Ownership and expiry arithmetic only — never the token, never an
+    // alive/dead claim.
+    getLease(runId) {
+      const row = ownLease(runId);
+      return row === undefined ? null : leaseRow(row);
     },
 
     // The durable dispatch intent: the attempt identity, the deduplicated
     // client request id, and the intent commit atomically here — before the
     // coordinator performs any side effect. A repeated request (the same
     // run, the same request id — a reconnect replay) returns the existing
-    // attempt with created: false; a genuine retry carries a new request id
-    // and gets a fresh attempt identity.
-    createAttempt({ runId, requestId, intent: dispatchIntent }) {
+    // attempt with created: false — a read, not a mutation, so it needs no
+    // lease; a genuine retry decision carries a new request id, travels
+    // under the live controller lease, and gets a fresh attempt identity.
+    createAttempt({ runId, requestId, intent: dispatchIntent, leaseToken }) {
       if (requestId === undefined || typeof requestId !== "string" || requestId.trim() === "")
         throw storeError("invalid_request", "an attempt needs a non-empty request id");
-      if (
-        dispatchIntent === undefined ||
-        dispatchIntent === null ||
-        typeof dispatchIntent !== "object" ||
-        Array.isArray(dispatchIntent)
-      )
+      if (!isPlainObject(dispatchIntent))
         throw storeError("invalid_request", "an attempt carries a dispatch intent object");
-      const row = ownRun(runId);
-      if (row === undefined)
-        throw storeError("run_not_found", `no run "${runId}" is visible to this host repo`);
-      if (row.state !== "active")
-        throw storeError(
-          "run_not_active",
-          `run "${runId}" is ${row.state} — new attempts start only on an active run`,
-        );
+      return tx(() => {
+        const row = ownRun(runId);
+        if (row === undefined)
+          throw storeError("run_not_found", `no run "${runId}" is visible to this host repo`);
 
-      const replayed = database
-        .prepare("SELECT * FROM attempts WHERE run_id = ? AND request_id = ? AND host_repo = ?")
-        .get(runId, requestId, hostRepo);
-      if (replayed !== undefined) return { attempt: attemptRow(replayed), created: false };
+        const replayed = database
+          .prepare("SELECT * FROM attempts WHERE run_id = ? AND request_id = ? AND host_repo = ?")
+          .get(runId, requestId, hostRepo);
+        if (replayed !== undefined) return { attempt: attemptRow(replayed), created: false };
 
-      const now = clock();
-      const attempt = {
-        attemptId: `attempt_${randomUUID()}`,
-        runId,
-        hostRepo,
-        requestId,
-        dispatchIntent,
-        state: "active",
-        createdAt: now,
-        updatedAt: now,
-      };
-      try {
-        insertAttempt.run(
-          attempt.attemptId,
-          attempt.runId,
-          attempt.hostRepo,
-          attempt.requestId,
-          JSON.stringify(attempt.dispatchIntent),
-          attempt.state,
-          attempt.createdAt,
-          attempt.updatedAt,
-        );
-      } catch (error) {
-        // A concurrent opener won the (run_id, request_id) race between the
-        // replay check and the insert: the constraint is the dedup, and the
-        // winner's attempt is the answer.
-        if (!/UNIQUE constraint failed/.test(String(error?.message))) throw error;
-        return {
-          attempt: attemptRow(
-            database
-              .prepare(
-                "SELECT * FROM attempts WHERE run_id = ? AND request_id = ? AND host_repo = ?",
-              )
-              .get(runId, requestId, hostRepo),
-          ),
-          created: false,
+        // Gate, state rule, and insert share one immediate transaction: the
+        // retry decision is fenced at the write, not only at the check.
+        requireLiveLease(runId, leaseToken);
+        if (row.state !== "active")
+          throw storeError(
+            "run_not_active",
+            `run "${runId}" is ${row.state} — new attempts start only on an active run`,
+          );
+
+        const now = clock();
+        const attempt = {
+          attemptId: `attempt_${randomUUID()}`,
+          runId,
+          hostRepo,
+          requestId,
+          dispatchIntent,
+          state: "active",
+          createdAt: now,
+          updatedAt: now,
         };
-      }
-      return { attempt, created: true };
+        try {
+          insertAttempt.run(
+            attempt.attemptId,
+            attempt.runId,
+            attempt.hostRepo,
+            attempt.requestId,
+            JSON.stringify(attempt.dispatchIntent),
+            attempt.state,
+            attempt.createdAt,
+            attempt.updatedAt,
+          );
+        } catch (error) {
+          // A concurrent opener won the (run_id, request_id) race between the
+          // replay check and the insert: the constraint is the dedup, and the
+          // winner's attempt is the answer.
+          if (!/UNIQUE constraint failed/.test(String(error?.message))) throw error;
+          return {
+            attempt: attemptRow(
+              database
+                .prepare(
+                  "SELECT * FROM attempts WHERE run_id = ? AND request_id = ? AND host_repo = ?",
+                )
+                .get(runId, requestId, hostRepo),
+            ),
+            created: false,
+          };
+        }
+        return { attempt, created: true };
+      });
     },
 
     getAttempt(attemptId) {
@@ -358,8 +724,138 @@ export const openClarificationStore = ({
         .map(attemptRow);
     },
 
-    updateAttemptState({ attemptId, to }) {
-      return transitionAttempt({ id: attemptId, to });
+    updateAttemptState({ attemptId, to, leaseToken }) {
+      return transitionAttempt({ id: attemptId, to, leaseToken });
+    },
+
+    // The fenced result write: a completion, a cancellation, a cleanup
+    // result. It claims an effect on the world, so it travels under the
+    // live lease like every mutation that claims one.
+    recordAttemptResult({ attemptId, result, leaseToken }) {
+      if (!isPlainObject(result) || typeof result.kind !== "string" || result.kind.trim() === "")
+        throw storeError("invalid_request", "an attempt result carries a non-empty kind");
+      return tx(() => {
+        const row = ownAttempt(attemptId);
+        if (row === undefined)
+          throw storeError(
+            "attempt_not_found",
+            `no attempt "${attemptId}" is visible to this host repo`,
+          );
+        requireLiveLease(row.run_id, leaseToken);
+        const updated = database
+          .prepare(
+            "UPDATE attempts SET result = ?, updated_at = ? WHERE attempt_id = ? AND host_repo = ?",
+          )
+          .run(JSON.stringify(result), clock(), attemptId, hostRepo);
+        if (updated.changes === 0)
+          throw storeError(
+            "attempt_not_found",
+            `no attempt "${attemptId}" is visible to this host repo`,
+          );
+        return attemptRow(ownAttempt(attemptId));
+      });
+    },
+
+    // Reconciliation, run level: lease-free by design (see the module head).
+    beginReconciliation({ runId }) {
+      return runReconciliation.begin(runId);
+    },
+
+    resolveReconciliation({ runId, to }) {
+      return runReconciliation.resolve(runId, to);
+    },
+
+    // Reconciliation, attempt level: the lease-free way out of a stuck
+    // unknown.
+    beginAttemptReconciliation({ attemptId }) {
+      return attemptReconciliation.begin(attemptId);
+    },
+
+    resolveAttemptReconciliation({ attemptId, to }) {
+      return attemptReconciliation.resolve(attemptId, to);
+    },
+
+    // The operational event ledger. The event is committed — durably, WAL
+    // with synchronous FULL — before this returns, so the coordinator can
+    // never publish what the store has not already persisted.
+    appendEvent({ runId, kind, data, leaseToken }) {
+      if (typeof kind !== "string" || kind.trim() === "")
+        throw storeError("invalid_request", "an operational event carries a non-empty kind");
+      if (!isPlainObject(data))
+        throw storeError("invalid_request", "an operational event carries a data object");
+      return tx(() => {
+        if (ownRun(runId) === undefined)
+          throw storeError("run_not_found", `no run "${runId}" is visible to this host repo`);
+        requireLiveLease(runId, leaseToken);
+        return appendEventInTx({ runId, kind, data, at: clock() });
+      });
+    },
+
+    // Reconnect read: the events after the viewer's cursor, ascending. A
+    // cursor that predates the retained suffix reports an explicit gap —
+    // the events in between are gone, and nothing is invented to fill them.
+    // A cursor past the ledger's end claims history the store never wrote
+    // and is refused.
+    getEvents({ runId, afterCursor = 0 }) {
+      if (!Number.isInteger(afterCursor) || afterCursor < 0)
+        throw storeError(
+          "invalid_request",
+          "an operational event cursor is a non-negative integer",
+        );
+      const maxSeq =
+        database
+          .prepare("SELECT MAX(seq) AS max_seq FROM run_events WHERE run_id = ? AND host_repo = ?")
+          .get(runId, hostRepo)?.max_seq ?? 0;
+      if (afterCursor > maxSeq)
+        throw storeError(
+          "invalid_cursor",
+          `the cursor ${afterCursor} points past the end of run "${runId}"'s ledger (latest seq ${maxSeq}) — the store will not invent history`,
+        );
+      const events = database
+        .prepare(
+          "SELECT * FROM run_events WHERE run_id = ? AND host_repo = ? AND seq > ? ORDER BY seq ASC",
+        )
+        .all(runId, hostRepo, afterCursor)
+        .map((row) => ({
+          seq: row.seq,
+          kind: row.kind,
+          data: JSON.parse(row.data),
+          createdAt: row.created_at,
+        }));
+      const firstRetainedCursor = database
+        .prepare("SELECT MIN(seq) AS min_seq FROM run_events WHERE run_id = ? AND host_repo = ?")
+        .get(runId, hostRepo)?.min_seq;
+      if (firstRetainedCursor !== undefined && firstRetainedCursor > afterCursor + 1)
+        return { events, gap: { afterCursor, firstRetainedCursor } };
+      return { events };
+    },
+
+    // The reconnect baseline: one snapshot per run, latest write wins, the
+    // write fenced like every mutation, the read open — a reconnecting
+    // viewer must never need a lease to catch up.
+    saveSnapshot({ runId, snapshot, leaseToken }) {
+      if (!isPlainObject(snapshot)) throw storeError("invalid_request", "a snapshot is an object");
+      return tx(() => {
+        if (ownRun(runId) === undefined)
+          throw storeError("run_not_found", `no run "${runId}" is visible to this host repo`);
+        requireLiveLease(runId, leaseToken);
+        const savedAt = clock();
+        database
+          .prepare(
+            "INSERT INTO run_snapshots (run_id, host_repo, snapshot, saved_at) VALUES (?, ?, ?, ?) ON CONFLICT(run_id) DO UPDATE SET snapshot = excluded.snapshot, saved_at = excluded.saved_at",
+          )
+          .run(runId, hostRepo, JSON.stringify(snapshot), savedAt);
+        return { savedAt };
+      });
+    },
+
+    getSnapshot(runId) {
+      const row = database
+        .prepare("SELECT * FROM run_snapshots WHERE run_id = ? AND host_repo = ?")
+        .get(runId, hostRepo);
+      return row === undefined
+        ? null
+        : { snapshot: JSON.parse(row.snapshot), savedAt: row.saved_at };
     },
   };
 };
