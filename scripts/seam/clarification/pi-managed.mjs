@@ -567,11 +567,16 @@ export const startManagedSession = ({
 
     // Stops the runtime and releases the writer claim through the same
     // end path as EOF: unsettled turns reject, waiters drain. The
-    // transcript stays for inspection; nothing is deleted.
+    // transcript stays for inspection; nothing is deleted. The unsettled
+    // rejections are created at end time — before any exit can exist — so
+    // they carry exit: null honestly ("not yet observed"); the kill's exit
+    // is awaited here so dispose() never returns before session.exit()
+    // holds the observed status.
     const stopRuntime = async () => {
       endSession("requested");
       child.kill();
       await releaseWriterClaim();
+      exitStatus = child.exited ? await child.exited.catch(() => null) : null;
     };
 
     return {
@@ -582,12 +587,14 @@ export const startManagedSession = ({
       runtime: { protocol: firstFrame.protocol, version: firstFrame.runtime },
 
       // The session's own word for where it stands — never a claim about
-      // processes: ended, waiting-for-input (a typed dialog is pending),
-      // awaiting-human (a provider failure parked it), or ready.
+      // processes: ended, awaiting-human (a provider failure parked it —
+      // the dominant condition, since a pending dialog is part of what the
+      // human will decide about), waiting-for-input (a typed dialog is
+      // pending), or ready.
       state: () => {
         if (ended) return "ended";
-        if (pendingDialogs.size > 0) return "waiting-for-input";
         if (awaitingHuman) return "awaiting-human";
+        if (pendingDialogs.size > 0) return "waiting-for-input";
         return "ready";
       },
 

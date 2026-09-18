@@ -1140,6 +1140,30 @@ test("a steer the runtime settles without acknowledging rejects instead of dangl
   });
 });
 
+test("awaiting-human outranks a pending dialog; dispose populates the observed exit", async () => {
+  await withSessionRoot(async ({ sessionRoot }) => {
+    const fake = fakeRuntime();
+    const session = await start(fake, { sessionRoot });
+    const turn = session.sendPrompt("parked mid-dialog");
+    // The uncorrelated quota frame parks the turn before any end.
+    const parked = rejectBoth(turn, "quota");
+
+    fake.push(JSON.stringify({ type: "select", id: "d1", title: "Pick" }));
+    fake.push(JSON.stringify({ type: "error", kind: "quota" }));
+    await drain();
+    await parked;
+    strictEqual(session.state(), "awaiting-human", "the park is the dominant state");
+
+    await session.dispose();
+    deepStrictEqual(
+      session.exit(),
+      { code: null, signal: "SIGTERM" },
+      "exit is observed by the time dispose returns",
+    );
+    await fake.end();
+  });
+});
+
 test("state() only speaks SESSION_STATES", async () => {
   await withSessionRoot(async ({ sessionRoot }) => {
     const fake = fakeRuntime();
