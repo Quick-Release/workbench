@@ -167,3 +167,68 @@ test("sessions sync is opt-in and defaults to disabled", async () => {
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+// Owned clarification (spec #221, ticket #222): the block fails closed
+// without failing boot — problems are collected on the normalized block for
+// the posture evaluator, never thrown, so one malformed capability cannot
+// take the whole dashboard down.
+test("clarification ships dark and collects its problems instead of throwing", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "workbench-config-"));
+  try {
+    const absent = await loadWorkbenchConfig(directory);
+    deepStrictEqual(absent.clarification, {
+      enabled: false,
+      provider: undefined,
+      dataDestination: undefined,
+      problems: [],
+    });
+
+    await writeFile(
+      join(directory, "workbench.config.json"),
+      JSON.stringify({
+        clarification: {
+          enabled: true,
+          provider: "  openai-codex-oauth  ",
+          dataDestination: "https://api.openai.com",
+        },
+      }),
+    );
+    const enabled = await loadWorkbenchConfig(directory);
+    deepStrictEqual(enabled.clarification, {
+      enabled: true,
+      provider: "openai-codex-oauth",
+      dataDestination: "https://api.openai.com",
+      problems: [],
+    });
+
+    await writeFile(
+      join(directory, "workbench.config.json"),
+      JSON.stringify({ clarification: { enabled: true, provider: 42, dataDestination: "" } }),
+    );
+    const incomplete = await loadWorkbenchConfig(directory);
+    strictEqual(incomplete.clarification.enabled, true);
+    deepStrictEqual(incomplete.clarification.problems, [
+      "clarification.provider must be a non-empty string",
+      "clarification.dataDestination must be a non-empty string",
+    ]);
+
+    await writeFile(
+      join(directory, "workbench.config.json"),
+      JSON.stringify({ clarification: { enabled: "yes" } }),
+    );
+    const malformedEnabled = await loadWorkbenchConfig(directory);
+    strictEqual(malformedEnabled.clarification.enabled, false);
+    deepStrictEqual(malformedEnabled.clarification.problems, [
+      "clarification.enabled must be a boolean",
+    ]);
+
+    await writeFile(
+      join(directory, "workbench.config.json"),
+      JSON.stringify({ clarification: "dark" }),
+    );
+    const malformed = await loadWorkbenchConfig(directory);
+    deepStrictEqual(malformed.clarification.problems, ["clarification must be an object"]);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});

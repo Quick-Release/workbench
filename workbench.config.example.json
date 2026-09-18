@@ -3,6 +3,11 @@
   "sessions": {
     "enabled": false
   },
+  "clarification": {
+    "enabled": false,
+    "provider": "openai-codex-oauth",
+    "dataDestination": "https://api.openai.com"
+  },
   "projectName": "Your project",
   "theme": {
     "background": "#14151b",
