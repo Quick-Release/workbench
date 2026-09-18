@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
+import { collectTrackerState } from "../../scripts/tracker/index.mjs";
 import type { BlockerEdgeRecord, TrackerMapRecord, WorkItemRecord } from "../types";
 import type { WorkflowStatePayload } from "../types";
 import { recommendNextAction, frontierStrip } from "./recommendation";
@@ -127,6 +128,25 @@ describe("the recommendation engine", () => {
       ]),
     );
     expect(recommendation?.issueId).toBe("GH-34");
+  });
+
+  it("withholds an implementation-frontier item whose blocker read was incomplete (GH-115)", () => {
+    const recommendation = recommendNextAction(
+      state([
+        item(34, { phase: "ticketed", triageState: "ready-for-agent", blockersRead: "unknown" }),
+      ]),
+    );
+    expect(recommendation).toBeNull();
+  });
+
+  it("still recommends a cleanly read sibling while withholding the unknown-read item", () => {
+    const recommendation = recommendNextAction(
+      state([
+        item(34, { phase: "ticketed", triageState: "ready-for-agent", blockersRead: "unknown" }),
+        item(35, { phase: "ticketed", triageState: "ready-for-agent" }),
+      ]),
+    );
+    expect(recommendation?.issueId).toBe("GH-35");
   });
 
   it("recommends the map frontier head in map order, with the kind's skill", () => {
@@ -410,5 +430,74 @@ describe("client-action bucket (ADR 0012)", () => {
       ]),
     );
     expect(strip.unmapped.map((record) => record.id)).toEqual(["GH-10", "GH-30", "GH-20"]);
+  });
+});
+
+// GH-115, end to end: the real collector — not a hand-built record — feeds
+// the recommendation, so the completeness encoding cannot drift between the
+// collector's output and the selector's input.
+describe("read completeness from the collector to the recommendation", () => {
+  const trackerIssue = (totalBlockedBy: number) => ({
+    number: 56,
+    title: "Blocked work",
+    state: "open",
+    labels: [{ name: "workflow:ticketed" }, { name: "ready-for-agent" }],
+    body: "Body of issue 56.",
+    html_url: "https://github.com/example/project/issues/56",
+    assignees: [],
+    issue_dependencies_summary: { blocked_by: totalBlockedBy, total_blocked_by: totalBlockedBy },
+  });
+
+  const collectThroughRecommendation = async (blockedByStatus: number, totalBlockedBy = 1) => {
+    const jsonResponse = (body: unknown, status = 200) => ({
+      ok: status >= 200 && status < 300,
+      status,
+      json: async () => body,
+    });
+    const fetchImpl = async (url: string | URL) => {
+      const u = new URL(String(url));
+      if (u.pathname.endsWith("/dependencies/blocked_by")) return jsonResponse([], blockedByStatus);
+      if (u.searchParams.get("labels")) return jsonResponse([]);
+      if (u.pathname.endsWith("/pulls")) return jsonResponse([]);
+      if (u.pathname.endsWith("/events")) return jsonResponse([]);
+      if (u.pathname.endsWith("/sub_issues")) return jsonResponse([]);
+      if (/\/issues\/\d+$/.test(u.pathname)) return jsonResponse(null);
+      if (u.pathname === "/repos/example/project/issues")
+        return jsonResponse([trackerIssue(totalBlockedBy)]);
+      return jsonResponse([]);
+    };
+    const tracker = await collectTrackerState({
+      repo: "example/project",
+      env: { GITHUB_TOKEN: "secret" },
+      ghToken: async () => "",
+      fetchImpl,
+    });
+    const payload = state(
+      tracker.workItems as unknown as WorkItemRecord[],
+      tracker.maps as unknown as TrackerMapRecord[],
+      tracker.blockerEdges as unknown as BlockerEdgeRecord[],
+    );
+    return { tracker, payload };
+  };
+
+  it("a failed blocked-by read reaches the recommendation as withheld, with the caveat", async () => {
+    const { tracker, payload } = await collectThroughRecommendation(500);
+
+    const record = payload.workItems.find((entry) => entry.id === "GH-56");
+    expect(record?.blockersRead).toBe("unknown");
+    expect(recommendNextAction(payload)).toBeNull();
+    expect(tracker.warnings.join("\n")).toContain("GH-56");
+  });
+
+  it("an empty dependency list that is genuinely empty recommends the work", async () => {
+    // The summary declares no blockers, so there is nothing to read: the
+    // empty dependency state is complete, and the ticketed item is the
+    // implementation frontier's head.
+    const { payload } = await collectThroughRecommendation(200, 0);
+
+    const record = payload.workItems.find((entry) => entry.id === "GH-56");
+    expect(record?.blockersRead).toBeUndefined();
+    expect(recommendNextAction(payload)?.bucket).toBe("implementation-frontier");
+    expect(recommendNextAction(payload)?.issueId).toBe("GH-56");
   });
 });

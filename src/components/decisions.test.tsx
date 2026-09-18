@@ -1,7 +1,6 @@
 import { renderToString } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
 
-import { overviewData } from "../data";
 import type { ArtifactRecord, DecisionRecord } from "../types";
 import { DecisionsPage } from "./DecisionsPage";
 
@@ -111,9 +110,23 @@ describe("the decisions view", () => {
     );
   });
 
-  it("renders the real synced snapshot for this repo", () => {
-    const html = renderPage(overviewData.decisions, overviewData.artifacts);
-    expect(overviewData.decisions.length).toBeGreaterThanOrEqual(12);
+  it("renders a populated snapshot on fixtures — linkage, warnings, and artifacts together (#117)", () => {
+    // Fixed fixtures, not the freshly synced live snapshot: this view's
+    // correctness cannot depend on this repo's real decision count.
+    const html = renderPage(
+      [
+        adr("ADR-0009", { title: "ADR 0009 — decisions and artifacts collect at sync" }),
+        adr("ADR-0001", { title: "ADR 0001 — telemetry stays an internal tool" }),
+        resolution("GH-49", { title: "Collect decisions at sync" }),
+        resolution("GH-42", { title: "Session capture stays opt-in" }),
+      ],
+      [
+        artifact("RN-session-db-attribution", {
+          title: "Session DB attribution",
+          workItemId: "GH-42",
+        }),
+      ],
+    );
     expect(html).toContain("ADR-0009");
     expect(html).toContain("GH-49");
     expect(html).toContain("RN-session-db-attribution");

@@ -9,7 +9,7 @@ import { deriveDisplayState } from "@/lib/display-state";
 import { indexWorkItems, mapFor, openBlockers } from "@/lib/frontier";
 import { workItemIdNumberText } from "@/lib/work-item-id.mjs";
 import { cn } from "@/lib/utils";
-import type { PhaseMoveTarget, WorkflowStatePayload } from "../types";
+import type { ClarificationStatusResult, PhaseMoveTarget, WorkflowStatePayload } from "../types";
 
 export type IssuePanelAction =
   | { kind: "create"; title: string; body: string }
@@ -25,6 +25,10 @@ type IssueDetailPanelProps = {
   mode: "live" | "static";
   pending: IssuePanelAction["kind"] | null;
   message: string | null;
+  // The Owned-clarification posture read (spec #221, ticket #222), fetched
+  // by the host. The entry point renders only in live mode when the posture
+  // answers enabled; disabled, invalid, and unreachable all render nothing.
+  clarificationPosture?: ClarificationStatusResult | null;
   onOpenChange: (open: boolean) => void;
   onAction: (action: IssuePanelAction) => void;
 };
@@ -58,6 +62,7 @@ function OpenedIssueDetailPanel({
   mode,
   pending,
   message,
+  clarificationPosture,
   onOpenChange,
   onAction,
 }: Omit<IssueDetailPanelProps, "issueId"> & { issueId: string }) {
@@ -107,6 +112,7 @@ function OpenedIssueDetailPanel({
             state={state}
             mode={mode}
             pending={pending}
+            clarificationPosture={clarificationPosture}
             onAction={onAction}
           />
         ) : (
@@ -121,6 +127,7 @@ type SectionProps = {
   issueId: string;
   mode: "live" | "static";
   pending: IssuePanelAction["kind"] | null;
+  clarificationPosture?: ClarificationStatusResult | null;
   onAction: (action: IssuePanelAction) => void;
 };
 
@@ -129,6 +136,7 @@ function IssueRecordSections({
   state,
   mode,
   pending,
+  clarificationPosture,
   onAction,
 }: SectionProps & { record: (typeof state)["workItems"][number]; state: WorkflowStatePayload }) {
   const [commentDraft, setCommentDraft] = useState("");
@@ -194,6 +202,24 @@ function IssueRecordSections({
           </a>
         </div>
       </section>
+
+      {mode === "live" &&
+        clarificationPosture?.posture === "enabled" && (
+          // The clarification entry point (spec #221, ticket #222): visible
+          // the moment the posture answers enabled, honest about the runtime
+          // not shipping yet — the affordance is present, not pretend-enabled.
+          <section data-slot="panel-clarification" className="flex flex-col gap-2">
+            <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
+              Clarification
+            </p>
+            <p className="text-xs text-muted-foreground">{clarificationPosture.message}</p>
+            <div>
+              <Button size="sm" disabled aria-label={`Clarify ${record.id}`}>
+                Clarify
+              </Button>
+            </div>
+          </section>
+        )}
 
       <section data-slot="panel-phase-move" className="flex flex-col gap-2">
         <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase">

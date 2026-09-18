@@ -285,7 +285,12 @@ export const collectTrackerState = async ({
     const declared = summary?.total_blocked_by ?? 0;
     if (declared <= 0) continue;
     const id = `GH-${entry.number}`;
-    const { issues: blockers, warnings: listWarnings } = await fetchBlockedBy({
+    const {
+      issues: blockers,
+      warnings: listWarnings,
+      capped: listCapped,
+      failed: listFailed,
+    } = await fetchBlockedBy({
       repo,
       token,
       apiBase,
@@ -294,6 +299,24 @@ export const collectTrackerState = async ({
       maxPages,
     });
     warnings.push(...listWarnings.map((warning) => `${id}: ${warning}`));
+    // GH-115: an incomplete read is recorded on the blocked issue itself, so
+    // readiness can tell it apart from a successfully read empty list. The
+    // edges that did come back stay — they are real blockers — but the item
+    // is withheld from the frontier until a sync reads the list cleanly. A
+    // walk that ended cleanly can still be short of the summary's declared
+    // count (a clamped or lying page size), and that is incomplete too: the
+    // list includes closed blockers, so a complete read returns them all.
+    if (listFailed || listCapped || blockers.length < declared) {
+      if (!listFailed && !listCapped)
+        warnings.push(
+          `${id}: the blocked-by list returned ${blockers.length} of the ${declared} declared blockers; the read is incomplete`,
+        );
+      if (recordsById.has(id)) recordsById.get(id).blockersRead = "unknown";
+      else
+        warnings.push(
+          `${id}: its blocked-by read was incomplete but no record was collected; the incompleteness cannot ride the record`,
+        );
+    }
     for (const blocker of blockers) {
       nativeEdges.push({
         blockedId: id,

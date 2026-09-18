@@ -26,7 +26,7 @@ import { deriveWorkItem } from "../../tracker/labels.mjs";
 import { ghIssueRecord } from "../../tracker/gh-view.mjs";
 import { collectClientTickets } from "../../tracker/client-tickets.mjs";
 import { resolveGhToken, tokenFromGhCli } from "../../tracker/index.mjs";
-import { GITHUB_API } from "../../tracker/issues.mjs";
+import { GITHUB_API, PER_PAGE } from "../../tracker/issues.mjs";
 import { guardedApi, sendJson } from "../middleware/api-shared.mjs";
 import { createAutoSync } from "../workflow/auto-sync.mjs";
 import { APP_DIRECTORY, importWorkflowSnapshot, loadWorkflowState } from "../workflow/snapshot.mjs";
@@ -338,15 +338,40 @@ const resolveBlockerDatabaseId = async (blockerId, number, state, run, cwd) => {
   return databaseId;
 };
 
+// GH-115: the read-back walks every page within the cap, because a
+// truncated list would serve fewer blockers than the tracker declares and
+// silently ungate work. A failed page (any page) and a cap-stopped walk are
+// typed failures — the caller answers 502 and the served edges stay as the
+// last sync left them, never a partial "no blockers".
+const MAX_BLOCKED_BY_PAGES = 10;
+
 const readBackBlockedBy = async (issueId, number, state, run, cwd) => {
-  const readBack = await run(
-    "gh",
-    ["api", `repos/${state.meta.repo}/issues/${number}/dependencies/blocked_by?per_page=100`],
-    cwd,
-  );
-  const blockers = JSON.parse(readBack.stdout);
-  if (!Array.isArray(blockers))
-    throw new Error(`the blocked-by read-back for ${issueId} was not a list`);
+  const blockers = [];
+  for (let page = 1, hasMore = true; hasMore && page <= MAX_BLOCKED_BY_PAGES; page += 1) {
+    const readBack = await run(
+      "gh",
+      [
+        "api",
+        `repos/${state.meta.repo}/issues/${number}/dependencies/blocked_by?per_page=${PER_PAGE}&page=${page}`,
+      ],
+      cwd,
+    );
+    let entries;
+    try {
+      entries = JSON.parse(readBack.stdout);
+    } catch {
+      throw new Error(`the blocked-by read-back for ${issueId} (page ${page}) was not JSON`);
+    }
+    if (!Array.isArray(entries))
+      throw new Error(`the blocked-by read-back for ${issueId} (page ${page}) was not a list`);
+    blockers.push(...entries);
+    hasMore = entries.length === PER_PAGE;
+    if (!hasMore) break;
+    if (page === MAX_BLOCKED_BY_PAGES)
+      throw new Error(
+        `the blocked-by read-back for ${issueId} stopped at the ${MAX_BLOCKED_BY_PAGES}-page cap; serving a prefix would understate the blockers`,
+      );
+  }
   const record = state.workItems.find((item) => item.id === issueId);
   const sourceRef = record?.url ?? `https://github.com/${state.meta.repo}/issues/${number}`;
   return blockers
