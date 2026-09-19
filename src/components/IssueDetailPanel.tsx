@@ -5,6 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ClarificationConversation } from "@/components/ClarificationConversation";
+import { ClarificationDraftPanel } from "@/components/ClarificationDraftPanel";
 import { PhaseMoveSelect } from "@/components/PhaseMoveSelect";
 import { deriveDisplayState } from "@/lib/display-state";
 import { indexWorkItems, mapFor, openBlockers } from "@/lib/frontier";
@@ -210,7 +211,9 @@ function IssueRecordSections({
           // the moment the posture answers enabled, honest about the runtime
           // not shipping yet — the affordance is present, not pretend-enabled.
           // The conversation surface (ticket #232) renders below whenever the
-          // issue has a run; with no run it renders nothing at all.
+          // issue has a run; with no run it renders nothing at all. The
+          // draft (ticket #233) hangs under the conversation: the attempt's
+          // proposal, editable, persisted locally, never an approval.
           <section data-slot="panel-clarification" className="flex flex-col gap-2">
             <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
               Clarification
@@ -222,6 +225,7 @@ function IssueRecordSections({
               </Button>
             </div>
             <ClarificationConversation issueNumber={Number(number)} />
+            <ClarificationDraftPanel issueNumber={Number(number)} />
           </section>
         )}
 

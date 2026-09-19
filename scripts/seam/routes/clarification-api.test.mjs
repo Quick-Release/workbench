@@ -11,7 +11,8 @@ import {
 } from "./clarification-api.mjs";
 import { parseClarificationConversationCommandResult } from "../../../src/schema.ts";
 import { parseClarificationConversationState } from "../../../src/schema.ts";
-import { noPublishingLine } from "../../../src/types.ts";
+import { parseClarificationDraftView } from "../../../src/schema.ts";
+import { noApprovalLine, noPublishingLine } from "../../../src/types.ts";
 
 const loopback = { host: "localhost:4051", origin: "http://localhost:4051" };
 const disabled = { posture: "disabled", available: false };
@@ -1188,4 +1189,145 @@ test("the run route finds a run by issue for the surface's reconnect-after-refre
     }),
   );
   strictEqual(badIssue.status, 400);
+});
+
+// --- The Clarification draft (spec #221, ticket #233): the attempt's
+// --- proposal as one mutable, locally persisted document behind GET/PUT.
+
+const draftDocument = {
+  version: "clarification-draft/v1",
+  profile: "bug",
+  behavior: "the sync command exits 0 on a clean tree",
+  observation: "it exits 1 with a lockfile warning",
+  reproduction: "run pnpm sync on a clean checkout",
+  boundary: "",
+  scope: "scripts/sync only",
+  exclusions: ["the pack-smoke harness"],
+  acceptance: ["sync exits 0 on a clean tree"],
+  dependencies: "",
+  performanceClaim: "",
+  performanceEvidence: "",
+  assumptions: [],
+  evidence: [],
+};
+
+const draftView = {
+  runId: "run_1",
+  attemptId: "attempt_1",
+  draft: draftDocument,
+  gaps: [],
+  briefCompleteness: "ready",
+  issue: {
+    number: 230,
+    revision: { updatedAt: "2026-09-18T10:00:00.000Z", bodyHash: "sha-256:abc" },
+    body: "old body",
+  },
+  diff: { unchanged: false, added: 12, removed: 1, lines: [{ kind: "removed", text: "old body" }] },
+  warnings: [],
+  savingIsNotApproval: noApprovalLine,
+  savedAt: "2026-09-18T10:00:09.000Z",
+};
+
+const draftGet = (overrides = {}) => ({
+  method: "GET",
+  pathname: "/api/clarification/runs/run_1/attempts/attempt_1/draft",
+  posture: disabled,
+  coordinator: null,
+  ...loopback,
+  ...overrides,
+});
+
+const draftPut = (overrides = {}) => ({
+  method: "PUT",
+  pathname: "/api/clarification/runs/run_1/attempts/attempt_1/draft",
+  body: JSON.stringify(draftDocument),
+  posture: enabled,
+  coordinator: null,
+  ...loopback,
+  ...overrides,
+});
+
+test("the draft read and save travel the parsed document and the parsed view", async () => {
+  const saveCalls = [];
+  const coordinator = fakeCoordinator({
+    draftView: async () => draftView,
+    saveDraft: async (args) => {
+      saveCalls.push(args);
+      return draftView;
+    },
+  });
+  const read = await handleClarificationApi(draftGet({ coordinator }));
+  strictEqual(read.status, 200);
+  const parsed = parseClarificationDraftView(read.json);
+  strictEqual(parsed.savingIsNotApproval, noApprovalLine);
+  strictEqual(parsed.briefCompleteness, "ready");
+
+  const saved = await handleClarificationApi(draftPut({ coordinator }));
+  strictEqual(saved.status, 200);
+  strictEqual(parseClarificationDraftView(saved.json).draft.profile, "bug");
+  deepStrictEqual(saveCalls, [{ runId: "run_1", attemptId: "attempt_1", draft: draftDocument }]);
+});
+
+test("the draft read is posture-free; the draft save is not", async () => {
+  const coordinator = fakeCoordinator({
+    draftView: async () => draftView,
+    saveDraft: async () => {
+      throw new Error("a disabled install must not reach the coordinator");
+    },
+  });
+  const read = await handleClarificationApi(draftGet({ coordinator, posture: disabled }));
+  strictEqual(read.status, 200);
+
+  const denial = await handleClarificationApi(draftPut({ coordinator, posture: disabled }));
+  strictEqual(denial.status, 403);
+  strictEqual(denial.json.error, "clarification_disabled");
+});
+
+test("the draft routes answer their typed 501 when no coordinator is wired", async () => {
+  const read = await handleClarificationApi(draftGet({ coordinator: null, posture: enabled }));
+  strictEqual(read.status, 501);
+  strictEqual(read.json.error, "clarification_unavailable");
+
+  const save = await handleClarificationApi(draftPut({ coordinator: null, posture: enabled }));
+  strictEqual(save.status, 501);
+  strictEqual(save.json.error, "clarification_unavailable");
+});
+
+test("a draft save refuses a body that is not a draft document", async () => {
+  const coordinator = fakeCoordinator();
+  const handled = await handleClarificationApi(
+    draftPut({ coordinator, body: JSON.stringify({ profile: "bug" }) }),
+  );
+  strictEqual(handled.status, 400);
+  strictEqual(handled.json.error, "invalid_request");
+});
+
+test("wrong methods on the draft route name the method that is answered", async () => {
+  const handled = await handleClarificationApi(draftGet({ method: "POST", body: "{}" }));
+  strictEqual(handled.status, 405);
+  strictEqual(handled.json.message, "this endpoint answers PUT only");
+});
+
+test("the coordinator's typed draft rejections cross the seam with their statuses", async () => {
+  const notFound = fakeCoordinator({
+    draftView: async () => {
+      const error = new Error("no run");
+      error.code = "run_not_found";
+      throw error;
+    },
+  });
+  const handled = await handleClarificationApi(draftGet({ coordinator: notFound }));
+  strictEqual(handled.status, 404);
+  strictEqual(handled.json.error, "run_not_found");
+});
+
+test("the draft route is one of the clarification routes", () => {
+  strictEqual(
+    isClarificationApiRoute("/api/clarification/runs/run_1/attempts/attempt_1/draft"),
+    true,
+  );
+  strictEqual(
+    isClarificationApiRoute("/api/clarification/runs/run_1/attempts/attempt_1/other"),
+    false,
+  );
 });

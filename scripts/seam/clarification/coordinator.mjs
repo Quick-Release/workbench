@@ -27,8 +27,21 @@
 // waiters, each viewer then reads its own delta from the store, so there is
 // no second, in-memory copy of history that could disagree with the durable
 // record.
+//
+// The Clarification draft (ticket #233) rides the same discipline: an open
+// read carrying the saved document, its brief-completeness arithmetic, and
+// the visible issue-body diff rendered from exactly the bytes publication
+// would write; and an explicit save that is fenced like every write and
+// moves no lifecycle state — saving a draft is never publication approval.
 
-import { noPublishingLine } from "../../../src/types.ts";
+import { noApprovalLine, noPublishingLine } from "../../../src/types.ts";
+import {
+  briefCompletenessFor,
+  publicationBodyFor,
+  renderIssueBodyDiff,
+  validateClarificationDraft,
+} from "./draft.mjs";
+import { NO_DRAFT_GAP } from "./context-packet.mjs";
 import { EVENT_ENVELOPE_VERSION } from "./store.mjs";
 
 // The manifest's fixed lines (ADR 0016's read/research-only posture, ADR
@@ -322,6 +335,160 @@ export const createClarificationCoordinator = ({
       }
     });
 
+  // The draft save's lease: a draft write claims no effect on the world —
+  // it records the proposal itself — but it lands on the run's record, so
+  // it travels under the live controller lease like every write. This
+  // process is the lease's legitimate owner: it renews the token a live
+  // session holds, and re-arms a fresh generation when the old one expired
+  // (a dev-server restart leaves the record fenced but not orphaned). A
+  // lease another writer genuinely holds fences the save typed — never a
+  // silent adoption, never a queue.
+  const ensureDraftLease = ({ runId, attemptId }) => {
+    const held = liveSessions.get(attemptId)?.leaseToken;
+    if (held !== undefined) {
+      try {
+        store.renewLease({ runId, token: held });
+        return held;
+      } catch {
+        // Expired or superseded: a fresh acquisition decides who may hold
+        // the lease now — it is the authority on that, not this check.
+      }
+    }
+    try {
+      const { lease } = store.acquireLease({ runId, owner: LEASE_OWNER });
+      // The new generation is this process's: a live session's commands
+      // renew through the token it holds, so the handle follows the lease.
+      const live = liveSessions.get(attemptId);
+      if (live !== undefined) live.leaseToken = lease.token;
+      return lease.token;
+    } catch (error) {
+      if (error?.code === "lease_held")
+        throw clarificationError(
+          "busy",
+          `the controller lease for run "${runId}" is held elsewhere — saving the draft is fenced until it moves`,
+        );
+      throw error;
+    }
+  };
+
+  // The draft view: the saved document (or its honest absence), the brief
+  // completeness arithmetic over the task profile, and the visible
+  // issue-body diff rendered from exactly the bytes publication would
+  // write — computed against a fresh tracker read. A tracker read that
+  // cannot answer withholds the diff and says why; it never hides the
+  // locally persisted draft, which is the one thing this install owns.
+  const draftView = async ({ runId, attemptId }) => {
+    if (typeof runId !== "string" || runId === "")
+      throw clarificationError("invalid_request", "a draft read names a run id");
+    if (typeof attemptId !== "string" || attemptId === "")
+      throw clarificationError("invalid_request", "a draft read names an attempt id");
+    const run = store.getRun(runId);
+    if (!run)
+      throw clarificationError(
+        "run_not_found",
+        `no clarification run "${runId}" is visible to this host repo`,
+      );
+    const attempt = store.getAttempt(attemptId);
+    if (attempt === null || attempt.runId !== runId)
+      throw clarificationError(
+        "attempt_not_found",
+        `no attempt "${attemptId}" is visible on run "${runId}" in this host repo`,
+      );
+
+    const saved = store.getDraft(attemptId);
+    const draft = saved?.draft ?? null;
+    const completeness = draft
+      ? briefCompletenessFor(draft)
+      : { verdict: "needs-information", gaps: [NO_DRAFT_GAP] };
+
+    const warnings = [];
+    let issue = null;
+    const issueNumber = Number(run.issueId);
+    if (Number.isInteger(issueNumber) && issueNumber > 0) {
+      try {
+        const collected = await tracker.readContext({ issueNumber });
+        if (collected && !collected.failed && collected.issue)
+          issue = {
+            number: collected.issue.number,
+            revision: {
+              updatedAt: collected.revision.updatedAt,
+              bodyHash: collected.revision.bodyHash,
+            },
+            body: collected.issue.body ?? "",
+          };
+        else
+          warnings.push(
+            collected?.warnings?.length
+              ? collected.warnings.join(" ")
+              : "the tracker read is incomplete; the visible issue-body diff withholds until a fresh read succeeds",
+          );
+      } catch (error) {
+        warnings.push(
+          `the tracker read failed (${error instanceof Error ? error.message : "read failed"}); the visible issue-body diff withholds until a fresh read succeeds`,
+        );
+      }
+    } else {
+      warnings.push(
+        `the run's issue id "${run.issueId}" is not an issue number; the visible issue-body diff has no base to differ from`,
+      );
+    }
+
+    const diff =
+      issue !== null && draft
+        ? renderIssueBodyDiff({ before: issue.body, after: publicationBodyFor(draft) })
+        : null;
+
+    return {
+      runId,
+      attemptId,
+      draft,
+      gaps: completeness.gaps,
+      briefCompleteness: completeness.verdict,
+      issue,
+      diff,
+      warnings,
+      savingIsNotApproval: noApprovalLine,
+      ...(saved ? { savedAt: saved.updatedAt } : {}),
+    };
+  };
+
+  // The Developer's explicit save: typed shape gate first, the fenced
+  // durable write second, the save's evidence in the ledger third — and
+  // the answer is the fresh draft view. Saving never touches the
+  // lifecycle: it is not approval, and nothing about the run or attempt
+  // moves.
+  const saveDraft = async ({ runId, attemptId, draft }) => {
+    if (typeof runId !== "string" || runId === "")
+      throw clarificationError("invalid_request", "a draft save names a run id");
+    if (typeof attemptId !== "string" || attemptId === "")
+      throw clarificationError("invalid_request", "a draft save names an attempt id");
+    const validated = validateClarificationDraft(draft);
+    const run = store.getRun(runId);
+    if (!run)
+      throw clarificationError(
+        "run_not_found",
+        `no clarification run "${runId}" is visible to this host repo`,
+      );
+    const attempt = store.getAttempt(attemptId);
+    if (attempt === null || attempt.runId !== runId)
+      throw clarificationError(
+        "attempt_not_found",
+        `no attempt "${attemptId}" is visible on run "${runId}" in this host repo`,
+      );
+    const leaseToken = ensureDraftLease({ runId, attemptId });
+    store.saveDraft({ attemptId, draft: validated, leaseToken });
+    const { gaps } = briefCompletenessFor(validated);
+    // The save's evidence shares the publication contract: durable first,
+    // waiters woken second — a connected viewer sees the timeline entry the
+    // moment the save commits, never an unrelated publish later.
+    recordEvent(runId, {
+      kind: "draft.saved",
+      data: { attemptId, profile: validated.profile, gapCount: gaps.length },
+      leaseToken,
+    });
+    return draftView({ runId, attemptId });
+  };
+
   // The evidence pump: the runtime's frames become durable conversation
   // events as they land — ledger first, viewer fan-out second, so what a
   // live viewer sees is always already evidence. One pump per live attempt,
@@ -591,6 +758,11 @@ export const createClarificationCoordinator = ({
         ...(ledger.gap ? { gap: ledger.gap } : {}),
       };
     },
+
+    // The Clarification draft read and save (ticket #233): open read, and
+    // an explicit save that is never an approval.
+    draftView,
+    saveDraft,
 
     // The Developer's explicit prompt: durable evidence first, the runtime
     // dispatch second, acceptance and settlement staying the runtime's own

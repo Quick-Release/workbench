@@ -556,6 +556,8 @@ import type { Schema } from "effect";
 import type {
   ClarificationConversationCommandResultSchema,
   ClarificationConversationStateSchema,
+  ClarificationDraftDocumentSchema,
+  ClarificationDraftViewSchema,
   ClarificationManifestResultSchema,
   ClarificationRunResultSchema,
   ClarificationStartResultSchema,
@@ -618,6 +620,32 @@ export const clarificationLifecycleStates = [
 
 export type ClarificationLifecycleState = (typeof clarificationLifecycleStates)[number];
 
+// The Clarification draft's task profiles (spec #221, ticket #233, ADR
+// 0017): the four classifications a draft's brief completeness is gated
+// by. `unknown` is its own profile — the Developer classifies the work,
+// and it is never silently a feature.
+export const clarificationTaskProfiles = ["bug", "refactor", "feature-request", "unknown"] as const;
+
+export type ClarificationTaskProfile = (typeof clarificationTaskProfiles)[number];
+
+// Every claim in a Clarification draft shows its provenance kind (ADR 0017):
+// tracker (read from the issue and its planning records), research
+// (approved documentation evidence), model (the runtime's proposal, never
+// authority), or developer (the Developer's own input). The four are
+// distinct on purpose — a model proposal must never be able to masquerade
+// as something the Developer said.
+export const clarificationDraftProvenanceKinds = [
+  "tracker",
+  "research",
+  "model",
+  "developer",
+] as const;
+
+export type ClarificationDraftProvenanceKind = (typeof clarificationDraftProvenanceKinds)[number];
+
+// The versioned envelope a persisted Clarification draft travels in.
+export const clarificationDraftVersion = "clarification-draft/v1";
+
 // One operational event names its subject: the run, or one attempt on it.
 export const clarificationEventScopes = ["run", "attempt"] as const;
 
@@ -635,6 +663,12 @@ export type ClarificationStatusResult = Schema.Schema.Type<typeof ClarificationS
 // contract cannot drift.
 export const noPublishingLine = "Publishing is NOT granted by this approval";
 
+// The draft surface's fixed line (spec #221, ticket #233, CONTEXT.md's
+// "Clarification draft"): every render of a draft's save affordance carries
+// this exact sentence — saving a draft is never publication approval.
+// Pinned as the schema's literal so the display contract cannot drift.
+export const noApprovalLine = "Saving a draft is not publication approval";
+
 export type ClarificationManifestResult = Schema.Schema.Type<
   typeof ClarificationManifestResultSchema
 >;
@@ -650,3 +684,9 @@ export type ClarificationConversationCommandResult = Schema.Schema.Type<
 export type ClarificationConversationState = Schema.Schema.Type<
   typeof ClarificationConversationStateSchema
 >;
+
+export type ClarificationDraftDocument = Schema.Schema.Type<
+  typeof ClarificationDraftDocumentSchema
+>;
+
+export type ClarificationDraftView = Schema.Schema.Type<typeof ClarificationDraftViewSchema>;
