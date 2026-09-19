@@ -383,6 +383,7 @@ test("a snapshot read round-trips the schema: snapshot, events, gap", async () =
         state: "awaiting-human",
         createdAt: "2026-09-18T00:00:00Z",
         updatedAt: "2026-09-18T00:00:05Z",
+        discardedAt: null,
       },
       attempts: [
         {
@@ -394,6 +395,7 @@ test("a snapshot read round-trips the schema: snapshot, events, gap", async () =
           state: "awaiting-human",
           createdAt: "2026-09-18T00:00:01Z",
           updatedAt: "2026-09-18T00:00:05Z",
+          result: null,
         },
       ],
     },
@@ -556,13 +558,16 @@ test("the real store and coordinator stream typed frames the schema accepts", as
   await withTempStore(async ({ store }) => {
     const coordinator = createClarificationCoordinator({ store });
     const { run } = store.createRun({ issueId: "GH-42", requestId: "approve-1" });
+    const { lease } = store.acquireLease({ runId: run.runId, owner: "controller" });
     const { attempt } = store.createAttempt({
       runId: run.runId,
       requestId: "approve-1-attempt",
       intent: { adapter: "pi-managed/v1" },
+      leaseToken: lease.token,
     });
     coordinator.publish({
       runId: run.runId,
+      leaseToken: lease.token,
       event: {
         type: "lifecycle",
         scope: "attempt",
@@ -573,15 +578,21 @@ test("the real store and coordinator stream typed frames the schema accepts", as
     });
     coordinator.publish({
       runId: run.runId,
+      leaseToken: lease.token,
       event: {
         type: "conversation",
         attemptId: attempt.attemptId,
         session: { cursor: 1, envelope: "pi-managed/v1", event: { type: "hello", protocol: "1" } },
       },
     });
-    store.updateAttemptState({ attemptId: attempt.attemptId, to: "terminal" });
+    store.updateAttemptState({
+      attemptId: attempt.attemptId,
+      to: "terminal",
+      leaseToken: lease.token,
+    });
     coordinator.publish({
       runId: run.runId,
+      leaseToken: lease.token,
       event: {
         type: "lifecycle",
         scope: "attempt",
@@ -591,7 +602,8 @@ test("the real store and coordinator stream typed frames the schema accepts", as
       },
     });
 
-    // The snapshot read round-trips the production snapshot shape.
+    // The snapshot read round-trips the production snapshot shape — the
+    // recovery fields included: an unrecorded result and an undiscarded run.
     const observed = await handleClarificationObservation(
       observation({
         pathname: OBSERVATION_ROUTE(run.runId),
@@ -600,6 +612,8 @@ test("the real store and coordinator stream typed frames the schema accepts", as
     );
     strictEqual(observed.status, 200);
     strictEqual(observed.json.snapshot.attempts.length, 1);
+    strictEqual(observed.json.snapshot.attempts[0].result, null);
+    strictEqual(observed.json.snapshot.run.discardedAt, null);
     strictEqual(observed.json.latestCursor, 3);
 
     // The SSE stream replays and ends at the terminal classification; the
@@ -615,5 +629,50 @@ test("the real store and coordinator stream typed frames the schema accepts", as
       [1, 2, 3],
     );
     for (const frame of frames) parseClarificationStreamFrame(frame);
+  });
+});
+
+test("a recovered run's evidence round-trips the seam schema", async () => {
+  await withTempStore(async ({ store }) => {
+    const coordinator = createClarificationCoordinator({ store });
+    const { run } = store.createRun({ issueId: "GH-42", requestId: "approve-2" });
+    const { lease } = store.acquireLease({ runId: run.runId, owner: "controller" });
+    const { attempt } = store.createAttempt({
+      runId: run.runId,
+      requestId: "approve-2-attempt",
+      intent: { adapter: "pi-managed/v1" },
+      leaseToken: lease.token,
+    });
+
+    // Process death, then reconciliation to a terminal classification that
+    // cites its basis: exactly the recovery path ticket #236 builds.
+    coordinator.recordProcessDeath({ runId: run.runId, attemptId: attempt.attemptId, exit: null });
+    coordinator.beginAttemptReconciliation({ attemptId: attempt.attemptId });
+    coordinator.resolveAttemptReconciliation({
+      attemptId: attempt.attemptId,
+      to: "terminal",
+      basis: "no dispatch evidence; cleanup verified",
+    });
+    coordinator.discardEvidence({ runId: run.runId, confirmation: run.runId });
+
+    const observed = await handleClarificationObservation(
+      observation({
+        pathname: OBSERVATION_ROUTE(run.runId),
+        coordinator,
+      }),
+    );
+    strictEqual(observed.status, 200);
+    strictEqual(observed.json.snapshot.run.state, "terminal");
+    strictEqual(observed.json.snapshot.run.discardedAt, "2026-09-18T00:00:00Z");
+    deepStrictEqual(observed.json.snapshot.attempts[0].result, {
+      kind: "termination",
+      at: "2026-09-18T00:00:00Z",
+      proof: {},
+      uncertainty: ["runtime-exit", "descendant-termination"],
+    });
+    // The evidence was discarded through the typed confirmation: an empty
+    // ledger answers honestly, and the schema accepted the whole shape.
+    deepStrictEqual(observed.json.events, []);
+    strictEqual(observed.json.latestCursor, 0);
   });
 });

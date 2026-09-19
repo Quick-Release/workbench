@@ -853,6 +853,9 @@ export const ClarificationEventSchema = Schema.Union([
     id: Schema.String,
     state: Schema.Literals(clarificationLifecycleStates),
     at: Schema.String,
+    // A reconciliation's terminal resolution cites the evidence it
+    // inspected (ticket #236): the classification travels with its basis.
+    basis: Schema.optional(Schema.String),
   }),
   Schema.Struct({
     type: Schema.Literal("conversation"),
@@ -909,6 +912,9 @@ export const ClarificationRunSnapshotSchema = Schema.Struct({
   state: Schema.Literals(clarificationLifecycleStates),
   createdAt: Schema.String,
   updatedAt: Schema.String,
+  // Set only by the typed destructive discard of the retained evidence
+  // (ticket #236); the record stays inspectable after it.
+  discardedAt: Schema.NullOr(Schema.String),
 });
 
 export const ClarificationAttemptSnapshotSchema = Schema.Struct({
@@ -922,6 +928,10 @@ export const ClarificationAttemptSnapshotSchema = Schema.Struct({
   state: Schema.Literals(clarificationLifecycleStates),
   createdAt: Schema.String,
   updatedAt: Schema.String,
+  // The recorded outcome result — a termination's proof and uncertainty, a
+  // completion, a cleanup — likewise verbatim evidence, null until recorded
+  // (ticket #236).
+  result: Schema.NullOr(Schema.Unknown),
 });
 
 // The reconnect read: the run's snapshot plus the events after the viewer's
