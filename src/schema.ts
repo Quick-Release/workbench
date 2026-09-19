@@ -16,9 +16,12 @@ import type {
 import {
   artifactKinds,
   blockerEdgeSources,
+  clarificationAttemptOrigins,
   clarificationEventEnvelopeVersion,
   clarificationEventScopes,
+  clarificationFailureClassifications,
   clarificationLifecycleStates,
+  clarificationNextActions,
   clarificationPostures,
   clientTicketKinds,
   decisionTicketKinds,
@@ -846,6 +849,13 @@ export const parseClarificationStartRequest: (input: unknown) => ClarificationSt
 // them. A gap frame is the stream's explicit divider: the viewer's cursor
 // predates the ledger's retention, and the frame says which cursors are
 // gone instead of letting the viewer believe its history complete.
+//
+// The failure policy's evidence (ticket #235, ADR 0023) rides the same
+// ledger: an outcome event records an attempt's classification and its one
+// permitted next action; an escalation event is the bounded no-progress
+// handoff; a dispatch event marks the durable evidence that the dispatch
+// window opened; a retry event is the one coordinator retry's decision
+// record, grounded in proven non-dispatch.
 export const ClarificationEventSchema = Schema.Union([
   Schema.Struct({
     type: Schema.Literal("lifecycle"),
@@ -862,6 +872,47 @@ export const ClarificationEventSchema = Schema.Union([
       envelope: Schema.Literals(["pi-managed/v1"]),
       event: Schema.Unknown,
     }),
+  }),
+  Schema.Struct({
+    type: Schema.Literal("outcome"),
+    scope: Schema.Literal("attempt"),
+    id: Schema.String,
+    kind: Schema.String,
+    classification: Schema.Literals(clarificationFailureClassifications),
+    nextAction: Schema.Literals(clarificationNextActions),
+    reason: Schema.optional(Schema.String),
+    signature: Schema.optional(Schema.String),
+    usage: Schema.optional(Schema.Unknown),
+    at: Schema.String,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("escalation"),
+    scope: Schema.Literal("run"),
+    id: Schema.String,
+    attemptId: Schema.String,
+    signature: Schema.String,
+    repeats: Schema.Number,
+    classification: Schema.Literals(clarificationFailureClassifications),
+    kind: Schema.String,
+    reason: Schema.optional(Schema.String),
+    remainingAuthority: Schema.Array(Schema.Literals(clarificationNextActions)),
+    decision: Schema.String,
+    at: Schema.String,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("dispatch"),
+    scope: Schema.Literal("attempt"),
+    id: Schema.String,
+    at: Schema.String,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("retry"),
+    scope: Schema.Literal("run"),
+    id: Schema.String,
+    fromAttemptId: Schema.String,
+    attemptId: Schema.String,
+    basis: Schema.Literal("proven-non-dispatch"),
+    at: Schema.String,
   }),
 ]);
 
@@ -920,6 +971,22 @@ export const ClarificationAttemptSnapshotSchema = Schema.Struct({
   // travels verbatim.
   dispatchIntent: Schema.Unknown,
   state: Schema.Literals(clarificationLifecycleStates),
+  // Who created the attempt — the Developer, or the one coordinator retry.
+  origin: Schema.Literals(clarificationAttemptOrigins),
+  // The attempt's recorded outcome verdict, present once an outcome landed.
+  outcome: Schema.optional(
+    Schema.Struct({
+      kind: Schema.String,
+      classification: Schema.Literals(clarificationFailureClassifications),
+      nextAction: Schema.Literals(clarificationNextActions),
+      reason: Schema.optional(Schema.String),
+      signature: Schema.optional(Schema.String),
+      at: Schema.String,
+    }),
+  ),
+  // Present once the dispatch window opened — the evidence the one
+  // coordinator retry gate leans on.
+  dispatchedAt: Schema.optional(Schema.String),
   createdAt: Schema.String,
   updatedAt: Schema.String,
 });

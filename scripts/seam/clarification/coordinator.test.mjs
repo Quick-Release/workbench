@@ -21,7 +21,10 @@ const withCoordinator = async (fn, { eventLedgerLimit } = {}) => {
     clock: () => "2026-09-18T00:00:00Z",
     ...(eventLedgerLimit !== undefined ? { eventLedgerLimit } : {}),
   });
-  const coordinator = createClarificationCoordinator({ store });
+  const coordinator = createClarificationCoordinator({
+    store,
+    clock: () => "2026-09-18T00:00:00Z",
+  });
   try {
     return await fn({ coordinator, store, databasePath });
   } finally {
@@ -326,5 +329,527 @@ test("publish persists to the ledger before any viewer is served", async () => {
         }),
       (error) => error.code === "run_not_found",
     );
+  });
+});
+
+// --- Ticket #235: the failure policy (ADR 0023). Outcomes classify into
+// Workbench-owned classifications with one bounded permitted next action;
+// quota and auth park awaiting-human with the budget preserved; exactly one
+// coordinator retry exists behind durable non-dispatch evidence; repeated
+// identical failure signatures halt with an escalation record; the usage
+// budget spans attempts and restarts. ---
+
+test("a quota failure parks awaiting-human, folds its usage, and preserves the budget", async () => {
+  await withCoordinator(async ({ coordinator, store, databasePath }) => {
+    const { run, attempt } = attemptRun(store, "r-quota");
+    coordinator.recordUsage({
+      runId: run.runId,
+      line: { kind: "estimated", unit: "tokens", value: 500 },
+    });
+
+    const verdict = coordinator.recordOutcome({
+      runId: run.runId,
+      attemptId: attempt.attemptId,
+      outcome: { kind: "provider-failure", reason: "quota", usage: { total: 12 } },
+    });
+    strictEqual(verdict.classification, "known-failure");
+    strictEqual(verdict.nextAction, "await-human");
+    strictEqual(verdict.attemptState, "awaiting-human");
+
+    // The attempt is parked — never retried, fallen back, or terminated.
+    strictEqual(store.getAttempt(attempt.attemptId).state, "awaiting-human");
+    // Nothing automatic happened beyond the park: the run stays active and
+    // no second attempt appeared on its own.
+    strictEqual(store.getRun(run.runId).state, "active");
+    strictEqual(store.listAttempts(run.runId).length, 1);
+
+    // The outcome and the lifecycle move it drives landed together.
+    const events = store.readEvents({ runId: run.runId, afterCursor: 0 }).events;
+    deepStrictEqual(
+      events.map((envelope) => envelope.event.type),
+      ["outcome", "lifecycle"],
+    );
+    deepStrictEqual(events[0].event, {
+      type: "outcome",
+      scope: "attempt",
+      id: attempt.attemptId,
+      kind: "provider-failure",
+      classification: "known-failure",
+      nextAction: "await-human",
+      reason: "quota",
+      signature: verdict.signature,
+      usage: { total: 12 },
+      at: "2026-09-18T00:00:00Z",
+    });
+    strictEqual(events[1].event.state, "awaiting-human");
+
+    // The budget now carries the estimate from before the park and the
+    // provider-reported usage verbatim — distinct kinds, no conversion.
+    const budget = coordinator.usageBudget({ runId: run.runId });
+    deepStrictEqual(
+      budget.lines.map((line) => [line.kind, line.unit, line.value, line.detail ?? null]),
+      [
+        ["estimated", "tokens", 500, null],
+        ["reported", "provider", null, { total: 12 }],
+      ],
+    );
+    deepStrictEqual(budget.totals, { reported: {}, estimated: { tokens: 500 }, unknownLines: 0 });
+
+    // The parked attempt's verdict is on the durable row.
+    deepStrictEqual(store.getAttempt(attempt.attemptId).outcome, {
+      kind: "provider-failure",
+      classification: "known-failure",
+      nextAction: "await-human",
+      reason: "quota",
+      signature: verdict.signature,
+      at: "2026-09-18T00:00:00Z",
+    });
+
+    // The budget spans restarts: an independent handle on the same file
+    // reads it back.
+    const reopened = openClarificationStore({
+      hostRepo: "example/project",
+      databasePath,
+      clock: () => "2026-09-18T00:00:00Z",
+    });
+    deepStrictEqual(reopened.usageBudgetFor(run.runId).lines.length, 2);
+    strictEqual(reopened.getAttempt(attempt.attemptId).state, "awaiting-human");
+    reopened.close();
+  });
+});
+
+test("every classification lands with its bounded next action", async () => {
+  await withCoordinator(async ({ coordinator, store }) => {
+    const cases = [
+      {
+        outcome: { kind: "rejected", evidence: { error: "bad prompt" } },
+        classification: "known-failure",
+        nextAction: "manual-retry",
+        attemptState: "terminal",
+        signature: true,
+      },
+      {
+        outcome: { kind: "policy-denied", evidence: { denied: "network" } },
+        classification: "policy-denial",
+        nextAction: "manual-retry",
+        attemptState: "terminal",
+        signature: true,
+      },
+      {
+        outcome: { kind: "cancelled" },
+        classification: "cancellation",
+        nextAction: "manual-retry",
+        attemptState: "terminal",
+        signature: false,
+      },
+      {
+        outcome: { kind: "unknown", endReason: "eof", exit: 1 },
+        classification: "unknown",
+        nextAction: "reconcile",
+        attemptState: "unknown",
+        signature: false,
+      },
+      {
+        outcome: { kind: "start-denied", code: "unsupported_protocol" },
+        classification: "unsupported",
+        nextAction: "manual-retry",
+        attemptState: "terminal",
+        signature: true,
+      },
+    ];
+    for (const [index, testCase] of cases.entries()) {
+      const { run, attempt } = attemptRun(store, `r-classify-${index}`);
+      const verdict = coordinator.recordOutcome({
+        runId: run.runId,
+        attemptId: attempt.attemptId,
+        outcome: testCase.outcome,
+      });
+      strictEqual(verdict.classification, testCase.classification, testCase.outcome.kind);
+      strictEqual(verdict.nextAction, testCase.nextAction, testCase.outcome.kind);
+      strictEqual(
+        store.getAttempt(attempt.attemptId).state,
+        testCase.attemptState,
+        testCase.outcome.kind,
+      );
+      const [outcomeEnvelope] = store
+        .readEvents({ runId: run.runId, afterCursor: 0 })
+        .events.map((envelope) => envelope.event)
+        .filter((event) => event.type === "outcome");
+      strictEqual(outcomeEnvelope.nextAction, testCase.nextAction, testCase.outcome.kind);
+      if (testCase.signature)
+        ok(typeof outcomeEnvelope.signature === "string", testCase.outcome.kind);
+      else strictEqual(outcomeEnvelope.signature, undefined, testCase.outcome.kind);
+    }
+  });
+});
+
+test("an outcome that does not classify is a typed rejection that writes nothing", async () => {
+  await withCoordinator(async ({ coordinator, store }) => {
+    const { run, attempt } = attemptRun(store, "r-invalid");
+    throws(
+      () =>
+        coordinator.recordOutcome({
+          runId: run.runId,
+          attemptId: attempt.attemptId,
+          outcome: { kind: "vibes" },
+        }),
+      (error) => error.code === "invalid_outcome",
+    );
+    throws(
+      () =>
+        coordinator.recordOutcome({
+          runId: run.runId,
+          attemptId: attempt.attemptId,
+          outcome: { kind: "provider-failure", reason: "reanimated" },
+        }),
+      (error) => error.code === "invalid_outcome",
+    );
+    strictEqual(store.readEvents({ runId: run.runId, afterCursor: 0 }).events.length, 0);
+    strictEqual(store.getAttempt(attempt.attemptId).state, "active");
+
+    // A terminal attempt records nothing further.
+    store.updateAttemptState({ attemptId: attempt.attemptId, to: "terminal" });
+    throws(
+      () =>
+        coordinator.recordOutcome({
+          runId: run.runId,
+          attemptId: attempt.attemptId,
+          outcome: { kind: "cancelled" },
+        }),
+      (error) => error.code === "illegal_transition",
+    );
+    strictEqual(store.readEvents({ runId: run.runId, afterCursor: 0 }).events.length, 0);
+  });
+});
+
+test("marking dispatch publishes evidence the retry gate can lean on", async () => {
+  await withCoordinator(async ({ coordinator, store }) => {
+    const { run, attempt } = attemptRun(store, "r-mark");
+    const marked = coordinator.markDispatched({
+      runId: run.runId,
+      attemptId: attempt.attemptId,
+      evidence: { argv: ["pi", "--mode", "rpc", "--no-retry"] },
+    });
+    strictEqual(marked.dispatchedAt, "2026-09-18T00:00:00Z");
+    const events = store.readEvents({ runId: run.runId, afterCursor: 0 }).events;
+    deepStrictEqual(
+      events.map((envelope) => envelope.event.type),
+      ["dispatch"],
+    );
+    strictEqual(events[0].event.id, attempt.attemptId);
+
+    // A second mark is a typed refusal — the first is the record.
+    throws(
+      () => coordinator.markDispatched({ runId: run.runId, attemptId: attempt.attemptId }),
+      (error) => error.code === "dispatch_marked",
+    );
+  });
+});
+
+test("repeated identical failure signatures halt the run with an escalation record", async () => {
+  await withCoordinator(async ({ coordinator, store }) => {
+    const { run } = store.createRun({ issueId: "GH-42", requestId: "r-loop" });
+    const first = store.createAttempt({ runId: run.runId, requestId: "a-1", intent: {} });
+    const second = store.createAttempt({ runId: run.runId, requestId: "a-2", intent: {} });
+    const third = store.createAttempt({ runId: run.runId, requestId: "a-3", intent: {} });
+
+    // First identical failure: recorded, not yet a loop.
+    const firstVerdict = coordinator.recordOutcome({
+      runId: run.runId,
+      attemptId: first.attempt.attemptId,
+      outcome: { kind: "provider-failure", reason: "quota" },
+    });
+    strictEqual(store.getRun(run.runId).state, "active");
+    deepStrictEqual(store.listEscalations(run.runId), []);
+
+    // The manual fresh attempt fails the same way: that is a no-progress
+    // loop — the run halts awaiting-human with the escalation record.
+    coordinator.recordOutcome({
+      runId: run.runId,
+      attemptId: second.attempt.attemptId,
+      outcome: { kind: "provider-failure", reason: "quota" },
+    });
+    strictEqual(store.getRun(run.runId).state, "awaiting-human");
+    const escalations = store.listEscalations(run.runId);
+    strictEqual(escalations.length, 1);
+    strictEqual(escalations[0].signature, firstVerdict.signature);
+    strictEqual(escalations[0].repeats, 2);
+    deepStrictEqual(escalations[0].remainingAuthority, ["manual-retry"]);
+    ok(escalations[0].decision.length > 0);
+    const ledgerTypes = store
+      .readEvents({ runId: run.runId, afterCursor: 0 })
+      .events.map((envelope) => envelope.event)
+      .filter((event) => event.type === "escalation");
+    strictEqual(ledgerTypes.length, 1);
+
+    // A third attempt already in flight failing identically escalates
+    // nothing new — the halt is idempotent per signature.
+    coordinator.recordOutcome({
+      runId: run.runId,
+      attemptId: third.attempt.attemptId,
+      outcome: { kind: "provider-failure", reason: "quota" },
+    });
+    strictEqual(store.listEscalations(run.runId).length, 1);
+    strictEqual(store.getRun(run.runId).state, "awaiting-human");
+  });
+});
+
+test("different failure signatures count separately; the human decision reopens a halt", async () => {
+  await withCoordinator(async ({ coordinator, store }) => {
+    const { run } = store.createRun({ issueId: "GH-42", requestId: "r-two-sigs" });
+    const first = store.createAttempt({ runId: run.runId, requestId: "a-1", intent: {} });
+    const second = store.createAttempt({ runId: run.runId, requestId: "a-2", intent: {} });
+    const third = store.createAttempt({ runId: run.runId, requestId: "a-3", intent: {} });
+
+    coordinator.recordOutcome({
+      runId: run.runId,
+      attemptId: first.attempt.attemptId,
+      outcome: { kind: "provider-failure", reason: "quota" },
+    });
+    // A different reason is a different signature: one repeat does not halt.
+    coordinator.recordOutcome({
+      runId: run.runId,
+      attemptId: second.attempt.attemptId,
+      outcome: { kind: "provider-failure", reason: "auth_required" },
+    });
+    strictEqual(store.getRun(run.runId).state, "active");
+    strictEqual(store.listEscalations(run.runId).length, 0);
+
+    // The quota failure repeats: its own loop halts the run.
+    coordinator.recordOutcome({
+      runId: run.runId,
+      attemptId: third.attempt.attemptId,
+      outcome: { kind: "provider-failure", reason: "quota" },
+    });
+    strictEqual(store.getRun(run.runId).state, "awaiting-human");
+    const escalated = store.listEscalations(run.runId);
+    strictEqual(escalated.length, 1);
+    strictEqual(escalated[0].reason, "quota");
+
+    // The explicit human decision moves the run back and new attempts may
+    // start — the Developer's manual fresh attempt, never an automatic one.
+    store.updateRunState({ runId: run.runId, to: "active" });
+    const { attempt } = store.createAttempt({ runId: run.runId, requestId: "a-4", intent: {} });
+    strictEqual(attempt.origin, "manual");
+  });
+});
+
+test("the coordinator retry fires once, only on proven non-dispatch", async () => {
+  await withCoordinator(async ({ coordinator, store }) => {
+    const { run, attempt } = attemptRun(store, "r-retry");
+    coordinator.recordOutcome({
+      runId: run.runId,
+      attemptId: attempt.attemptId,
+      outcome: { kind: "start-denied", code: "runtime_ended" },
+    });
+
+    const retry = coordinator.requestCoordinatorRetry({
+      runId: run.runId,
+      fromAttemptId: attempt.attemptId,
+      requestId: "retry-1",
+      intent: { adapter: "pi-managed/v1", contextDigest: "sha-256:def456" },
+    });
+    strictEqual(retry.created, true);
+    strictEqual(retry.attempt.origin, "coordinator-retry");
+    deepStrictEqual(retry.attempt.dispatchIntent, {
+      adapter: "pi-managed/v1",
+      contextDigest: "sha-256:def456",
+    });
+
+    // The retry decision is evidence on the ledger.
+    const retries = store
+      .readEvents({ runId: run.runId, afterCursor: 0 })
+      .events.map((envelope) => envelope.event)
+      .filter((event) => event.type === "retry");
+    strictEqual(retries.length, 1);
+    deepStrictEqual(retries[0], {
+      type: "retry",
+      scope: "run",
+      id: run.runId,
+      fromAttemptId: attempt.attemptId,
+      attemptId: retry.attempt.attemptId,
+      basis: "proven-non-dispatch",
+      at: "2026-09-18T00:00:00Z",
+    });
+
+    // Exactly once: a second coordinator retry is a typed refusal.
+    throws(
+      () =>
+        coordinator.requestCoordinatorRetry({
+          runId: run.runId,
+          fromAttemptId: attempt.attemptId,
+          requestId: "retry-2",
+          intent: {},
+        }),
+      (error) => error.code === "coordinator_retry_spent",
+    );
+
+    // A replayed retry request (the same request id) deduplicates to the
+    // same attempt — it never creates a second one.
+    const replay = coordinator.requestCoordinatorRetry({
+      runId: run.runId,
+      fromAttemptId: attempt.attemptId,
+      requestId: "retry-1",
+      intent: {},
+    });
+    strictEqual(replay.created, false);
+    strictEqual(replay.attempt.attemptId, retry.attempt.attemptId);
+  });
+});
+
+test("the coordinator retry refuses every outcome that does not prove non-dispatch", async () => {
+  await withCoordinator(async ({ coordinator, store }) => {
+    const refusals = [
+      { outcome: { kind: "provider-failure", reason: "quota" } },
+      { outcome: { kind: "rejected", evidence: {} } },
+      { outcome: { kind: "policy-denied", evidence: {} } },
+      { outcome: { kind: "cancelled" } },
+      { outcome: { kind: "unknown", endReason: "eof" } },
+    ];
+    for (const [index, refusal] of refusals.entries()) {
+      const { run, attempt } = attemptRun(store, `r-refuse-${index}`);
+      coordinator.recordOutcome({
+        runId: run.runId,
+        attemptId: attempt.attemptId,
+        outcome: refusal.outcome,
+      });
+      throws(
+        () =>
+          coordinator.requestCoordinatorRetry({
+            runId: run.runId,
+            fromAttemptId: attempt.attemptId,
+            requestId: `retry-${index}`,
+            intent: {},
+          }),
+        (error) => error.code === "retry_not_eligible",
+        refusal.outcome.kind,
+      );
+    }
+
+    // The lying-reporter fence: an attempt marked dispatched can never
+    // ground a non-dispatch retry, whatever the outcome claims.
+    const { run, attempt } = attemptRun(store, "r-marked");
+    coordinator.markDispatched({ runId: run.runId, attemptId: attempt.attemptId });
+    coordinator.recordOutcome({
+      runId: run.runId,
+      attemptId: attempt.attemptId,
+      outcome: { kind: "start-denied", code: "runtime_ended" },
+    });
+    throws(
+      () =>
+        coordinator.requestCoordinatorRetry({
+          runId: run.runId,
+          fromAttemptId: attempt.attemptId,
+          requestId: "retry-marked",
+          intent: {},
+        }),
+      (error) => error.code === "retry_not_eligible",
+    );
+
+    // The typed lookups fail before the gate is even consulted.
+    const { run: visible } = store.createRun({ issueId: "GH-42", requestId: "r-refs" });
+    throws(
+      () =>
+        coordinator.requestCoordinatorRetry({
+          runId: "run_missing",
+          fromAttemptId: attempt.attemptId,
+          requestId: "x",
+          intent: {},
+        }),
+      (error) => error.code === "run_not_found",
+    );
+    throws(
+      () =>
+        coordinator.requestCoordinatorRetry({
+          runId: visible.runId,
+          fromAttemptId: attempt.attemptId,
+          requestId: "x",
+          intent: {},
+        }),
+      (error) => error.code === "attempt_not_found",
+    );
+
+    // A halted run dispatches nothing, coordinator retry included.
+    const { run: halted } = store.createRun({ issueId: "GH-42", requestId: "r-halted-run" });
+    store.updateRunState({ runId: halted.runId, to: "awaiting-human" });
+    throws(
+      () =>
+        coordinator.requestCoordinatorRetry({
+          runId: halted.runId,
+          fromAttemptId: attempt.attemptId,
+          requestId: "x",
+          intent: {},
+        }),
+      (error) => error.code === "run_not_active",
+    );
+  });
+});
+
+test("usage lines through the coordinator keep their kinds distinct forever", async () => {
+  await withCoordinator(async ({ coordinator, store }) => {
+    const { run } = store.createRun({ issueId: "GH-42", requestId: "r-budget" });
+    coordinator.recordUsage({
+      runId: run.runId,
+      line: { kind: "reported", unit: "usd", value: 0.25 },
+    });
+    coordinator.recordUsage({
+      runId: run.runId,
+      line: { kind: "estimated", unit: "usd", value: 10 },
+    });
+    coordinator.recordUsage({ runId: run.runId, line: { kind: "unknown", unit: "usd" } });
+
+    const budget = coordinator.usageBudget({ runId: run.runId });
+    // The estimate never becomes reported usage; unknown stays unknown.
+    deepStrictEqual(budget.totals, {
+      reported: { usd: 0.25 },
+      estimated: { usd: 10 },
+      unknownLines: 1,
+    });
+
+    throws(
+      () =>
+        coordinator.recordUsage({
+          runId: run.runId,
+          line: { kind: "guessed", unit: "usd", value: 1 },
+        }),
+      (error) => error.code === "invalid_usage_line",
+    );
+    throws(
+      () =>
+        coordinator.recordUsage({
+          runId: run.runId,
+          line: { kind: "unknown", unit: "usd", value: 5 },
+        }),
+      (error) => error.code === "invalid_usage_line",
+    );
+    strictEqual(coordinator.usageBudget({ runId: run.runId }).lines.length, 3);
+  });
+});
+
+test("a live viewer sees outcome and escalation events as they land", async () => {
+  await withCoordinator(async ({ coordinator, store }) => {
+    const { run, attempt } = attemptRun(store, "r-viewer");
+    const { stream } = coordinator.streamEvents({
+      runId: run.runId,
+      attemptId: attempt.attemptId,
+      afterCursor: 0,
+    });
+
+    coordinator.recordOutcome({
+      runId: run.runId,
+      attemptId: attempt.attemptId,
+      outcome: { kind: "provider-failure", reason: "quota", usage: { total: 7 } },
+    });
+    const frames = [];
+    for (let i = 0; i < 2; i += 1) {
+      const { value } = await stream.next();
+      frames.push(value);
+    }
+    deepStrictEqual(
+      frames.map((frame) => frame.event.type),
+      ["outcome", "lifecycle"],
+    );
+    strictEqual(frames[1].event.state, "awaiting-human");
+    stream.return();
   });
 });

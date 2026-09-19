@@ -4,8 +4,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { LIFECYCLE_STATES, EVENT_ENVELOPE_VERSION, openClarificationStore } from "./store.mjs";
 import {
+  LIFECYCLE_STATES,
+  EVENT_ENVELOPE_VERSION,
+  ATTEMPT_ORIGINS,
+  openClarificationStore,
+} from "./store.mjs";
+import {
+  clarificationAttemptOrigins,
   clarificationEventEnvelopeVersion,
   clarificationLifecycleStates,
 } from "../../../src/types.ts";
@@ -21,6 +27,9 @@ test("the seam's mirrored observation vocabulary never drifts from the store's",
   // may move without the other.
   deepStrictEqual([...LIFECYCLE_STATES], [...clarificationLifecycleStates]);
   strictEqual(EVENT_ENVELOPE_VERSION, clarificationEventEnvelopeVersion);
+  // The attempt origins are the store's vocabulary too (ticket #235): the
+  // one coordinator retry is the schema's law, so the mirror must follow.
+  deepStrictEqual([...ATTEMPT_ORIGINS], [...clarificationAttemptOrigins]);
 });
 
 const withStore = async (fn) => {
@@ -440,5 +449,454 @@ test("an unsupported schema version fails closed", async () => {
         return error.code === "unsupported_schema_version";
       },
     );
+  });
+});
+
+// --- Ticket #235: failure classification, dispatch evidence, usage budget,
+// escalation records (ADR 0023). ---
+
+test("a version-1 store file migrates in place and reads back compatibly", async () => {
+  await withStore(async ({ databasePath }) => {
+    // A file written by the version-1 store: the pre-#235 attempts table,
+    // stamped 1, holding one real row.
+    const { DatabaseSync } = await import("node:sqlite");
+    const raw = new DatabaseSync(databasePath);
+    raw.exec(`
+      CREATE TABLE store_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+      CREATE TABLE runs (
+        run_id TEXT PRIMARY KEY, host_repo TEXT NOT NULL, issue_id TEXT NOT NULL,
+        request_id TEXT NOT NULL, state TEXT NOT NULL, created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL, UNIQUE (host_repo, request_id)
+      );
+      CREATE TABLE attempts (
+        attempt_id TEXT PRIMARY KEY, run_id TEXT NOT NULL REFERENCES runs(run_id),
+        host_repo TEXT NOT NULL, request_id TEXT NOT NULL, dispatch_intent TEXT NOT NULL,
+        state TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+        UNIQUE (run_id, request_id)
+      );
+      CREATE TABLE events (
+        host_repo TEXT NOT NULL, run_id TEXT NOT NULL REFERENCES runs(run_id),
+        seq INTEGER NOT NULL, event TEXT NOT NULL, created_at TEXT NOT NULL,
+        PRIMARY KEY (host_repo, run_id, seq)
+      );
+    `);
+    raw.prepare("INSERT INTO store_meta (key, value) VALUES ('schema_version', '1')").run();
+    raw
+      .prepare(
+        "INSERT INTO runs (run_id, host_repo, issue_id, request_id, state, created_at, updated_at) VALUES ('run_old', 'example/project', 'GH-42', 'approve-1', 'active', '2026-09-18T00:00:00Z', '2026-09-18T00:00:00Z')",
+      )
+      .run();
+    raw
+      .prepare(
+        "INSERT INTO attempts (attempt_id, run_id, host_repo, request_id, dispatch_intent, state, created_at, updated_at) VALUES ('attempt_old', 'run_old', 'example/project', 'req-1', '{}', 'active', '2026-09-18T00:00:00Z', '2026-09-18T00:00:00Z')",
+      )
+      .run();
+    raw.close();
+
+    // The current store opens it, migrates it, and the old row reads back
+    // with the new projection fields honestly empty.
+    const store = open({ databasePath });
+    const attempt = store.getAttempt("attempt_old");
+    strictEqual(attempt.attemptId, "attempt_old");
+    strictEqual(attempt.origin, "manual");
+    // The new projection fields are honestly absent on old rows.
+    strictEqual(attempt.outcome, undefined);
+    strictEqual(attempt.dispatchedAt, undefined);
+
+    // The migrated file takes new writes.
+    const { attempt: fresh } = store.createAttempt({
+      runId: "run_old",
+      requestId: "req-2",
+      intent,
+    });
+    strictEqual(fresh.origin, "manual");
+    store.close();
+
+    // Reopening does not migrate twice.
+    const again = open({ databasePath });
+    strictEqual(again.getAttempt("attempt_old").attemptId, "attempt_old");
+    again.close();
+  });
+});
+
+const outcomeVerdict = {
+  kind: "provider-failure",
+  classification: "known-failure",
+  nextAction: "await-human",
+  reason: "quota",
+  at: "2026-09-18T00:00:02Z",
+};
+
+test("an outcome transition writes the verdict and the events atomically", async () => {
+  await withStore(async ({ databasePath }) => {
+    const store = open({ databasePath });
+    const { run } = store.createRun({ issueId: "GH-42", requestId: "r-outcome" });
+    const { attempt } = store.createAttempt({ runId: run.runId, requestId: "req-1", intent });
+
+    const outcomeEvent = {
+      type: "outcome",
+      scope: "attempt",
+      id: attempt.attemptId,
+      kind: "provider-failure",
+      classification: "known-failure",
+      nextAction: "await-human",
+      reason: "quota",
+      at: "2026-09-18T00:00:02Z",
+    };
+    const lifecycleEvent = {
+      type: "lifecycle",
+      scope: "attempt",
+      id: attempt.attemptId,
+      state: "awaiting-human",
+      at: "2026-09-18T00:00:02Z",
+    };
+    const updated = store.updateAttemptState({
+      attemptId: attempt.attemptId,
+      to: "awaiting-human",
+      events: [outcomeEvent, lifecycleEvent],
+      verdict: outcomeVerdict,
+    });
+    strictEqual(updated.state, "awaiting-human");
+    deepStrictEqual(updated.outcome, {
+      kind: "provider-failure",
+      classification: "known-failure",
+      nextAction: "await-human",
+      reason: "quota",
+      at: "2026-09-18T00:00:02Z",
+    });
+
+    // The events landed in the same commit as the state move and the
+    // verdict — evidence and record cannot disagree.
+    const ledger = store.readEvents({ runId: run.runId, afterCursor: 0 }).events;
+    deepStrictEqual(
+      ledger.map((envelope) => envelope.event),
+      [outcomeEvent, lifecycleEvent],
+    );
+    store.close();
+
+    // The verdict and the events are durable.
+    const again = open({ databasePath });
+    deepStrictEqual(again.getAttempt(attempt.attemptId).outcome, updated.outcome);
+    strictEqual(again.readEvents({ runId: run.runId, afterCursor: 0 }).events.length, 2);
+    again.close();
+  });
+});
+
+test("an illegal outcome transition writes nothing, not even its events", async () => {
+  await withStore(async ({ databasePath }) => {
+    const store = open({ databasePath });
+    const { run } = store.createRun({ issueId: "GH-42", requestId: "r-illegal" });
+    const { attempt } = store.createAttempt({ runId: run.runId, requestId: "req-1", intent });
+    store.updateAttemptState({ attemptId: attempt.attemptId, to: "terminal" });
+
+    throws(
+      () =>
+        store.updateAttemptState({
+          attemptId: attempt.attemptId,
+          to: "awaiting-human",
+          events: [{ type: "outcome", scope: "attempt", id: attempt.attemptId, at: "t" }],
+          verdict: outcomeVerdict,
+        }),
+      (error) => error.code === "illegal_transition",
+    );
+    strictEqual(store.readEvents({ runId: run.runId, afterCursor: 0 }).events.length, 0);
+    strictEqual(store.getAttempt(attempt.attemptId).outcome, undefined);
+    strictEqual(store.getAttempt(attempt.attemptId).state, "terminal");
+    store.close();
+  });
+});
+
+test("a dispatch mark is durable evidence, recorded once, on an active attempt", async () => {
+  await withStore(async ({ databasePath }) => {
+    const store = open({ databasePath });
+    const { run } = store.createRun({ issueId: "GH-42", requestId: "r-dispatch" });
+    const { attempt } = store.createAttempt({ runId: run.runId, requestId: "req-1", intent });
+
+    const marked = store.markAttemptDispatched({
+      attemptId: attempt.attemptId,
+      at: "2026-09-18T00:00:03Z",
+      evidence: { argv: ["pi", "--mode", "rpc"] },
+    });
+    strictEqual(marked.dispatchedAt, "2026-09-18T00:00:03Z");
+
+    // The dispatch event rides the same commit as the mark.
+    const ledger = store.readEvents({ runId: run.runId, afterCursor: 0 }).events;
+    deepStrictEqual(
+      ledger.map((envelope) => envelope.event.type),
+      ["dispatch"],
+    );
+    deepStrictEqual(ledger[0].event, {
+      type: "dispatch",
+      scope: "attempt",
+      id: attempt.attemptId,
+      at: "2026-09-18T00:00:03Z",
+    });
+
+    // A second mark is contradictory evidence — the first is the record.
+    throws(
+      () =>
+        store.markAttemptDispatched({ attemptId: attempt.attemptId, at: "2026-09-18T00:00:04Z" }),
+      (error) => error.code === "dispatch_marked",
+    );
+
+    // A mark after the attempt ended would corrupt the retry gate's proof.
+    store.updateAttemptState({ attemptId: attempt.attemptId, to: "terminal" });
+    const { attempt: other } = store.createAttempt({
+      runId: run.runId,
+      requestId: "req-2",
+      intent,
+    });
+    store.updateAttemptState({ attemptId: other.attemptId, to: "awaiting-human" });
+    throws(
+      () => store.markAttemptDispatched({ attemptId: other.attemptId, at: "2026-09-18T00:00:05Z" }),
+      (error) => error.code === "dispatch_not_markable",
+    );
+    store.close();
+
+    // The mark survives a restart.
+    const again = open({ databasePath });
+    strictEqual(again.getAttempt(attempt.attemptId).dispatchedAt, "2026-09-18T00:00:03Z");
+    again.close();
+  });
+});
+
+test("failure signature counts accumulate durably per run", async () => {
+  await withStore(async ({ databasePath }) => {
+    const store = open({ databasePath });
+    const { run } = store.createRun({ issueId: "GH-42", requestId: "r-signature" });
+    const { attempt } = store.createAttempt({ runId: run.runId, requestId: "req-1", intent });
+
+    strictEqual(
+      store.recordFailureSignature({
+        runId: run.runId,
+        signature: "sig-a",
+        attemptId: attempt.attemptId,
+      }).count,
+      1,
+    );
+    strictEqual(
+      store.recordFailureSignature({
+        runId: run.runId,
+        signature: "sig-a",
+        attemptId: attempt.attemptId,
+      }).count,
+      2,
+    );
+    strictEqual(
+      store.recordFailureSignature({
+        runId: run.runId,
+        signature: "sig-b",
+        attemptId: attempt.attemptId,
+      }).count,
+      1,
+    );
+    store.close();
+
+    const again = open({ databasePath });
+    strictEqual(
+      again.recordFailureSignature({
+        runId: run.runId,
+        signature: "sig-a",
+        attemptId: attempt.attemptId,
+      }).count,
+      3,
+    );
+    throws(
+      () =>
+        again.recordFailureSignature({
+          runId: "run_missing",
+          signature: "sig-x",
+          attemptId: attempt.attemptId,
+        }),
+      (error) => error.code === "run_not_found",
+    );
+    again.close();
+  });
+});
+
+test("halting a run records the escalation, parks the run, and happens once per signature", async () => {
+  await withStore(async ({ databasePath }) => {
+    const store = open({ databasePath });
+    const { run } = store.createRun({ issueId: "GH-42", requestId: "r-halt" });
+    const { attempt } = store.createAttempt({ runId: run.runId, requestId: "req-1", intent });
+
+    const record = {
+      attemptId: attempt.attemptId,
+      signature: "sig-loop",
+      repeats: 2,
+      classification: "known-failure",
+      kind: "provider-failure",
+      reason: "quota",
+      remainingAuthority: ["manual-retry"],
+      decision: "decide whether to start a fresh manual attempt or abandon this run",
+      at: "2026-09-18T00:00:06Z",
+    };
+    const halt = store.haltRun({ runId: run.runId, record });
+    strictEqual(halt.moved, true);
+    strictEqual(store.getRun(run.runId).state, "awaiting-human");
+
+    // The escalation event landed in the ledger.
+    const ledger = store.readEvents({ runId: run.runId, afterCursor: 0 }).events;
+    deepStrictEqual(
+      ledger.map((envelope) => envelope.event.type),
+      ["escalation"],
+    );
+    deepStrictEqual(ledger[0].event, {
+      type: "escalation",
+      scope: "run",
+      id: run.runId,
+      ...record,
+    });
+    deepStrictEqual(store.listEscalations(run.runId), [record]);
+
+    // The same signature cannot escalate twice.
+    throws(
+      () => store.haltRun({ runId: run.runId, record }),
+      (error) => error.code === "already_halted",
+    );
+
+    // A second, different signature still records while the run is already
+    // halted — the park is idempotent, the handoff is not lost.
+    const second = store.haltRun({
+      runId: run.runId,
+      record: { ...record, signature: "sig-other" },
+    });
+    strictEqual(second.moved, false);
+    strictEqual(store.listEscalations(run.runId).length, 2);
+    store.close();
+
+    // Everything is durable.
+    const again = open({ databasePath });
+    strictEqual(again.getRun(run.runId).state, "awaiting-human");
+    strictEqual(again.listEscalations(run.runId).length, 2);
+    again.close();
+  });
+});
+
+test("usage budget lines are durable, ordered, and host-repo-scoped", async () => {
+  await withStore(async ({ databasePath }) => {
+    const store = open({ databasePath });
+    const { run } = store.createRun({ issueId: "GH-42", requestId: "r-usage" });
+    const { attempt } = store.createAttempt({ runId: run.runId, requestId: "req-1", intent });
+
+    const lines = store.appendUsageLines({
+      runId: run.runId,
+      lines: [
+        {
+          kind: "reported",
+          unit: "provider",
+          value: null,
+          detail: { total: 12 },
+          attemptId: attempt.attemptId,
+        },
+        { kind: "estimated", unit: "tokens", value: 500 },
+      ],
+    });
+    strictEqual(lines.length, 2);
+    ok(lines[0].lineId.startsWith("usage_"));
+    strictEqual(lines[0].attemptId, attempt.attemptId);
+    strictEqual(lines[1].attemptId, undefined);
+
+    throws(
+      () =>
+        store.appendUsageLines({
+          runId: run.runId,
+          lines: [{ kind: "reported", unit: "provider", value: "many" }],
+        }),
+      (error) => error.code === "invalid_request",
+    );
+    throws(
+      () => store.appendUsageLines({ runId: run.runId, lines: [{ kind: "reported", unit: "  " }] }),
+      (error) => error.code === "invalid_request",
+    );
+    store.close();
+
+    // The budget spans attempts and restarts: a fresh handle on the same
+    // file reads every line back in order.
+    const again = open({ databasePath });
+    const budget = again.usageBudgetFor(run.runId);
+    deepStrictEqual(
+      budget.lines.map((line) => [line.kind, line.unit, line.value]),
+      [
+        ["reported", "provider", null],
+        ["estimated", "tokens", 500],
+      ],
+    );
+    deepStrictEqual(budget.lines[0].detail, { total: 12 });
+    again.close();
+
+    // Another repo's budget is invisible here.
+    const foreign = open({ databasePath, hostRepo: "other/project" });
+    throws(
+      () => foreign.usageBudgetFor(run.runId),
+      (error) => error.code === "run_not_found",
+    );
+    throws(
+      () =>
+        foreign.appendUsageLines({ runId: run.runId, lines: [{ kind: "reported", unit: "x" }] }),
+      (error) => error.code === "run_not_found",
+    );
+    foreign.close();
+  });
+});
+
+test("the coordinator retry is durably limited to one attempt per run", async () => {
+  await withStore(async ({ databasePath }) => {
+    const store = open({ databasePath });
+    const { run } = store.createRun({ issueId: "GH-42", requestId: "r-retry" });
+
+    const manual = store.createAttempt({ runId: run.runId, requestId: "req-1", intent });
+    strictEqual(manual.attempt.origin, "manual");
+
+    const retry = store.createAttempt({
+      runId: run.runId,
+      requestId: "req-2",
+      intent,
+      origin: "coordinator-retry",
+    });
+    strictEqual(retry.attempt.origin, "coordinator-retry");
+
+    // The one coordinator retry is spent: a second is a typed refusal, even
+    // under a different request id.
+    throws(
+      () =>
+        store.createAttempt({
+          runId: run.runId,
+          requestId: "req-3",
+          intent,
+          origin: "coordinator-retry",
+        }),
+      (error) => error.code === "coordinator_retry_spent",
+    );
+
+    // The Developer's manual attempts are not limited.
+    store.createAttempt({ runId: run.runId, requestId: "req-4", intent });
+    strictEqual(store.listAttempts(run.runId).length, 3);
+
+    throws(
+      () =>
+        store.createAttempt({
+          runId: run.runId,
+          requestId: "req-5",
+          intent,
+          origin: "sneaky",
+        }),
+      (error) => error.code === "invalid_request",
+    );
+    store.close();
+
+    // The spent retry stays spent across a restart.
+    const again = open({ databasePath });
+    throws(
+      () =>
+        again.createAttempt({
+          runId: run.runId,
+          requestId: "req-6",
+          intent,
+          origin: "coordinator-retry",
+        }),
+      (error) => error.code === "coordinator_retry_spent",
+    );
+    again.close();
   });
 });
