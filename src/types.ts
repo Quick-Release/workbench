@@ -602,6 +602,28 @@ export const clarificationPostures = ["disabled", "invalid", "enabled"] as const
 
 export type ClarificationPosture = (typeof clarificationPostures)[number];
 
+// The clarification lifecycle vocabulary (ADR 0020): the durable store owns
+// the states and their legal transitions; this mirror is what the seam's
+// observation envelope validates against.
+export const clarificationLifecycleStates = [
+  "active",
+  "reconciling",
+  "awaiting-human",
+  "terminal",
+  "unknown",
+  "quarantined",
+] as const;
+
+export type ClarificationLifecycleState = (typeof clarificationLifecycleStates)[number];
+
+// One operational event names its subject: the run, or one attempt on it.
+export const clarificationEventScopes = ["run", "attempt"] as const;
+
+// The versioned envelope the run-level observation stream travels in. The
+// managed session's own envelope (pi-managed/v1) travels nested inside
+// conversation events and never replaces this one.
+export const clarificationEventEnvelopeVersion = "clarification-events/v1";
+
 export type ClarificationStatusResult = Schema.Schema.Type<typeof ClarificationStatusResultSchema>;
 
 // The pre-start manifest's fixed closing line (spec #221, ticket #230, ADR

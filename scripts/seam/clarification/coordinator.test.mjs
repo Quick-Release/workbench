@@ -1,15 +1,18 @@
-import { deepStrictEqual, match, rejects, strictEqual } from "node:assert";
+import { deepStrictEqual, match, ok, rejects, strictEqual, throws } from "node:assert";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 
 import { createClarificationCoordinator } from "./coordinator.mjs";
+import { openClarificationStore } from "./store.mjs";
 
-// The clarification coordinator's contract tests (spec #221, ticket #230):
-// typed commands in, typed results and rejections out, over fakes injected
-// through the module's ports — a fake durable store, a fake tracker read,
-// a fake managed-session port, an injected clock. No real SQLite, no real
-// tracker, no real runtime. The store's own lease/fencing semantics have
-// their contract suite in store.test.mjs; here the coordinator is the seam
-// under test: what it orders, what it presents, and what it refuses.
+// The clarification coordinator's contract tests (spec #221, tickets #230 +
+// #231, ADR 0020): typed commands in, typed results and rejections out, and
+// typed observation over the durable ledger. Two tiers share this suite:
+// fake-port tests order the coordinator's mutations and rejections, and
+// store-backed tests run the observation half against real SQLite on a temp
+// directory. No real tracker, no real runtime; clocks are injected.
 
 // A fake tracker read shaped like collectTrackerContext's result.
 const collectedIssue = (overrides = {}) => ({
@@ -68,6 +71,18 @@ const fakeStore = (overrides = {}, log = []) => {
       calls.push(["appendEvent", { runId, kind, data, leaseToken }]);
       return { seq: calls.filter(([k]) => k === "appendEvent").length, kind, data };
     },
+    appendEvents: ({ runId, events }) => {
+      calls.push(["appendEvents", { runId, events }]);
+      return events.map((event, index) => ({
+        cursor: index + 1,
+        envelope: "clarification-events/v1",
+        event,
+      }));
+    },
+    readEvents: (args) => {
+      calls.push(["readEvents", args]);
+      return { events: [], latestCursor: 0 };
+    },
     createAttempt: ({ runId, requestId, intent, leaseToken }) => {
       calls.push(["createAttempt", { runId, requestId, intent, leaseToken }]);
       const replayed = attempts.find((a) => a.runId === runId && a.requestId === requestId);
@@ -113,10 +128,6 @@ const fakeStore = (overrides = {}, log = []) => {
     getSnapshot: (runId) => {
       calls.push(["getSnapshot", { runId }]);
       return null;
-    },
-    getEvents: (args) => {
-      calls.push(["getEvents", args]);
-      return { events: [] };
     },
     ...overrides,
   };
@@ -202,7 +213,8 @@ test("start makes the run and attempt durable before the managed session dispatc
 
   // Durability ordering: the run record, the lease, and the attempt (with
   // its dispatch intent) are all committed before the one side effect —
-  // the managed session start — happens last.
+  // the managed session start — happens last. The attempt going active is
+  // published only after that, from the durable record.
   const kinds = log.map(([kind]) => kind);
   deepStrictEqual(kinds, [
     "listRuns",
@@ -212,6 +224,7 @@ test("start makes the run and attempt durable before the managed session dispatc
     "createAttempt",
     "appendEvent",
     "sessions.start",
+    "appendEvents",
   ]);
   strictEqual(store.calls[4][1].intent.issueNumber, 230);
   deepStrictEqual(store.calls[4][1].intent.revision, {
@@ -222,6 +235,17 @@ test("start makes the run and attempt durable before the managed session dispatc
   // generation cannot write through the coordinator.
   strictEqual(store.calls[4][1].leaseToken, "lease_1");
   strictEqual(store.calls[3][1].leaseToken, "lease_1");
+  // The publication is the attempt's active lifecycle evidence.
+  const published = log.find(([kind]) => kind === "appendEvents")[1];
+  deepStrictEqual(published.events, [
+    {
+      type: "lifecycle",
+      scope: "attempt",
+      id: "attempt_1",
+      state: "active",
+      at: clock(),
+    },
+  ]);
 });
 
 test("a replayed request id answers the existing record and never dispatches again", async () => {
@@ -263,7 +287,7 @@ test("a replayed request id answers the existing record and never dispatches aga
   deepStrictEqual(sessions.start.calls, []);
   strictEqual(
     store.calls.filter(([kind]) =>
-      ["createRun", "acquireLease", "createAttempt", "appendEvent"].includes(kind),
+      ["createRun", "acquireLease", "createAttempt", "appendEvent", "appendEvents"].includes(kind),
     ).length,
     0,
   );
@@ -400,13 +424,16 @@ test("a denied managed-session dispatch parks the run awaiting-human with the de
 
   // The denial is evidence, recorded under the live lease: the attempt's
   // result, the ledger event, the attempt closed terminal, the run parked
-  // awaiting-human — Workbench dispatches nothing further on its own.
+  // awaiting-human — Workbench dispatches nothing further on its own. The
+  // terminal classification is published to the ledger only after the
+  // durable record holds it.
   const kinds = log.map(([kind]) => kind);
-  deepStrictEqual(kinds.slice(-4), [
+  deepStrictEqual(kinds.slice(-5), [
     "recordAttemptResult",
     "appendEvent",
     "updateAttemptState",
     "updateRunState",
+    "appendEvents",
   ]);
   const recorded = log.find(([kind]) => kind === "recordAttemptResult")[1];
   strictEqual(recorded.attemptId, "attempt_1");
@@ -474,12 +501,17 @@ test("the run section reads lifecycle from durable snapshot reads, openly", asyn
         runId === "run_1"
           ? { snapshot: { lifecycle: "awaiting-human" }, savedAt: "2026-09-18T10:05:00.000Z" }
           : null,
-      getEvents: (args) => {
-        log.push(["getEvents", args]);
+      readEvents: (args) => {
+        log.push(["readEvents", args]);
         return {
           events: [
-            { seq: args.afterCursor + 1, kind: "run.started", data: {}, createdAt: clock() },
+            {
+              cursor: args.afterCursor + 1,
+              envelope: "clarification-events/v1",
+              event: { type: "operational", kind: "run.started", data: {}, at: clock() },
+            },
           ],
+          latestCursor: 3,
         };
       },
     },
@@ -495,10 +527,17 @@ test("the run section reads lifecycle from durable snapshot reads, openly", asyn
   );
   deepStrictEqual(section.snapshot, { lifecycle: "awaiting-human" });
   strictEqual(section.snapshotSavedAt, "2026-09-18T10:05:00.000Z");
-  deepStrictEqual(section.events, [{ seq: 3, kind: "run.started", data: {}, createdAt: clock() }]);
+  strictEqual(section.latestCursor, 3);
+  deepStrictEqual(section.events, [
+    {
+      cursor: 3,
+      envelope: "clarification-events/v1",
+      event: { type: "operational", kind: "run.started", data: {}, at: clock() },
+    },
+  ]);
   // The read is open: no lease token travels on it — a reconnecting viewer
   // never needs to own the run to catch up.
-  const read = log.find(([kind]) => kind === "getEvents")[1];
+  const read = log.find(([kind]) => kind === "readEvents")[1];
   strictEqual(read.afterCursor, 2);
   deepStrictEqual(read.leaseToken, undefined);
 });
@@ -514,13 +553,17 @@ test("an unknown run is a typed not-found, never an empty section", async () => 
 test("an expired cursor's explicit gap travels through the run section", async () => {
   const store = fakeStore({
     runs: [durableRun()],
-    getEvents: ({ afterCursor }) =>
+    readEvents: ({ afterCursor }) =>
       afterCursor === 0
-        ? { events: [] }
-        : { events: [], gap: { afterCursor: 4, firstRetainedCursor: 9 } },
+        ? { events: [], latestCursor: 0 }
+        : {
+            events: [],
+            latestCursor: 9,
+            gap: { after: 4, firstRetainedCursor: 9 },
+          },
   });
   const section = await coordinator({ store }).runSection({ runId: "run_1", afterCursor: 4 });
-  deepStrictEqual(section.gap, { afterCursor: 4, firstRetainedCursor: 9 });
+  deepStrictEqual(section.gap, { after: 4, firstRetainedCursor: 9 });
   // No gap when the cursor is healthy — history is never dramatized.
   const healthy = await coordinator({ store }).runSection({ runId: "run_1", afterCursor: 0 });
   strictEqual(healthy.gap, undefined);
@@ -551,4 +594,347 @@ test("the start denial evidence carries the coordinator clock's stamp", async ()
     .catch(() => {});
   const recorded = log.find(([kind]) => kind === "recordAttemptResult")[1];
   strictEqual(recorded.result.deniedAt, clock());
+});
+
+// The observation half, against the real SQLite store: every event is
+// durable first, every viewer reads its own delta from the record.
+
+const withCoordinator = async (fn, { eventLedgerLimit } = {}) => {
+  const directory = await mkdtemp(join(tmpdir(), "workbench-clarification-coordinator-"));
+  const databasePath = join(directory, "runs.sqlite");
+  const store = openClarificationStore({
+    hostRepo: "example/project",
+    databasePath,
+    clock: () => "2026-09-18T00:00:00Z",
+    ...(eventLedgerLimit !== undefined ? { eventLedgerLimit } : {}),
+  });
+  const coordinator = createClarificationCoordinator({
+    store,
+    clock: () => "2026-09-18T00:00:00Z",
+    tracker: {
+      readContext: async () => {
+        throw new Error("the observation tier never reads the tracker");
+      },
+    },
+    sessions: {
+      start: async () => {
+        throw new Error("the observation tier never starts a session");
+      },
+    },
+  });
+  try {
+    return await fn({ coordinator, store, databasePath });
+  } finally {
+    store.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+};
+
+const attemptRun = (store, requestId) => {
+  const { run } = store.createRun({ issueId: "GH-42", requestId });
+  const { lease } = store.acquireLease({ runId: run.runId, owner: "test-controller" });
+  const { attempt } = store.createAttempt({
+    runId: run.runId,
+    requestId: `${requestId}-attempt`,
+    intent: { adapter: "pi-managed/v1" },
+    leaseToken: lease.token,
+  });
+  return { run, attempt, lease };
+};
+
+const lifecycle = (state, attemptId) => ({
+  type: "lifecycle",
+  scope: "attempt",
+  id: attemptId,
+  state,
+  at: "2026-09-18T00:00:01Z",
+});
+
+const conversation = (attemptId, sessionCursor = 1) => ({
+  type: "conversation",
+  attemptId,
+  session: {
+    cursor: sessionCursor,
+    envelope: "pi-managed/v1",
+    event: { type: "hello", protocol: "1" },
+  },
+});
+
+test("observe answers the snapshot plus the events after the cursor", async () => {
+  await withCoordinator(async ({ coordinator, store }) => {
+    const { run, attempt } = attemptRun(store, "r-observe");
+    coordinator.publish({ runId: run.runId, event: lifecycle("active", attempt.attemptId) });
+    coordinator.publish({ runId: run.runId, event: conversation(attempt.attemptId) });
+
+    const full = coordinator.observe({ runId: run.runId, afterCursor: 0 });
+    deepStrictEqual(full.snapshot.run, store.getRun(run.runId));
+    deepStrictEqual(full.snapshot.attempts, [attempt]);
+    strictEqual(full.latestCursor, 2);
+    strictEqual(full.events.length, 2);
+    strictEqual(full.gap, undefined);
+
+    // The same read answers a returning viewer's delta: everything after
+    // its own cursor, nothing before.
+    const delta = coordinator.observe({ runId: run.runId, afterCursor: 1 });
+    strictEqual(delta.latestCursor, 2);
+    strictEqual(delta.events.length, 1);
+    strictEqual(delta.events[0].cursor, 2);
+
+    throws(
+      () => coordinator.observe({ runId: "run_missing", afterCursor: 0 }),
+      (error) => error.code === "run_not_found",
+    );
+  });
+});
+
+test("observe carries the explicit gap when the cursor predates retention", async () => {
+  await withCoordinator(
+    async ({ coordinator, store }) => {
+      const { run, attempt } = attemptRun(store, "r-observe-gap");
+      coordinator.publish({ runId: run.runId, event: lifecycle("active", attempt.attemptId) });
+      coordinator.publish({ runId: run.runId, event: conversation(attempt.attemptId, 1) });
+      coordinator.publish({ runId: run.runId, event: conversation(attempt.attemptId, 2) });
+
+      const expired = coordinator.observe({ runId: run.runId, afterCursor: 0 });
+      deepStrictEqual(expired.gap, { after: 0, firstRetainedCursor: 2 });
+      // The snapshot is complete even when the event delta is not.
+      strictEqual(expired.snapshot.attempts.length, 1);
+    },
+    { eventLedgerLimit: 2 },
+  );
+});
+
+test("a live stream replays after the cursor, follows publishes, and ends only at the terminal", async () => {
+  await withCoordinator(async ({ coordinator, store }) => {
+    const { run, attempt } = attemptRun(store, "r-stream");
+    coordinator.publish({ runId: run.runId, event: lifecycle("active", attempt.attemptId) });
+
+    const { stream } = coordinator.streamEvents({
+      runId: run.runId,
+      attemptId: attempt.attemptId,
+      afterCursor: 0,
+    });
+    const frames = [];
+    const read = async () => {
+      const { value, done } = await stream.next();
+      if (!done) frames.push(value);
+      return done;
+    };
+
+    // Replay first: the event published before the attach is served from
+    // the ledger, with its durable cursor.
+    strictEqual(await read(), false);
+    strictEqual(frames[0].cursor, 1);
+
+    // Then the stream holds — a non-terminal publish is followed, and a
+    // non-terminal classification never ends the stream.
+    let pending = read();
+    coordinator.publish({ runId: run.runId, event: conversation(attempt.attemptId) });
+    strictEqual(await pending, false);
+    strictEqual(frames[1].cursor, 2);
+
+    // The watched attempt's terminal classification is the only end.
+    pending = read();
+    coordinator.publish({ runId: run.runId, event: lifecycle("terminal", attempt.attemptId) });
+    strictEqual(await pending, false);
+    strictEqual(frames[2].event.state, "terminal");
+    strictEqual(await read(), true);
+    const drained = await stream.next();
+    strictEqual(drained.done, true);
+  });
+});
+
+test("an attempt already terminal at attach ends the stream after its replay", async () => {
+  await withCoordinator(async ({ coordinator, store }) => {
+    const { run, attempt, lease } = attemptRun(store, "r-ended");
+    coordinator.publish({ runId: run.runId, event: lifecycle("active", attempt.attemptId) });
+    store.updateAttemptState({
+      attemptId: attempt.attemptId,
+      to: "terminal",
+      leaseToken: lease.token,
+    });
+    coordinator.publish({ runId: run.runId, event: lifecycle("terminal", attempt.attemptId) });
+
+    const { stream } = coordinator.streamEvents({
+      runId: run.runId,
+      attemptId: attempt.attemptId,
+      afterCursor: 0,
+    });
+    const frames = [];
+    for (let ended = false; !ended;) {
+      const { value, done } = await stream.next();
+      if (!done) frames.push(value);
+      ended = done;
+    }
+    strictEqual(frames.length, 2);
+    strictEqual(frames[1].event.state, "terminal");
+  });
+});
+
+test("an expired cursor opens the stream with the explicit gap frame", async () => {
+  await withCoordinator(
+    async ({ coordinator, store }) => {
+      const { run, attempt } = attemptRun(store, "r-stream-gap");
+      coordinator.publish({ runId: run.runId, event: lifecycle("active", attempt.attemptId) });
+      coordinator.publish({ runId: run.runId, event: conversation(attempt.attemptId, 1) });
+      // The third event pushes the first past the retention bound, so a
+      // viewer from cursor 0 is genuinely expired.
+      coordinator.publish({ runId: run.runId, event: conversation(attempt.attemptId, 2) });
+
+      const { stream } = coordinator.streamEvents({
+        runId: run.runId,
+        attemptId: attempt.attemptId,
+        afterCursor: 0,
+      });
+      const first = await stream.next();
+      deepStrictEqual(first.value, {
+        envelope: "clarification-events/v1",
+        gap: { after: 0, firstRetainedCursor: 2 },
+      });
+      stream.return();
+    },
+    { eventLedgerLimit: 2 },
+  );
+});
+
+test("detaching a viewer leaves the attempt running and the record continuable", async () => {
+  await withCoordinator(async ({ coordinator, store }) => {
+    const { run, attempt, lease } = attemptRun(store, "r-detach");
+    coordinator.publish({ runId: run.runId, event: lifecycle("active", attempt.attemptId) });
+
+    const viewer = coordinator.streamEvents({
+      runId: run.runId,
+      attemptId: attempt.attemptId,
+      afterCursor: 0,
+    });
+    await viewer.stream.next();
+    viewer.detach();
+
+    // The attempt continues without its viewer: events still publish,
+    // lifecycle still moves, nothing was cancelled on the disconnect.
+    coordinator.publish({ runId: run.runId, event: conversation(attempt.attemptId) });
+    store.updateAttemptState({
+      attemptId: attempt.attemptId,
+      to: "awaiting-human",
+      leaseToken: lease.token,
+    });
+    coordinator.publish({
+      runId: run.runId,
+      event: lifecycle("awaiting-human", attempt.attemptId),
+    });
+
+    // A returning viewer is served everything the detached viewer missed.
+    const returning = coordinator.streamEvents({
+      runId: run.runId,
+      attemptId: attempt.attemptId,
+      afterCursor: 1,
+    });
+    const missed = [];
+    for (let i = 0; i < 2; i += 1) {
+      const { value } = await returning.stream.next();
+      missed.push(value);
+    }
+    strictEqual(missed[0].cursor, 2);
+    strictEqual(missed[1].event.state, "awaiting-human");
+    returning.detach();
+  });
+});
+
+test("two viewers of one run keep independent cursors", async () => {
+  await withCoordinator(async ({ coordinator, store }) => {
+    const { run, attempt } = attemptRun(store, "r-two");
+    coordinator.publish({ runId: run.runId, event: lifecycle("active", attempt.attemptId) });
+
+    const first = coordinator.streamEvents({
+      runId: run.runId,
+      attemptId: attempt.attemptId,
+      afterCursor: 0,
+    });
+    const second = coordinator.streamEvents({
+      runId: run.runId,
+      attemptId: attempt.attemptId,
+      afterCursor: 1,
+    });
+
+    const pendingFirst = first.stream.next();
+    const pendingSecond = second.stream.next();
+    coordinator.publish({ runId: run.runId, event: conversation(attempt.attemptId) });
+    const firstFrame = await pendingFirst;
+    const secondFrame = await pendingSecond;
+    // The first viewer replays from zero, the second from its own cursor —
+    // one publish serves both, each with the delta it asked for.
+    strictEqual(firstFrame.value.cursor, 1);
+    strictEqual(secondFrame.value.cursor, 2);
+
+    first.detach();
+    second.detach();
+  });
+});
+
+test("stream attach answers unknown runs and attempts with typed errors", async () => {
+  await withCoordinator(async ({ coordinator, store }) => {
+    const { run, attempt } = attemptRun(store, "r-typed");
+    throws(
+      () =>
+        coordinator.streamEvents({
+          runId: "run_missing",
+          attemptId: attempt.attemptId,
+          afterCursor: 0,
+        }),
+      (error) => error.code === "run_not_found",
+    );
+    throws(
+      () =>
+        coordinator.streamEvents({
+          runId: run.runId,
+          attemptId: "attempt_missing",
+          afterCursor: 0,
+        }),
+      (error) => error.code === "attempt_not_found",
+    );
+    throws(
+      () =>
+        coordinator.streamEvents({
+          runId: run.runId,
+          attemptId: attempt.attemptId,
+          afterCursor: -1,
+        }),
+      (error) => error.code === "invalid_request",
+    );
+  });
+});
+
+test("publish persists to the ledger before any viewer is served", async () => {
+  await withCoordinator(async ({ coordinator, store, databasePath }) => {
+    const { run, attempt } = attemptRun(store, "r-publish");
+    const envelope = coordinator.publish({
+      runId: run.runId,
+      event: lifecycle("active", attempt.attemptId),
+    });
+    ok(envelope.cursor >= 1);
+    strictEqual(envelope.envelope, "clarification-events/v1");
+    deepStrictEqual(envelope.event, lifecycle("active", attempt.attemptId));
+
+    // Publication draws from the durable ledger: an independent store
+    // handle on the same file — no shared memory with the coordinator —
+    // already serves the event. Nothing was published that is not durable.
+    const independent = openClarificationStore({
+      hostRepo: "example/project",
+      databasePath,
+      clock: () => "2026-09-18T00:00:00Z",
+    });
+    const read = independent.readEvents({ runId: run.runId, afterCursor: 0 });
+    deepStrictEqual(read.events, [envelope]);
+    independent.close();
+
+    // Publishing against a run this host repo cannot see is typed.
+    throws(
+      () =>
+        coordinator.publish({
+          runId: "run_missing",
+          event: lifecycle("active", attempt.attemptId),
+        }),
+      (error) => error.code === "run_not_found",
+    );
+  });
 });

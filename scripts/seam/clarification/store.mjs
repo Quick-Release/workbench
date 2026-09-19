@@ -49,6 +49,11 @@ import { DatabaseSync } from "node:sqlite";
 
 export const SCHEMA_VERSION = "2";
 
+// The operational event ledger's own envelope version (ADR 0020): the
+// run-level observation stream carries this, never the managed adapter's
+// inner envelope version, which travels nested inside conversation events.
+export const EVENT_ENVELOPE_VERSION = "clarification-events/v1";
+
 export const LIFECYCLE_STATES = [
   "active",
   "reconciling",
@@ -95,16 +100,6 @@ CREATE TABLE IF NOT EXISTS leases (
   acquired_at TEXT NOT NULL,
   expires_at TEXT NOT NULL
 );`;
-const RUN_EVENTS_TABLE = `
-CREATE TABLE IF NOT EXISTS run_events (
-  run_id TEXT NOT NULL,
-  host_repo TEXT NOT NULL,
-  seq INTEGER NOT NULL,
-  kind TEXT NOT NULL,
-  data TEXT NOT NULL,
-  created_at TEXT NOT NULL,
-  PRIMARY KEY (run_id, seq)
-);`;
 const RUN_SNAPSHOTS_TABLE = `
 CREATE TABLE IF NOT EXISTS run_snapshots (
   run_id TEXT PRIMARY KEY,
@@ -141,17 +136,23 @@ CREATE TABLE IF NOT EXISTS attempts (
   UNIQUE (run_id, request_id)
 );
 ${LEASES_TABLE}
-${RUN_EVENTS_TABLE}
 ${RUN_SNAPSHOTS_TABLE}
+CREATE TABLE IF NOT EXISTS events (
+  host_repo TEXT NOT NULL,
+  run_id TEXT NOT NULL REFERENCES runs(run_id),
+  seq INTEGER NOT NULL,
+  event TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (host_repo, run_id, seq)
+);
 `;
 
-// v1 → v2: exactly the delta above that version 1 lacks — the lease, event,
-// and snapshot tables are new, and attempts gain their result column. Rows
+// v1 → v2: exactly the delta above that version 1 lacks — the lease and
+// snapshot tables are new, and attempts gain their result column. Rows
 // version 1 wrote keep reading back; nothing is rewritten or guessed.
 const MIGRATIONS = {
   1: (database) => {
     database.exec(`${LEASES_TABLE}
-${RUN_EVENTS_TABLE}
 ${RUN_SNAPSHOTS_TABLE}
 ALTER TABLE attempts ADD COLUMN result TEXT;`);
   },
@@ -164,18 +165,18 @@ const isToken = (value) => typeof value === "string" && value !== "";
 
 // Opens the store for one host repo. `clock` is injected so timestamps and
 // lease expiry are deterministic under test; production uses wall time.
-// `eventLimit` bounds each run's retained event suffix (the default is the
-// module constant); trimming is what makes an old cursor honestly expired.
+// `eventLedgerLimit` bounds each run's retained event suffix (the default is
+// the module constant); trimming is what makes an old cursor honestly expired.
 export const openClarificationStore = ({
   hostRepo,
   databasePath,
+  eventLedgerLimit = EVENT_LEDGER_LIMIT,
   clock = () => new Date().toISOString(),
-  eventLimit = EVENT_LEDGER_LIMIT,
 }) => {
   if (!hostRepo || typeof hostRepo !== "string")
     throw storeError("invalid_store", "the clarification store must be opened for a host repo");
-  if (!Number.isInteger(eventLimit) || eventLimit < 1)
-    throw storeError("invalid_store", "the event ledger limit must be a positive integer");
+  if (!Number.isInteger(eventLedgerLimit) || eventLedgerLimit < 1)
+    throw storeError("invalid_store", "the event ledger limit must be an integer of at least 1");
 
   const database = new DatabaseSync(databasePath);
   database.exec("PRAGMA journal_mode = WAL;");
@@ -366,24 +367,27 @@ export const openClarificationStore = ({
     notFoundCode: "attempt_not_found",
   });
 
-  // Append inside an open transaction: the per-run sequence is the ledger's
+  // Append inside an open transaction: the per-run cursor is the ledger's
   // own, allocation and insert commit atomically with the caller's write,
   // and the bound trims the oldest rows — which is what makes an old cursor
-  // honestly expired rather than silently rewritten.
+  // honestly expired rather than silently rewritten. A fenced annotation is
+  // stored as the operational event it is — the same typed-event vocabulary
+  // the observation stream carries, so the ledger holds one history.
   const appendEventInTx = ({ runId, kind, data, at }) => {
-    const seq =
+    const cursor =
       (database
-        .prepare("SELECT MAX(seq) AS max_seq FROM run_events WHERE run_id = ? AND host_repo = ?")
+        .prepare("SELECT MAX(seq) AS max_seq FROM events WHERE run_id = ? AND host_repo = ?")
         .get(runId, hostRepo)?.max_seq ?? 0) + 1;
+    const event = { type: "operational", kind, data, at };
     database
       .prepare(
-        "INSERT INTO run_events (run_id, host_repo, seq, kind, data, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+        "INSERT INTO events (host_repo, run_id, seq, event, created_at) VALUES (?, ?, ?, ?, ?)",
       )
-      .run(runId, hostRepo, seq, kind, JSON.stringify(data), at);
+      .run(hostRepo, runId, cursor, JSON.stringify(event), at);
     database
-      .prepare("DELETE FROM run_events WHERE run_id = ? AND host_repo = ? AND seq <= ?")
-      .run(runId, hostRepo, seq - eventLimit);
-    return { seq, kind, data, createdAt: at };
+      .prepare("DELETE FROM events WHERE host_repo = ? AND run_id = ? AND seq <= ?")
+      .run(hostRepo, runId, cursor - eventLedgerLimit);
+    return { cursor, envelope: EVENT_ENVELOPE_VERSION, event };
   };
 
   // The lease-free half of the fence: reconciliation moves through a
@@ -775,9 +779,10 @@ export const openClarificationStore = ({
       return attemptReconciliation.resolve(attemptId, to);
     },
 
-    // The operational event ledger. The event is committed — durably, WAL
-    // with synchronous FULL — before this returns, so the coordinator can
-    // never publish what the store has not already persisted.
+    // The operational event ledger, fenced half. The annotation is stored
+    // as the operational event it is and committed — durably, WAL with
+    // synchronous FULL — before this returns, so the coordinator can never
+    // publish what the store has not already persisted.
     appendEvent({ runId, kind, data, leaseToken }) {
       if (typeof kind !== "string" || kind.trim() === "")
         throw storeError("invalid_request", "an operational event carries a non-empty kind");
@@ -791,43 +796,49 @@ export const openClarificationStore = ({
       });
     },
 
-    // Reconnect read: the events after the viewer's cursor, ascending. A
-    // cursor that predates the retained suffix reports an explicit gap —
-    // the events in between are gone, and nothing is invented to fill them.
-    // A cursor past the ledger's end claims history the store never wrote
-    // and is refused.
-    getEvents({ runId, afterCursor = 0 }) {
+    // Reconnect read: the events after the viewer's cursor, ascending, as
+    // ledger envelopes. A cursor that predates the retained suffix reports
+    // the explicit gap — the events in between are gone, and nothing is
+    // invented to fill them. A cursor past the ledger's end claims history
+    // the store never wrote and is refused.
+    readEvents({ runId, afterCursor }) {
       if (!Number.isInteger(afterCursor) || afterCursor < 0)
         throw storeError(
           "invalid_request",
           "an operational event cursor is a non-negative integer",
         );
-      const maxSeq =
-        database
-          .prepare("SELECT MAX(seq) AS max_seq FROM run_events WHERE run_id = ? AND host_repo = ?")
-          .get(runId, hostRepo)?.max_seq ?? 0;
-      if (afterCursor > maxSeq)
+      if (ownRun(runId) === undefined)
+        throw storeError("run_not_found", `no run "${runId}" is visible to this host repo`);
+      const bounds = database
+        .prepare(
+          "SELECT MIN(seq) AS first, MAX(seq) AS last FROM events WHERE host_repo = ? AND run_id = ?",
+        )
+        .get(hostRepo, runId);
+      const latestCursor = bounds.last ?? 0;
+      if (afterCursor > latestCursor)
         throw storeError(
           "invalid_cursor",
-          `the cursor ${afterCursor} points past the end of run "${runId}"'s ledger (latest seq ${maxSeq}) — the store will not invent history`,
+          `cursor ${afterCursor} is ahead of the ledger's latest cursor ${latestCursor} — no viewer has observed that yet`,
         );
       const events = database
         .prepare(
-          "SELECT * FROM run_events WHERE run_id = ? AND host_repo = ? AND seq > ? ORDER BY seq ASC",
+          "SELECT seq, event FROM events WHERE host_repo = ? AND run_id = ? AND seq > ? ORDER BY seq ASC",
         )
-        .all(runId, hostRepo, afterCursor)
+        .all(hostRepo, runId, afterCursor)
         .map((row) => ({
-          seq: row.seq,
-          kind: row.kind,
-          data: JSON.parse(row.data),
-          createdAt: row.created_at,
+          cursor: row.seq,
+          envelope: EVENT_ENVELOPE_VERSION,
+          event: JSON.parse(row.event),
         }));
-      const firstRetainedCursor = database
-        .prepare("SELECT MIN(seq) AS min_seq FROM run_events WHERE run_id = ? AND host_repo = ?")
-        .get(runId, hostRepo)?.min_seq;
-      if (firstRetainedCursor !== undefined && firstRetainedCursor > afterCursor + 1)
-        return { events, gap: { afterCursor, firstRetainedCursor } };
-      return { events };
+      // The gap: the viewer's cursor predates retention — the events between
+      // its cursor and the first retained one are gone and are named as
+      // gone, never skipped silently. An empty ledger holds nothing back.
+      const firstRetained = bounds.first;
+      const gap =
+        typeof firstRetained === "number" && afterCursor < firstRetained - 1
+          ? { after: afterCursor, firstRetainedCursor: firstRetained }
+          : undefined;
+      return { events, latestCursor, gap };
     },
 
     // The reconnect baseline: one snapshot per run, latest write wins, the
@@ -856,6 +867,60 @@ export const openClarificationStore = ({
       return row === undefined
         ? null
         : { snapshot: JSON.parse(row.snapshot), savedAt: row.saved_at };
+    },
+
+    // The operational event ledger (ADR 0020): a bounded, sequenced record
+    // of one run's lifecycle and conversation events. The append commits
+    // atomically — one transaction assigns the per-run cursors and persists
+    // every event — so the moment this returns, the events are durable
+    // evidence a reader (and any viewer publication) can be served from.
+    // Events are evidence: they are stored verbatim, never interpreted.
+    appendEvents({ runId, events }) {
+      if (!Array.isArray(events) || events.length === 0)
+        throw storeError("invalid_request", "an append carries at least one event");
+      for (const event of events)
+        if (event === null || typeof event !== "object" || Array.isArray(event))
+          throw storeError("invalid_request", "every ledger event is a JSON object");
+      if (ownRun(runId) === undefined)
+        throw storeError("run_not_found", `no run "${runId}" is visible to this host repo`);
+
+      const now = clock();
+      database.exec("BEGIN");
+      try {
+        const persisted = events.map((event) => {
+          // Earlier inserts of this same batch are already visible inside
+          // the transaction, so the per-row MAX is the whole sequence.
+          const cursor =
+            database
+              .prepare(
+                "SELECT COALESCE(MAX(seq), 0) AS seq FROM events WHERE host_repo = ? AND run_id = ?",
+              )
+              .get(hostRepo, runId).seq + 1;
+          database
+            .prepare(
+              "INSERT INTO events (host_repo, run_id, seq, event, created_at) VALUES (?, ?, ?, ?, ?)",
+            )
+            .run(hostRepo, runId, cursor, JSON.stringify(event), now);
+          return { cursor, envelope: EVENT_ENVELOPE_VERSION, event };
+        });
+        // The bound is enforced inside the same transaction: retention is
+        // part of the append, so an expired cursor can only ever name events
+        // the ledger truly no longer holds.
+        database
+          .prepare("DELETE FROM events WHERE host_repo = ? AND run_id = ? AND seq <= ?")
+          .run(
+            hostRepo,
+            runId,
+            database
+              .prepare("SELECT MAX(seq) AS seq FROM events WHERE host_repo = ? AND run_id = ?")
+              .get(hostRepo, runId).seq - eventLedgerLimit,
+          );
+        database.exec("COMMIT");
+        return persisted;
+      } catch (error) {
+        database.exec("ROLLBACK");
+        throw error;
+      }
     },
   };
 };

@@ -7,15 +7,28 @@ import test from "node:test";
 
 import {
   DEFAULT_LEASE_TTL_MS,
+  EVENT_ENVELOPE_VERSION,
   LIFECYCLE_STATES,
   SCHEMA_VERSION,
   openClarificationStore,
 } from "./store.mjs";
+import {
+  clarificationEventEnvelopeVersion,
+  clarificationLifecycleStates,
+} from "../../../src/types.ts";
 
 // Contract tests for the durable clarification store (spec #221, tickets
 // #225 + #226, ADR 0020): real SQLite on temp directories — nothing is
 // mocked below the port. Clocks are injected so expiry and timestamps are
 // deterministic; ids and lease tokens are the store's own.
+
+test("the seam's mirrored observation vocabulary never drifts from the store's", () => {
+  // The store owns the lifecycle states and the ledger envelope version;
+  // the browser-facing schema mirrors them for validation. Neither side
+  // may move without the other.
+  deepStrictEqual([...LIFECYCLE_STATES], [...clarificationLifecycleStates]);
+  strictEqual(EVENT_ENVELOPE_VERSION, clarificationEventEnvelopeVersion);
+});
 
 const withStore = async (fn) => {
   const directory = await mkdtemp(join(tmpdir(), "workbench-clarification-store-"));
@@ -27,21 +40,22 @@ const withStore = async (fn) => {
   }
 };
 
-const open = ({ databasePath, hostRepo = "example/project" } = {}) =>
+const open = ({ databasePath, hostRepo = "example/project", ...options } = {}) =>
   openClarificationStore({
     hostRepo,
     databasePath,
     clock: () => "2026-09-18T00:00:00Z",
+    ...options,
   });
 
 // A store whose clock the test drives: expiry is arithmetic, never a sleep.
-const openTimed = ({ databasePath, hostRepo = "example/project", eventLimit } = {}) => {
+const openTimed = ({ databasePath, hostRepo = "example/project", eventLedgerLimit } = {}) => {
   let now = "2026-09-18T00:00:00.000Z";
   const store = openClarificationStore({
     hostRepo,
     databasePath,
     clock: () => now,
-    ...(eventLimit === undefined ? {} : { eventLimit }),
+    ...(eventLedgerLimit === undefined ? {} : { eventLedgerLimit }),
   });
   return {
     store,
@@ -262,7 +276,10 @@ test("records are host-repo-scoped: another repo's records are invisible", async
     deepStrictEqual(foreign.listAttempts(run.runId), []);
     strictEqual(foreign.getAttempt("no-such-attempt"), null);
     strictEqual(foreign.getLease(run.runId), null);
-    deepStrictEqual(foreign.getEvents({ runId: run.runId }), { events: [] });
+    throws(
+      () => foreign.readEvents({ runId: run.runId, afterCursor: 0 }),
+      (error) => error.code === "run_not_found",
+    );
     strictEqual(foreign.getSnapshot(run.runId), null);
     throws(
       () => foreign.updateRunState({ runId: run.runId, to: "terminal", leaseToken: "lease_x" }),
@@ -292,7 +309,7 @@ test("records are host-repo-scoped: another repo's records are invisible", async
     const again = open({ databasePath, hostRepo: "example/project" });
     strictEqual(again.listRuns().length, 1);
     strictEqual(again.listAttempts(run.runId).length, 1);
-    strictEqual(again.getEvents({ runId: run.runId }).events.length, 1);
+    strictEqual(again.readEvents({ runId: run.runId, afterCursor: 0 }).events.length, 1);
     again.close();
   });
 });
@@ -380,6 +397,154 @@ test("operations on runs that do not exist are typed rejections", async () => {
     throws(
       () => store.createAttempt({ runId: run.runId, requestId: "req-2", leaseToken: lease.token }),
       (error) => error.code === "invalid_request",
+    );
+    store.close();
+  });
+});
+
+test("the operational event ledger reads back sequenced and durable", async () => {
+  await withStore(async ({ databasePath }) => {
+    const first = open({ databasePath });
+    const { run } = first.createRun({ issueId: "GH-42", requestId: "r-ledger" });
+    const lifecycle = {
+      type: "lifecycle",
+      scope: "attempt",
+      id: "attempt_one",
+      state: "active",
+      at: "2026-09-18T00:00:01Z",
+    };
+    const conversation = {
+      type: "conversation",
+      attemptId: "attempt_one",
+      session: { cursor: 1, envelope: "pi-managed/v1", event: { type: "hello", protocol: "1" } },
+    };
+    const persisted = first.appendEvents({
+      runId: run.runId,
+      events: [lifecycle, conversation],
+    });
+    // Every append reads back under the store's own versioned envelope with
+    // a per-run monotonic cursor.
+    strictEqual(persisted.length, 2);
+    strictEqual(persisted[0].cursor, 1);
+    strictEqual(persisted[0].envelope, "clarification-events/v1");
+    deepStrictEqual(persisted[0].event, lifecycle);
+    strictEqual(persisted[1].cursor, 2);
+    deepStrictEqual(persisted[1].event, conversation);
+    first.close();
+
+    // Durability: a committed append reads back across a close and reopen,
+    // and an empty ledger reads as empty rather than inventing history.
+    const second = open({ databasePath });
+    deepStrictEqual(second.readEvents({ runId: run.runId, afterCursor: 0 }).events, persisted);
+    deepStrictEqual(second.readEvents({ runId: run.runId, afterCursor: 2 }).events, []);
+    const fresh = second.createRun({ issueId: "GH-43", requestId: "r-empty" });
+    const empty = second.readEvents({ runId: fresh.run.runId, afterCursor: 0 });
+    deepStrictEqual(empty.events, []);
+    strictEqual(empty.latestCursor, 0);
+    second.close();
+  });
+});
+
+test("an expired cursor reports the explicit gap, never invented history", async () => {
+  await withStore(async ({ databasePath }) => {
+    // A small retention bound makes the expiry observable: the ledger keeps
+    // the newest three events of this run.
+    const store = open({ databasePath, eventLedgerLimit: 3 });
+    const { run } = store.createRun({ issueId: "GH-42", requestId: "r-gap" });
+    const persisted = store.appendEvents({
+      runId: run.runId,
+      events: [{ n: 1 }, { n: 2 }, { n: 3 }, { n: 4 }],
+    });
+    // The oldest event fell off: the first retained cursor is now 2.
+    strictEqual(persisted.length, 4);
+    strictEqual(persisted[3].cursor, 4);
+
+    // A viewer that never saw event 1 is past retention: the read says so
+    // explicitly instead of letting the viewer believe its delta complete.
+    const expired = store.readEvents({ runId: run.runId, afterCursor: 0 });
+    deepStrictEqual(expired.gap, { after: 0, firstRetainedCursor: 2 });
+    strictEqual(expired.latestCursor, 4);
+    strictEqual(expired.events.length, 3);
+    deepStrictEqual(
+      expired.events.map((envelope) => envelope.event.n),
+      [2, 3, 4],
+    );
+
+    // A viewer on cursor 1 already saw the dropped event: its delta from
+    // the retention edge is complete, so there is no gap to report. A
+    // viewer at retention reads only what came after.
+    const seenDropped = store.readEvents({ runId: run.runId, afterCursor: 1 });
+    strictEqual(seenDropped.gap, undefined);
+    deepStrictEqual(
+      seenDropped.events.map((envelope) => envelope.event.n),
+      [2, 3, 4],
+    );
+    const atRetention = store.readEvents({ runId: run.runId, afterCursor: 2 });
+    strictEqual(atRetention.gap, undefined);
+    deepStrictEqual(
+      atRetention.events.map((envelope) => envelope.event.n),
+      [3, 4],
+    );
+    store.close();
+
+    // The bound is durable policy, not wishful thinking: the reopened store
+    // still reports the gap.
+    const again = open({ databasePath, eventLedgerLimit: 3 });
+    const readBack = again.readEvents({ runId: run.runId, afterCursor: 0 });
+    deepStrictEqual(readBack.gap, { after: 0, firstRetainedCursor: 2 });
+    again.close();
+  });
+});
+
+test("ledger reads and appends outside this host repo are typed rejections", async () => {
+  await withStore(async ({ databasePath }) => {
+    const own = open({ databasePath, hostRepo: "example/project" });
+    const { run } = own.createRun({ issueId: "GH-42", requestId: "r-scope" });
+    own.close();
+
+    const foreign = open({ databasePath, hostRepo: "other/project" });
+    throws(
+      () => foreign.appendEvents({ runId: run.runId, events: [{ n: 1 }] }),
+      (error) => error.code === "run_not_found",
+    );
+    throws(
+      () => foreign.readEvents({ runId: run.runId, afterCursor: 0 }),
+      (error) => error.code === "run_not_found",
+    );
+    foreign.close();
+  });
+});
+
+test("ledger requests that cannot be answered honestly are typed rejections", async () => {
+  await withStore(async ({ databasePath }) => {
+    const store = open({ databasePath });
+    const { run } = store.createRun({ issueId: "GH-42", requestId: "r-valid" });
+    store.appendEvents({ runId: run.runId, events: [{ n: 1 }] });
+
+    throws(
+      () => store.appendEvents({ runId: "run_missing", events: [{ n: 1 }] }),
+      (error) => error.code === "run_not_found",
+    );
+    throws(
+      () => store.appendEvents({ runId: run.runId, events: [] }),
+      (error) => error.code === "invalid_request",
+    );
+    throws(
+      () => store.appendEvents({ runId: run.runId, events: ["nope"] }),
+      (error) => error.code === "invalid_request",
+    );
+    throws(
+      () => store.readEvents({ runId: run.runId, afterCursor: -1 }),
+      (error) => error.code === "invalid_request",
+    );
+    // A cursor ahead of the ledger would promise events nobody observed.
+    throws(
+      () => store.readEvents({ runId: run.runId, afterCursor: 5 }),
+      (error) => error.code === "invalid_cursor",
+    );
+    throws(
+      () => store.readEvents({ runId: "run_missing", afterCursor: 0 }),
+      (error) => error.code === "run_not_found",
     );
     store.close();
   });
@@ -548,7 +713,7 @@ test("every mutation travels under the live controller lease", async () => {
       data: {},
       leaseToken: fresh.token,
     });
-    strictEqual(store.getEvents({ runId: run.runId }).events.length, 1);
+    strictEqual(store.readEvents({ runId: run.runId, afterCursor: 0 }).events.length, 1);
     store.close();
   });
 });
@@ -634,9 +799,9 @@ test("lease expiry permits reconciliation but not adoption", async () => {
     );
 
     // And the reconciliation left its evidence in the ledger, lease-free.
-    const { events } = store.getEvents({ runId: run.runId });
+    const { events } = store.readEvents({ runId: run.runId, afterCursor: 0 });
     deepStrictEqual(
-      events.map((event) => event.kind),
+      events.map((frame) => frame.event.kind),
       ["run.reconciliation.started", "run.reconciliation.resolved"],
     );
     store.close();
@@ -701,7 +866,7 @@ test("a stale generation cannot write a late completion, cancellation, cleanup r
     strictEqual(readBack.state, "active");
     strictEqual(readBack.result, null);
     strictEqual(store.listAttempts(run.runId).length, 1);
-    strictEqual(store.getEvents({ runId: run.runId }).events.length, 0);
+    strictEqual(store.readEvents({ runId: run.runId, afterCursor: 0 }).events.length, 0);
     store.close();
   });
 });
@@ -784,31 +949,31 @@ test("the event ledger reads back sequenced and is persisted before publication"
         first.store.appendEvent({ runId: run.runId, kind, data, leaseToken: lease.token }),
       );
     }
-    // The append returns the committed event: its sequence and payload are
+    // The append returns the committed envelope: its cursor and payload are
     // what the coordinator may publish, and the commit is already durable.
     deepStrictEqual(
-      appended.map((event) => event.seq),
+      appended.map((frame) => frame.cursor),
       [1, 2, 3, 4, 5],
     );
     first.store.close();
 
     // Publication may crash now; the ledger does not.
     const second = openTimed({ databasePath });
-    const { events } = second.store.getEvents({ runId: run.runId });
+    const { events } = second.store.readEvents({ runId: run.runId, afterCursor: 0 });
     deepStrictEqual(
-      events.map((event) => event.seq),
+      events.map((frame) => frame.cursor),
       [1, 2, 3, 4, 5],
     );
-    strictEqual(events[2].kind, "provider.usage");
-    deepStrictEqual(events[2].data, { tokens: 12, kind: "provider-reported" });
-    strictEqual(events[4].createdAt, "2026-09-18T00:00:00.000Z");
+    strictEqual(events[2].event.kind, "provider.usage");
+    deepStrictEqual(events[2].event.data, { tokens: 12, kind: "provider-reported" });
+    strictEqual(events[4].event.at, "2026-09-18T00:00:00.000Z");
     second.store.close();
   });
 });
 
 test("a reader resumes after its cursor; an expired cursor reports an explicit gap", async () => {
   await withStore(async ({ databasePath }) => {
-    const { store, tick } = openTimed({ databasePath, eventLimit: 5 });
+    const { store, tick } = openTimed({ databasePath, eventLedgerLimit: 5 });
     const { run, lease } = leasedRun(store, "r-cursor");
     for (let seq = 1; seq <= 7; seq += 1) {
       store.appendEvent({
@@ -820,43 +985,43 @@ test("a reader resumes after its cursor; an expired cursor reports an explicit g
       tick(1);
     }
 
-    // Contiguous suffix after a live cursor: no gap key at all.
-    const live = store.getEvents({ runId: run.runId, afterCursor: 4 });
-    strictEqual("gap" in live, false);
+    // Contiguous suffix after a live cursor: no gap at all.
+    const live = store.readEvents({ runId: run.runId, afterCursor: 4 });
+    strictEqual(live.gap, undefined);
     deepStrictEqual(
-      live.events.map((event) => event.seq),
+      live.events.map((frame) => frame.cursor),
       [5, 6, 7],
     );
 
-    // The ledger is bounded: seqs 1–2 were trimmed to keep the last five.
+    // The ledger is bounded: cursors 1–2 were trimmed to keep the last five.
     // A cursor that predates the retained suffix gets the gap named — the
     // cursor and the first retained cursor — and exactly the retained
     // events. Nothing is invented to fill the gap.
-    const expired = store.getEvents({ runId: run.runId, afterCursor: 1 });
-    deepStrictEqual(expired.gap, { afterCursor: 1, firstRetainedCursor: 3 });
+    const expired = store.readEvents({ runId: run.runId, afterCursor: 1 });
+    deepStrictEqual(expired.gap, { after: 1, firstRetainedCursor: 3 });
     deepStrictEqual(
-      expired.events.map((event) => event.seq),
+      expired.events.map((frame) => frame.cursor),
       [3, 4, 5, 6, 7],
     );
     strictEqual(expired.events.length, 5);
 
-    deepStrictEqual(store.getEvents({ runId: run.runId, afterCursor: 0 }).gap, {
-      afterCursor: 0,
+    deepStrictEqual(store.readEvents({ runId: run.runId, afterCursor: 0 }).gap, {
+      after: 0,
       firstRetainedCursor: 3,
     });
 
     // An up-to-date reader.
-    deepStrictEqual(store.getEvents({ runId: run.runId, afterCursor: 7 }).events, []);
-    strictEqual("gap" in store.getEvents({ runId: run.runId, afterCursor: 7 }), false);
+    deepStrictEqual(store.readEvents({ runId: run.runId, afterCursor: 7 }).events, []);
+    strictEqual(store.readEvents({ runId: run.runId, afterCursor: 7 }).gap, undefined);
 
     // A cursor pointing past the end claims history the store never wrote;
     // that is refused, not papered over.
     throws(
-      () => store.getEvents({ runId: run.runId, afterCursor: 8 }),
+      () => store.readEvents({ runId: run.runId, afterCursor: 8 }),
       (error) => error.code === "invalid_cursor",
     );
     throws(
-      () => store.getEvents({ runId: run.runId, afterCursor: -1 }),
+      () => store.readEvents({ runId: run.runId, afterCursor: -1 }),
       (error) => error.code === "invalid_request",
     );
     store.close();
@@ -978,6 +1143,14 @@ CREATE TABLE IF NOT EXISTS attempts (
   updated_at TEXT NOT NULL,
   UNIQUE (run_id, request_id)
 );
+CREATE TABLE IF NOT EXISTS events (
+  host_repo TEXT NOT NULL,
+  run_id TEXT NOT NULL REFERENCES runs(run_id),
+  seq INTEGER NOT NULL,
+  event TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (host_repo, run_id, seq)
+);
 `;
 
 test("a version-1 file upgrades in place and everything written before reads back", async () => {
@@ -1046,7 +1219,7 @@ test("a version-1 file upgrades in place and everything written before reads bac
 
     const again = open({ databasePath });
     strictEqual(again.getRun("run_pilot").state, "reconciling");
-    strictEqual(again.getEvents({ runId: "run_pilot" }).events.length, 1);
+    strictEqual(again.readEvents({ runId: "run_pilot", afterCursor: 0 }).events.length, 1);
     again.close();
   });
 });

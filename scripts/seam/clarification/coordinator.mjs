@@ -1,20 +1,35 @@
-// The clarification coordinator (spec #221, tickets #230+, ADR 0015): the
-// one new seam between the dashboard's clarification routes and everything
-// durable. Typed commands in — the pre-start manifest, the explicit start,
-// the run section read — typed results and typed rejections out. Its ports
-// are injected: the durable run-record store, the tracker context read,
-// the managed Pi session starter, and the clock. Tests substitute all of
-// them; nothing here touches real SQLite, the tracker, or a runtime.
+// The clarification coordinator (spec #221, tickets #230 + #231, ADRs 0015 +
+// 0020): the one new seam between the dashboard's clarification routes and
+// everything durable. Typed commands in — the pre-start manifest, the
+// explicit start, the run section read — typed results and typed rejections
+// out, plus the observation half: every event an attempt produces is
+// published into the durable operational event ledger FIRST and only then
+// fanned out to attached viewers, so what a live viewer sees is always
+// already evidence, and a returning viewer is served from the same ledger
+// with the same cursors.
 //
-// The pre-start manifest is display projection over a fresh collected
-// issue read plus the install's declared provider and data destination —
-// the fixed facts the Developer approves before any start exists, always
+// Its ports are injected: the durable run-record store, the tracker context
+// read, the managed Pi session starter, and the clock. Tests substitute all
+// of them; nothing here touches real SQLite, the tracker, or a runtime.
+//
+// The pre-start manifest is display projection over a fresh collected issue
+// read plus the install's declared provider and data destination — the
+// fixed facts the Developer approves before any start exists, always
 // closing with the no-publishing line. The explicit start travels only
 // after the manifest's pinned issue revision still matches a fresh read:
 // a material change is a typed rejection and a re-rendered manifest, never
 // a start on evidence the Developer did not see.
+//
+// Viewers are observers and nothing else (ADR 0020): attaching, detaching,
+// and losing a viewer never mutates the attempt. Cancellation is an
+// explicit, confirmed command — never a side effect of a browser going
+// away. The ledger itself is the coordination state: publishing wakes the
+// waiters, each viewer then reads its own delta from the store, so there is
+// no second, in-memory copy of history that could disagree with the durable
+// record.
 
 import { noPublishingLine } from "../../../src/types.ts";
+import { EVENT_ENVELOPE_VERSION } from "./store.mjs";
 
 // The manifest's fixed lines (ADR 0016's read/research-only posture, ADR
 // 0023's honest accounting): capability summary, egress statement, budget
@@ -42,8 +57,8 @@ export const clarificationError = (code, message, extra = {}) =>
 // knows who held it.
 export const LEASE_OWNER = "workbench-clarification-coordinator";
 
-// The display projection of a durable run row: the run section's facts,
-// never the lease token or the raw dispatch intent.
+// The display projection of a durable run row for the start's answer: the
+// run section's facts, never the lease token or the raw dispatch intent.
 const projectRun = (run) => ({
   runId: run.runId,
   issueId: run.issueId,
@@ -58,6 +73,11 @@ const projectAttempt = (attempt) => ({
   createdAt: attempt.createdAt,
   updatedAt: attempt.updatedAt,
 });
+
+// The run section and the observation read speak the full snapshot
+// vocabulary — everything but the attempt's result column, which is
+// lifecycle evidence the ledger's operational events carry in its own time.
+const projectAttemptSnapshot = ({ result, ...snapshot }) => snapshot;
 
 const validateStart = ({ issueNumber, requestId, revision }) => {
   if (!Number.isInteger(issueNumber) || issueNumber <= 0)
@@ -130,7 +150,33 @@ export const createClarificationCoordinator = ({
     return next;
   };
 
+  // One wait list per run id, and a change counter playing the condition
+  // variable: a stream that wakes without new events re-reads instead of
+  // sleeping through a publish that landed between its read and its wait.
+  const waiters = new Map();
+  let changeCounter = 0;
+
+  // Wake every stream waiting on the run; `false` is the "a change landed,
+  // re-read" signal — only detach resolves a wake with `true`.
+  const wakeRun = (runId) => {
+    const waiting = waiters.get(runId);
+    if (waiting === undefined) return;
+    waiters.set(runId, []);
+    for (const wake of waiting) wake(false);
+  };
+
+  // The durable-first publication: append commits, waiters wake. The
+  // returned envelope is the persisted evidence, cursors and all.
+  const publishEvent = ({ runId, event }) => {
+    const [envelope] = store.appendEvents({ runId, events: [event] });
+    changeCounter += 1;
+    wakeRun(runId);
+    return envelope;
+  };
+
   return {
+    publish: publishEvent,
+
     // The fixed pre-start manifest for one issue: what starting grants,
     // rendered from the fresh collected read and the install's declared
     // provider and data destination, ending with the no-publishing line.
@@ -275,6 +321,16 @@ export const createClarificationCoordinator = ({
             leaseToken: token,
           });
           store.updateRunState({ runId: run.runId, to: "awaiting-human", leaseToken: token });
+          publishEvent({
+            runId: run.runId,
+            event: {
+              type: "lifecycle",
+              scope: "attempt",
+              id: attempt.attemptId,
+              state: "terminal",
+              at: clock(),
+            },
+          });
           throw clarificationError(
             "start_denied",
             `the managed session for issue ${issueNumber} was denied before it could start: ${
@@ -283,15 +339,26 @@ export const createClarificationCoordinator = ({
             { runId: run.runId, attemptId: attempt.attemptId },
           );
         }
+        publishEvent({
+          runId: run.runId,
+          event: {
+            type: "lifecycle",
+            scope: "attempt",
+            id: attempt.attemptId,
+            state: "active",
+            at: clock(),
+          },
+        });
         return { started: true, run: projectRun(run), attempt: projectAttempt(attempt) };
       });
     },
 
     // The run section's read: lifecycle, attempts, the reconnect snapshot
-    // baseline, and the operational events after the viewer's cursor — all
-    // from the durable record, all open (no lease), with an expired
-    // cursor's gap traveling through untouched so the timeline never
-    // invents the history it cannot prove.
+    // baseline, and the operational event ledger after the viewer's cursor
+    // — the same envelope vocabulary the live stream carries, all from the
+    // durable record, all open (no lease), with an expired cursor's gap
+    // traveling through untouched so the timeline never invents the
+    // history it cannot prove.
     async runSection({ runId, afterCursor = 0 }) {
       if (typeof runId !== "string" || runId === "")
         throw clarificationError("invalid_request", "a run section read names a run id");
@@ -308,13 +375,119 @@ export const createClarificationCoordinator = ({
         );
       const attempts = store.listAttempts(runId);
       const snapshot = store.getSnapshot(runId);
-      const ledger = store.getEvents({ runId, afterCursor });
+      const ledger = store.readEvents({ runId, afterCursor });
       return {
-        run: projectRun(run),
-        attempts: attempts.map(projectAttempt),
+        run,
+        attempts: attempts.map(projectAttemptSnapshot),
         ...(snapshot ? { snapshot: snapshot.snapshot, snapshotSavedAt: snapshot.savedAt } : {}),
+        latestCursor: ledger.latestCursor,
         events: ledger.events,
         ...(ledger.gap ? { gap: ledger.gap } : {}),
+      };
+    },
+
+    // The reconnect read: the run's snapshot plus the events after the
+    // viewer's cursor — or the explicit gap when that cursor predates the
+    // ledger's retention.
+    observe({ runId, afterCursor }) {
+      const run = store.getRun(runId);
+      if (run === null)
+        throw clarificationError("run_not_found", `no run "${runId}" is visible to this host repo`);
+      const attempts = store.listAttempts(runId);
+      const { events, latestCursor, gap } = store.readEvents({ runId, afterCursor });
+      return {
+        snapshot: { run, attempts: attempts.map(projectAttemptSnapshot) },
+        events,
+        latestCursor,
+        gap,
+      };
+    },
+
+    // The live observation stream for one attempt: the retained events
+    // after `afterCursor` (with a leading gap frame when the cursor is
+    // expired), then every published event as it lands — ending when, and
+    // only when, the watched attempt reaches its terminal classification.
+    // Run-scope events ride the stream but never end it, and uncertainty
+    // is not terminal: `unknown` and `quarantined` keep the stream open
+    // until reconciliation resolves the attempt — the lifecycle's
+    // `terminal` is the only end. Validation happens before the generator
+    // is built, so an unknown run or attempt is a typed error at attach
+    // time, not a hang.
+    streamEvents({ runId, attemptId, afterCursor }) {
+      if (!Number.isInteger(afterCursor) || afterCursor < 0)
+        throw clarificationError("invalid_request", "afterCursor must be a non-negative integer");
+      const run = store.getRun(runId);
+      if (run === null)
+        throw clarificationError("run_not_found", `no run "${runId}" is visible to this host repo`);
+      const attempt = store.getAttempt(attemptId);
+      if (attempt === null || attempt.runId !== runId)
+        throw clarificationError(
+          "attempt_not_found",
+          `no attempt "${attemptId}" is visible on run "${runId}" in this host repo`,
+        );
+      const terminalAtAttach = attempt.state === "terminal";
+
+      // Detach must reach a stream suspended in its wait — a generator's
+      // return() alone cannot interrupt a pending await — so the detach
+      // flag rides with the wake and the loop exits on its own.
+      let detached = false;
+      let wake = null;
+
+      const waitForChange = async (seenChange) => {
+        if (detached) return true;
+        if (changeCounter !== seenChange) return false;
+        return new Promise((resolve) => {
+          const waiting = waiters.get(runId) ?? [];
+          waiting.push(resolve);
+          wake = resolve;
+          waiters.set(runId, waiting);
+        });
+      };
+
+      async function* stream() {
+        let cursor = afterCursor;
+        let terminalSeen = terminalAtAttach;
+        try {
+          while (true) {
+            const seenChange = changeCounter;
+            const { events, gap } = store.readEvents({ runId, afterCursor: cursor });
+            if (gap !== undefined) yield { envelope: EVENT_ENVELOPE_VERSION, gap };
+            for (const frame of events) {
+              yield frame;
+              cursor = frame.cursor;
+              const { event } = frame;
+              if (
+                event.type === "lifecycle" &&
+                event.scope === "attempt" &&
+                event.id === attemptId &&
+                event.state === "terminal"
+              )
+                terminalSeen = true;
+            }
+            if (terminalSeen) return;
+            if (events.length > 0) continue;
+            if (await waitForChange(seenChange)) return;
+          }
+        } finally {
+          detached = true;
+          const waiting = waiters.get(runId);
+          if (waiting !== undefined && wake !== null) {
+            const index = waiting.indexOf(wake);
+            if (index !== -1) waiting.splice(index, 1);
+          }
+          wake = null;
+        }
+      }
+
+      const iterator = stream();
+      return {
+        stream: iterator,
+        // Detaching is disposal of one viewer: the generator stops, the
+        // waiter goes, and nothing else in the run is touched.
+        detach: () => {
+          detached = true;
+          wake?.(true);
+        },
       };
     },
   };
