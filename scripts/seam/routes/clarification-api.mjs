@@ -4,6 +4,8 @@ import {
   parseClarificationConversationCommandRequest,
   parseClarificationConversationCommandResult,
   parseClarificationConversationState,
+  parseClarificationDraftDocument,
+  parseClarificationDraftView,
   parseClarificationManifestResult,
   parseClarificationObservationResult,
   parseClarificationRunResult,
@@ -50,6 +52,7 @@ const EVENTS_ROUTE = /^\/api\/clarification\/runs\/([^/]+)\/attempts\/([^/]+)\/e
 const COMMANDS_ROUTE = /^\/api\/clarification\/runs\/([^/]+)\/attempts\/([^/]+)\/commands\/?$/;
 const CONVERSATION_ROUTE =
   /^\/api\/clarification\/runs\/([^/]+)\/attempts\/([^/]+)\/conversation\/?$/;
+const DRAFT_ROUTE = /^\/api\/clarification\/runs\/([^/]+)\/attempts\/([^/]+)\/draft\/?$/;
 
 export const isClarificationApiRoute = (pathname) =>
   STATUS_ROUTE.test(pathname) ||
@@ -59,7 +62,8 @@ export const isClarificationApiRoute = (pathname) =>
   OBSERVATION_ROUTE.test(pathname) ||
   EVENTS_ROUTE.test(pathname) ||
   COMMANDS_ROUTE.test(pathname) ||
-  CONVERSATION_ROUTE.test(pathname);
+  CONVERSATION_ROUTE.test(pathname) ||
+  DRAFT_ROUTE.test(pathname);
 
 const NOT_AVAILABLE_MESSAGE =
   "owned clarification is enabled — starts are recorded durably, but the managed conversation runtime is not wired on this install yet";
@@ -122,6 +126,7 @@ const coordinatorRejection = (error) => {
       return { status: 409, json: { error: error.code, message } };
     case "invalid_cursor":
     case "invalid_request":
+    case "invalid_draft":
       return { status: 400, json: { error: "invalid_request", message } };
     case "context_unavailable":
     case "conversation_unavailable":
@@ -520,6 +525,78 @@ export const handleClarificationEvents = ({
   }
 };
 
+// The Clarification draft (spec #221, ticket #233): the attempt's proposal
+// as one mutable, locally persisted document. The read is posture-free —
+// the draft stays inspectable like every run record, even on a disabled
+// install. The save is a write the capability owns, so a disabled or
+// invalid install answers its typed denial before the body is read. The
+// save is never an approval: the request carries no approval field to set,
+// and the answer's fixed line says so.
+export const handleClarificationDraft = async ({
+  method,
+  pathname,
+  host,
+  origin,
+  body,
+  posture,
+  coordinator,
+}) => {
+  const match = DRAFT_ROUTE.exec(pathname);
+  if (!match) return null;
+
+  const gate = gateRejection({ host, origin });
+  if (gate) return gate;
+
+  const [, runId, attemptId] = match;
+  const unavailable = () => ({
+    status: 501,
+    json: { error: "clarification_unavailable", message: NOT_AVAILABLE_MESSAGE },
+  });
+
+  if (method === "GET") {
+    if (!coordinator) return unavailable();
+    try {
+      return {
+        status: 200,
+        json: parseClarificationDraftView(await coordinator.draftView({ runId, attemptId })),
+      };
+    } catch (error) {
+      return coordinatorRejection(error);
+    }
+  }
+
+  if (method === "PUT") {
+    const denial = postureDenial(posture);
+    if (denial) return denial;
+    if (!coordinator) return unavailable();
+
+    let raw;
+    try {
+      raw = JSON.parse(body ?? "");
+    } catch {
+      return invalidRequest("request body is not valid JSON");
+    }
+    try {
+      parseClarificationDraftDocument(raw);
+    } catch (error) {
+      return invalidRequest(String(error?.message ?? error));
+    }
+
+    try {
+      return {
+        status: 200,
+        json: parseClarificationDraftView(
+          await coordinator.saveDraft({ runId, attemptId, draft: raw }),
+        ),
+      };
+    } catch (error) {
+      return coordinatorRejection(error);
+    }
+  }
+
+  return methodMismatch("PUT");
+};
+
 export const handleClarificationApi = async (deps) =>
   (await handleClarificationStatus(deps)) ??
   (await handleClarificationManifest(deps)) ??
@@ -528,7 +605,8 @@ export const handleClarificationApi = async (deps) =>
   handleClarificationObservation(deps) ??
   handleClarificationEvents(deps) ??
   (await handleClarificationConversationCommand(deps)) ??
-  handleClarificationConversationState(deps);
+  handleClarificationConversationState(deps) ??
+  (await handleClarificationDraft(deps));
 
 // Turns the host's config block into the posture, with the unreadable-config
 // case as its own invalid posture — a config that cannot be read at all is

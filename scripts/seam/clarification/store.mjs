@@ -37,6 +37,13 @@ import { DatabaseSync } from "node:sqlite";
 // atomically before the coordinator touches any side effect, and they read
 // back across a close and reopen.
 //
+// The draft (ticket #233): one mutable document per attempt, latest write
+// wins — the locally persisted proposal the Developer corrects until the
+// brief is implementation-ready. Saving a draft is never publication
+// approval: the write moves no lifecycle state and claims no effect on the
+// world, but it lands on the run's record, so it is fenced like every
+// write. The read is open, like every read.
+//
 // Host-repo scoping: the store is opened for exactly one host repo and every
 // row carries its own host_repo; all reads and writes filter on it. Another
 // repo's records — even in the very same file — are invisible,
@@ -47,7 +54,7 @@ import { DatabaseSync } from "node:sqlite";
 // read-compatible steps, so data written before a disable or upgrade stays
 // interpretable.
 
-export const SCHEMA_VERSION = "2";
+export const SCHEMA_VERSION = "3";
 
 // The operational event ledger's own envelope version (ADR 0020): the
 // run-level observation stream carries this, never the managed adapter's
@@ -107,6 +114,15 @@ CREATE TABLE IF NOT EXISTS run_snapshots (
   snapshot TEXT NOT NULL,
   saved_at TEXT NOT NULL
 );`;
+const DRAFTS_TABLE = `
+CREATE TABLE IF NOT EXISTS drafts (
+  attempt_id TEXT PRIMARY KEY REFERENCES attempts(attempt_id),
+  run_id TEXT NOT NULL REFERENCES runs(run_id),
+  host_repo TEXT NOT NULL,
+  draft TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);`;
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS store_meta (
@@ -137,6 +153,7 @@ CREATE TABLE IF NOT EXISTS attempts (
 );
 ${LEASES_TABLE}
 ${RUN_SNAPSHOTS_TABLE}
+${DRAFTS_TABLE}
 CREATE TABLE IF NOT EXISTS events (
   host_repo TEXT NOT NULL,
   run_id TEXT NOT NULL REFERENCES runs(run_id),
@@ -150,11 +167,18 @@ CREATE TABLE IF NOT EXISTS events (
 // v1 → v2: exactly the delta above that version 1 lacks — the lease and
 // snapshot tables are new, and attempts gain their result column. Rows
 // version 1 wrote keep reading back; nothing is rewritten or guessed.
+//
+// v2 → v3: the drafts table is new (ticket #233) — the attempt's
+// Clarification draft as one mutable document per attempt. Everything a v2
+// file holds keeps reading back untouched.
 const MIGRATIONS = {
   1: (database) => {
     database.exec(`${LEASES_TABLE}
 ${RUN_SNAPSHOTS_TABLE}
 ALTER TABLE attempts ADD COLUMN result TEXT;`);
+  },
+  2: (database) => {
+    database.exec(DRAFTS_TABLE);
   },
 };
 
@@ -260,6 +284,22 @@ export const openClarificationStore = ({
           updatedAt: row.updated_at,
           result: row.result === null || row.result === undefined ? null : JSON.parse(row.result),
         };
+
+  const draftRow = (row) =>
+    row === undefined
+      ? null
+      : {
+          attemptId: row.attempt_id,
+          runId: row.run_id,
+          hostRepo: row.host_repo,
+          draft: JSON.parse(row.draft),
+          createdAt: row.created_at,
+          updatedAt: row.updated_at,
+        };
+
+  const draftSelect = "SELECT * FROM drafts WHERE attempt_id = ? AND host_repo = ?";
+  const getDraftInTx = (attemptId) =>
+    draftRow(database.prepare(draftSelect).get(attemptId, hostRepo));
 
   // Reads and writes always carry the host repo: a run from another repo is
   // invisible here, indistinguishable from one that does not exist.
@@ -717,6 +757,40 @@ export const openClarificationStore = ({
 
     getAttempt(attemptId) {
       return attemptRow(ownAttempt(attemptId));
+    },
+
+    // The Clarification draft (ticket #233): the attempt's proposal as one
+    // mutable document, latest write wins. Saving a draft claims no effect
+    // on the world — it records the proposal itself — but it is a write on
+    // the run's record, so it travels under the live controller lease like
+    // every mutation; the document's shape is the draft module's contract,
+    // validated before it reaches the store. The draft's run comes from the
+    // attempt row, never from the caller.
+    saveDraft({ attemptId, draft, leaseToken }) {
+      if (!isPlainObject(draft))
+        throw storeError("invalid_request", "a Clarification draft is an object");
+      return tx(() => {
+        const attempt = ownAttempt(attemptId);
+        if (attempt === undefined)
+          throw storeError(
+            "attempt_not_found",
+            `no attempt "${attemptId}" is visible to this host repo`,
+          );
+        requireLiveLease(attempt.run_id, leaseToken);
+        const now = clock();
+        database
+          .prepare(
+            "INSERT INTO drafts (attempt_id, run_id, host_repo, draft, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(attempt_id) DO UPDATE SET draft = excluded.draft, updated_at = excluded.updated_at",
+          )
+          .run(attemptId, attempt.run_id, hostRepo, JSON.stringify(draft), now, now);
+        return getDraftInTx(attemptId);
+      });
+    },
+
+    // The draft read is open like every read: an attempt without a draft,
+    // and an attempt from another repo, are the same honest null.
+    getDraft(attemptId) {
+      return getDraftInTx(attemptId);
     },
 
     listAttempts(runId) {

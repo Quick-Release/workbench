@@ -1155,7 +1155,7 @@ CREATE TABLE IF NOT EXISTS events (
 
 test("a version-1 file upgrades in place and everything written before reads back", async () => {
   await withStore(async ({ databasePath }) => {
-    strictEqual(SCHEMA_VERSION, "2");
+    strictEqual(SCHEMA_VERSION, "3");
 
     // A file exactly as the previous schema wrote it — version stamp, one
     // run, one attempt — then abandoned mid-pilot.
@@ -1213,7 +1213,7 @@ test("a version-1 file upgrades in place and everything written before reads bac
     const raw = new DatabaseSync(databasePath);
     strictEqual(
       raw.prepare("SELECT value FROM store_meta WHERE key = 'schema_version'").get().value,
-      "2",
+      "3",
     );
     raw.close();
 
@@ -1221,5 +1221,267 @@ test("a version-1 file upgrades in place and everything written before reads bac
     strictEqual(again.getRun("run_pilot").state, "reconciling");
     strictEqual(again.readEvents({ runId: "run_pilot", afterCursor: 0 }).events.length, 1);
     again.close();
+  });
+});
+
+// --- The Clarification draft (spec #221, ticket #233): the attempt's
+// --- proposal, persisted locally as one mutable document per attempt.
+
+const draftDocument = (overrides = {}) => ({
+  version: "clarification-draft/v1",
+  profile: "bug",
+  behavior: "the sync command exits 0 on a clean tree",
+  observation: "it exits 1 with a lockfile warning",
+  reproduction: "run pnpm sync on a clean checkout",
+  boundary: "",
+  scope: "scripts/sync only",
+  exclusions: ["the pack-smoke harness"],
+  acceptance: ["sync exits 0 on a clean tree"],
+  dependencies: "",
+  performanceClaim: "",
+  performanceEvidence: "",
+  assumptions: [],
+  evidence: [],
+  ...overrides,
+});
+
+test("a saved draft is durable and reads back across a close and reopen", async () => {
+  await withStore(async ({ databasePath }) => {
+    const first = open({ databasePath });
+    const { run, lease } = leasedRun(first, "approve-1");
+    const { attempt } = first.createAttempt({
+      runId: run.runId,
+      requestId: "req-1",
+      intent,
+      leaseToken: lease.token,
+    });
+    const saved = first.saveDraft({
+      attemptId: attempt.attemptId,
+      draft: draftDocument(),
+      leaseToken: lease.token,
+    });
+    strictEqual(saved.attemptId, attempt.attemptId);
+    strictEqual(saved.runId, run.runId);
+    strictEqual(saved.createdAt, "2026-09-18T00:00:00Z");
+    first.close();
+
+    const second = open({ databasePath });
+    const readBack = second.getDraft(attempt.attemptId);
+    strictEqual(readBack.attemptId, attempt.attemptId);
+    strictEqual(readBack.runId, run.runId);
+    deepStrictEqual(readBack.draft, draftDocument());
+    second.close();
+  });
+});
+
+test("a draft is the attempt's one mutable proposal: latest write wins", async () => {
+  await withStore(async ({ databasePath }) => {
+    const { store, tick } = openTimed({ databasePath });
+    const { run, lease } = leasedRun(store, "approve-1");
+    const { attempt } = store.createAttempt({
+      runId: run.runId,
+      requestId: "req-1",
+      intent,
+      leaseToken: lease.token,
+    });
+    const first = store.saveDraft({
+      attemptId: attempt.attemptId,
+      draft: draftDocument({ behavior: "first correction" }),
+      leaseToken: lease.token,
+    });
+    tick(5_000);
+    const second = store.saveDraft({
+      attemptId: attempt.attemptId,
+      draft: draftDocument({ behavior: "second correction" }),
+      leaseToken: lease.token,
+    });
+    // The document is mutable by design; the stamps say which write is the
+    // truth: created stays the first save's, updated moves with the last.
+    strictEqual(second.createdAt, first.createdAt);
+    strictEqual(second.updatedAt, "2026-09-18T00:00:05.000Z");
+    deepStrictEqual(
+      store.getDraft(attempt.attemptId).draft,
+      draftDocument({ behavior: "second correction" }),
+    );
+    store.close();
+  });
+});
+
+test("an attempt with no draft reads as null — invisibility is never invented into content", async () => {
+  await withStore(async ({ databasePath }) => {
+    const store = open({ databasePath });
+    const { run, lease } = leasedRun(store, "approve-1");
+    const { attempt } = store.createAttempt({
+      runId: run.runId,
+      requestId: "req-1",
+      intent,
+      leaseToken: lease.token,
+    });
+    strictEqual(store.getDraft(attempt.attemptId), null);
+    // An attempt from another repo is invisible, indistinguishable from
+    // one that has no draft.
+    strictEqual(store.getDraft("attempt_missing"), null);
+    store.close();
+  });
+});
+
+test("a draft save is fenced like every mutation that writes", async () => {
+  await withStore(async ({ databasePath }) => {
+    const { store, tick } = openTimed({ databasePath });
+    const { run, lease } = leasedRun(store, "approve-1");
+    const { attempt } = store.createAttempt({
+      runId: run.runId,
+      requestId: "req-1",
+      intent,
+      leaseToken: lease.token,
+    });
+    throws(
+      () => store.saveDraft({ attemptId: attempt.attemptId, draft: draftDocument() }),
+      (error) => error.code === "lease_required",
+    );
+    throws(
+      () =>
+        store.saveDraft({
+          attemptId: attempt.attemptId,
+          draft: draftDocument(),
+          leaseToken: "lease_stale",
+        }),
+      (error) => error.code === "lease_not_held",
+    );
+    tick(31_000);
+    throws(
+      () =>
+        store.saveDraft({
+          attemptId: attempt.attemptId,
+          draft: draftDocument(),
+          leaseToken: lease.token,
+        }),
+      (error) => error.code === "lease_expired",
+    );
+    throws(
+      () =>
+        store.saveDraft({
+          attemptId: "attempt_missing",
+          draft: draftDocument(),
+          leaseToken: lease.token,
+        }),
+      (error) => error.code === "attempt_not_found",
+    );
+    throws(
+      () =>
+        store.saveDraft({
+          attemptId: attempt.attemptId,
+          draft: "not an object",
+          leaseToken: lease.token,
+        }),
+      (error) => error.code === "invalid_request",
+    );
+    store.close();
+  });
+});
+
+test("a draft is scoped to its host repo, even in the very same file", async () => {
+  await withStore(async ({ databasePath }) => {
+    const first = open({ databasePath });
+    const { run, lease } = leasedRun(first, "approve-1");
+    const { attempt } = first.createAttempt({
+      runId: run.runId,
+      requestId: "req-1",
+      intent,
+      leaseToken: lease.token,
+    });
+    first.saveDraft({
+      attemptId: attempt.attemptId,
+      draft: draftDocument(),
+      leaseToken: lease.token,
+    });
+    first.close();
+
+    const other = open({ databasePath, hostRepo: "other/project" });
+    strictEqual(other.getDraft(attempt.attemptId), null);
+    throws(
+      () =>
+        other.saveDraft({
+          attemptId: attempt.attemptId,
+          draft: draftDocument(),
+          leaseToken: "lease_any",
+        }),
+      (error) => error.code === "attempt_not_found",
+    );
+    other.close();
+  });
+});
+
+test("a version-2 file upgrades to version 3 and gains the drafts table", async () => {
+  await withStore(async ({ databasePath }) => {
+    // A file exactly as schema version 2 wrote it — the v1 tables plus the
+    // lease and snapshot tables and the attempts result column — then
+    // abandoned mid-pilot.
+    const v2 = new DatabaseSync(databasePath);
+    v2.exec(`${V1_SCHEMA}
+CREATE TABLE IF NOT EXISTS leases (
+  run_id TEXT PRIMARY KEY,
+  host_repo TEXT NOT NULL,
+  token TEXT NOT NULL,
+  generation INTEGER NOT NULL,
+  owner TEXT NOT NULL,
+  acquired_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS run_snapshots (
+  run_id TEXT PRIMARY KEY,
+  host_repo TEXT NOT NULL,
+  snapshot TEXT NOT NULL,
+  saved_at TEXT NOT NULL
+);
+ALTER TABLE attempts ADD COLUMN result TEXT;`);
+    v2.prepare("INSERT INTO store_meta (key, value) VALUES ('schema_version', '2')").run();
+    v2.prepare(
+      "INSERT INTO runs (run_id, host_repo, issue_id, request_id, state, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+    ).run(
+      "run_pilot",
+      "example/project",
+      "GH-7",
+      "approve-pilot",
+      "active",
+      "2026-08-01T00:00:00Z",
+      "2026-08-01T00:05:00Z",
+    );
+    v2.prepare(
+      "INSERT INTO attempts (attempt_id, run_id, host_repo, request_id, dispatch_intent, state, created_at, updated_at, result) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)",
+    ).run(
+      "attempt_pilot",
+      "run_pilot",
+      "example/project",
+      "req-pilot",
+      JSON.stringify(intent),
+      "active",
+      "2026-08-01T00:01:00Z",
+      "2026-08-01T00:02:00Z",
+    );
+    v2.close();
+
+    // The new store opens it, migrates in place, every old row is
+    // interpretable — and the drafts table takes its first write.
+    const store = open({ databasePath });
+    strictEqual(store.getRun("run_pilot").state, "active");
+    const { lease } = store.acquireLease({ runId: "run_pilot", owner: "post-upgrade" });
+    store.saveDraft({
+      attemptId: "attempt_pilot",
+      draft: draftDocument({ behavior: "written after the upgrade" }),
+      leaseToken: lease.token,
+    });
+    deepStrictEqual(
+      store.getDraft("attempt_pilot").draft,
+      draftDocument({ behavior: "written after the upgrade" }),
+    );
+    store.close();
+
+    const raw = new DatabaseSync(databasePath);
+    strictEqual(
+      raw.prepare("SELECT value FROM store_meta WHERE key = 'schema_version'").get().value,
+      "3",
+    );
+    raw.close();
   });
 });

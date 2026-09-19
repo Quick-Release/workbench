@@ -57,6 +57,11 @@ export const READINESS_AXES = [
   "authorization",
 ];
 
+// The brief-completeness axis's answer when no draft exists yet — shared
+// verbatim with the draft read (ticket #233) so both surfaces speak one
+// sentence instead of two near-misses.
+export const NO_DRAFT_GAP = "no Clarification draft exists yet";
+
 // The read contract's pagination constants — pinned here, in the collector
 // that answers for them, not imported from the sync tracker.
 export const PER_PAGE = 100;
@@ -132,7 +137,7 @@ export const readinessFor = ({
     ? draft.gaps?.length
       ? axis("brief-completeness", "needs-information", draft.gaps)
       : axis("brief-completeness", "ready")
-    : axis("brief-completeness", "needs-information", ["no Clarification draft exists yet"]);
+    : axis("brief-completeness", "needs-information", [NO_DRAFT_GAP]);
 
   const host =
     posture?.posture === "enabled"

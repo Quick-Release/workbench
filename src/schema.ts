@@ -16,16 +16,20 @@ import type {
 import {
   artifactKinds,
   blockerEdgeSources,
+  clarificationDraftProvenanceKinds,
+  clarificationDraftVersion,
   clarificationEventEnvelopeVersion,
   clarificationEventScopes,
   clarificationLifecycleStates,
   clarificationPostures,
+  clarificationTaskProfiles,
   clientTicketKinds,
   decisionTicketKinds,
   startDenialReasons,
   decisionSources,
   decisionStatuses,
   engines,
+  noApprovalLine,
   noPublishingLine,
   reviewEngines,
   serviceStatuses,
@@ -1150,6 +1154,102 @@ export const parseClarificationConversationState: (
   ClarificationConversationStateSchema,
   { onExcessProperty: "error" },
 );
+
+// The Clarification draft (spec #221, ticket #233, ADR 0017): the attempt's
+// proposal as one typed document — behavior, scope, exclusions, acceptance
+// criteria, labeled assumptions, evidence — every claim carrying its
+// provenance kind. Saving is never approval: the draft document's schema
+// has no approval field to set.
+export const ClarificationDraftProvenanceSchema = Schema.Struct({
+  kind: Schema.Literals(clarificationDraftProvenanceKinds),
+  source: Schema.String,
+  locator: Schema.String,
+});
+
+export type ClarificationDraftProvenance = Schema.Schema.Type<
+  typeof ClarificationDraftProvenanceSchema
+>;
+
+export const ClarificationDraftAssumptionSchema = Schema.Struct({
+  label: Schema.String,
+  text: Schema.String,
+  material: Schema.Boolean,
+  provenance: ClarificationDraftProvenanceSchema,
+});
+
+export const ClarificationDraftEvidenceSchema = Schema.Struct({
+  claim: Schema.String,
+  provenance: ClarificationDraftProvenanceSchema,
+});
+
+export const ClarificationDraftDocumentSchema = Schema.Struct({
+  version: Schema.Literal(clarificationDraftVersion),
+  profile: Schema.Literals(clarificationTaskProfiles),
+  behavior: Schema.String,
+  observation: Schema.String,
+  reproduction: Schema.String,
+  boundary: Schema.String,
+  scope: Schema.String,
+  exclusions: Schema.Array(Schema.String),
+  acceptance: Schema.Array(Schema.String),
+  dependencies: Schema.String,
+  performanceClaim: Schema.String,
+  performanceEvidence: Schema.String,
+  assumptions: Schema.Array(ClarificationDraftAssumptionSchema),
+  evidence: Schema.Array(ClarificationDraftEvidenceSchema),
+});
+
+export type ClarificationDraftDocument = Schema.Schema.Type<
+  typeof ClarificationDraftDocumentSchema
+>;
+
+export const parseClarificationDraftDocument: (input: unknown) => ClarificationDraftDocument =
+  Schema.decodeUnknownSync(ClarificationDraftDocumentSchema, { onExcessProperty: "error" });
+
+// The visible issue-body diff: ordered lines over the current body against
+// the bytes publication would write — the display and the publication are
+// the same serialization, so they cannot disagree.
+export const ClarificationDraftDiffLineSchema = Schema.Struct({
+  kind: Schema.Literals(["context", "added", "removed"]),
+  text: Schema.String,
+});
+
+export const ClarificationDraftDiffSchema = Schema.Struct({
+  unchanged: Schema.Boolean,
+  added: Schema.Number,
+  removed: Schema.Number,
+  lines: Schema.Array(ClarificationDraftDiffLineSchema),
+});
+
+export type ClarificationDraftDiff = Schema.Schema.Type<typeof ClarificationDraftDiffSchema>;
+
+// The draft route's read: the saved document or its honest null, the brief
+// completeness arithmetic in the readiness vocabulary's own words, the
+// diff base's pinned issue revision, the diff itself, and the fixed
+// saving-is-not-approval line.
+export const ClarificationDraftViewSchema = Schema.Struct({
+  runId: Schema.String,
+  attemptId: Schema.String,
+  draft: Schema.NullOr(ClarificationDraftDocumentSchema),
+  gaps: Schema.Array(Schema.String),
+  briefCompleteness: Schema.Literals(["ready", "needs-information"]),
+  issue: Schema.NullOr(
+    Schema.Struct({
+      number: Schema.Number,
+      revision: ClarificationRevisionSchema,
+      body: Schema.String,
+    }),
+  ),
+  diff: Schema.NullOr(ClarificationDraftDiffSchema),
+  warnings: Schema.Array(Schema.String),
+  savingIsNotApproval: Schema.Literal(noApprovalLine),
+  savedAt: Schema.optional(Schema.String),
+});
+
+export type ClarificationDraftView = Schema.Schema.Type<typeof ClarificationDraftViewSchema>;
+
+export const parseClarificationDraftView: (input: unknown) => ClarificationDraftView =
+  Schema.decodeUnknownSync(ClarificationDraftViewSchema, { onExcessProperty: "error" });
 
 // The run's event stream (epic #20, ticket #26; issue #40): the runner's
 // typed events as the UI consumes them — a started echo of the request (the

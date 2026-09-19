@@ -6,6 +6,7 @@ import test from "node:test";
 
 import { createClarificationCoordinator } from "./coordinator.mjs";
 import { openClarificationStore } from "./store.mjs";
+import { noApprovalLine } from "../../../src/types.ts";
 
 // The clarification coordinator's contract tests (spec #221, tickets #230 +
 // #231, ADR 0020): typed commands in, typed results and rejections out, and
@@ -599,7 +600,7 @@ test("the start denial evidence carries the coordinator clock's stamp", async ()
 // The observation half, against the real SQLite store: every event is
 // durable first, every viewer reads its own delta from the record.
 
-const withCoordinator = async (fn, { eventLedgerLimit } = {}) => {
+const withCoordinator = async (fn, { eventLedgerLimit, tracker, sessions } = {}) => {
   const directory = await mkdtemp(join(tmpdir(), "workbench-clarification-coordinator-"));
   const databasePath = join(directory, "runs.sqlite");
   const store = openClarificationStore({
@@ -611,12 +612,12 @@ const withCoordinator = async (fn, { eventLedgerLimit } = {}) => {
   const coordinator = createClarificationCoordinator({
     store,
     clock: () => "2026-09-18T00:00:00Z",
-    tracker: {
+    tracker: tracker ?? {
       readContext: async () => {
         throw new Error("the observation tier never reads the tracker");
       },
     },
-    sessions: {
+    sessions: sessions ?? {
       start: async () => {
         throw new Error("the observation tier never starts a session");
       },
@@ -1564,4 +1565,217 @@ test("the run for an issue is findable for the surface's reconnect", async () =>
     );
     ok(store !== null);
   });
+});
+
+// --- The Clarification draft (spec #221, ticket #233): the attempt's
+// --- proposal, saved through the coordinator, read back with its brief
+// --- completeness arithmetic and the visible issue-body diff.
+
+const draftDocument = (overrides = {}) => ({
+  version: "clarification-draft/v1",
+  profile: "bug",
+  behavior: "the sync command exits 0 on a clean tree",
+  observation: "it exits 1 with a lockfile warning",
+  reproduction: "run pnpm sync on a clean checkout",
+  boundary: "",
+  scope: "scripts/sync only",
+  exclusions: ["the pack-smoke harness"],
+  acceptance: ["sync exits 0 on a clean tree"],
+  dependencies: "",
+  performanceClaim: "",
+  performanceEvidence: "",
+  assumptions: [],
+  evidence: [],
+  ...overrides,
+});
+
+const issueRead = collectedIssue({
+  issue: { number: 42, title: "Clarification draft", body: "old body", state: "OPEN" },
+});
+
+// A live coordinator for the draft tier: a startable managed session, a
+// tracker that answers, the real SQLite store underneath.
+const liveSessions = () => fakeSessions();
+
+const startClarification = async (coordinator, issueNumber = 42, requestId = "r-draft") =>
+  coordinator.start({
+    issueNumber,
+    requestId,
+    revision: { updatedAt: "2026-09-18T10:00:00.000Z", bodyHash: "sha-256:abc" },
+  });
+
+test("saving a draft persists it; the read answers completeness and the visible diff", async () => {
+  await withCoordinator(
+    async ({ coordinator }) => {
+      const started = await startClarification(coordinator);
+      const runId = started.run.runId;
+      const attemptId = started.attempt.attemptId;
+      const draft = draftDocument();
+
+      const saved = await coordinator.saveDraft({ runId, attemptId, draft });
+      deepStrictEqual(saved.draft, draft);
+      deepStrictEqual(saved.gaps, []);
+      strictEqual(saved.briefCompleteness, "ready");
+      strictEqual(saved.savingIsNotApproval, noApprovalLine);
+      strictEqual(saved.issue.body, "old body");
+      // The diff renders exactly the bytes publication would write.
+      deepStrictEqual(saved.diff.lines[0], { kind: "removed", text: "old body" });
+      ok(saved.diff.lines.some((line) => line.kind === "added" && line.text === "## Behavior"));
+      ok(saved.savedAt);
+
+      // The read answers the same from the durable record.
+      const view = await coordinator.draftView({ runId, attemptId });
+      deepStrictEqual(view.draft, draft);
+      deepStrictEqual(view.gaps, []);
+      strictEqual(view.briefCompleteness, "ready");
+    },
+    { tracker: fakeTracker(issueRead), sessions: liveSessions() },
+  );
+});
+
+test("a draft read before any save is needs-information on the no-draft gap", async () => {
+  await withCoordinator(
+    async ({ coordinator }) => {
+      const started = await startClarification(coordinator);
+      const view = await coordinator.draftView({
+        runId: started.run.runId,
+        attemptId: started.attempt.attemptId,
+      });
+      strictEqual(view.draft, null);
+      deepStrictEqual(view.gaps, ["no Clarification draft exists yet"]);
+      strictEqual(view.briefCompleteness, "needs-information");
+      strictEqual(view.diff, null);
+      // The issue base still answers, so the panel can show what a draft
+      // would differ from; only the diff withholds.
+      strictEqual(view.issue.body, "old body");
+    },
+    { tracker: fakeTracker(issueRead), sessions: liveSessions() },
+  );
+});
+
+test("a failed tracker read leaves the draft readable, the diff honestly absent", async () => {
+  let result = issueRead;
+  const tracker = {
+    readContext: async () => result,
+  };
+  await withCoordinator(
+    async ({ coordinator }) => {
+      const started = await startClarification(coordinator);
+      const runId = started.run.runId;
+      const attemptId = started.attempt.attemptId;
+      await coordinator.saveDraft({ runId, attemptId, draft: draftDocument() });
+
+      result = collectedIssue({ failed: true, revision: null, issue: null });
+      const view = await coordinator.draftView({ runId, attemptId });
+      ok(view.draft);
+      strictEqual(view.issue, null);
+      strictEqual(view.diff, null);
+      ok(view.warnings.length > 0);
+    },
+    { tracker, sessions: liveSessions() },
+  );
+});
+
+test("a draft save moves no lifecycle state and records its evidence in the ledger", async () => {
+  await withCoordinator(
+    async ({ coordinator, store }) => {
+      const started = await startClarification(coordinator);
+      const runId = started.run.runId;
+      const attemptId = started.attempt.attemptId;
+      await coordinator.saveDraft({
+        runId,
+        attemptId,
+        draft: draftDocument({ profile: "unknown" }),
+      });
+
+      // Saving a draft is not approval, and not a lifecycle act: nothing
+      // about the run or the attempt moved.
+      strictEqual(store.getRun(runId).state, "active");
+      strictEqual(store.getAttempt(attemptId).state, "active");
+
+      const saved = store
+        .readEvents({ runId, afterCursor: 0 })
+        .events.map(({ event }) => event)
+        .find((event) => event.type === "operational" && event.kind === "draft.saved");
+      ok(saved);
+      strictEqual(saved.data.attemptId, attemptId);
+      strictEqual(saved.data.profile, "unknown");
+    },
+    { tracker: fakeTracker(issueRead), sessions: liveSessions() },
+  );
+});
+
+test("a draft save is fenced typed while another writer holds the controller lease", async () => {
+  await withCoordinator(async ({ coordinator, store }) => {
+    const { run, attempt } = attemptRun(store, "r-fenced");
+    await rejects(
+      () =>
+        coordinator.saveDraft({
+          runId: run.runId,
+          attemptId: attempt.attemptId,
+          draft: draftDocument(),
+        }),
+      (error) => error.code === "busy",
+    );
+    // The read stays open like every read.
+    const view = await coordinator.draftView({ runId: run.runId, attemptId: attempt.attemptId });
+    strictEqual(view.draft, null);
+  });
+});
+
+test("an invalid draft is refused typed and nothing is written", async () => {
+  await withCoordinator(
+    async ({ coordinator, store }) => {
+      const started = await startClarification(coordinator);
+      const runId = started.run.runId;
+      const attemptId = started.attempt.attemptId;
+      await rejects(
+        () =>
+          coordinator.saveDraft({
+            runId,
+            attemptId,
+            draft: { version: "clarification-draft/v1", profile: "bug" },
+          }),
+        (error) => error.code === "invalid_draft",
+      );
+      strictEqual(store.getDraft(attemptId), null);
+      const recorded = store
+        .readEvents({ runId, afterCursor: 0 })
+        .events.some(({ event }) => event.type === "operational" && event.kind === "draft.saved");
+      strictEqual(recorded, false);
+    },
+    { tracker: fakeTracker(issueRead), sessions: liveSessions() },
+  );
+});
+
+test("a draft on an unknown run, or an attempt of another run, is a typed not-found", async () => {
+  await withCoordinator(
+    async ({ coordinator }) => {
+      const started = await startClarification(coordinator);
+      await rejects(
+        () => coordinator.draftView({ runId: "run_missing", attemptId: started.attempt.attemptId }),
+        (error) => error.code === "run_not_found",
+      );
+      await rejects(
+        () => coordinator.draftView({ runId: started.run.runId, attemptId: "attempt_missing" }),
+        (error) => error.code === "attempt_not_found",
+      );
+      await rejects(
+        () =>
+          coordinator.saveDraft({
+            runId: started.run.runId,
+            attemptId: "attempt_missing",
+            draft: draftDocument(),
+          }),
+        (error) => error.code === "attempt_not_found",
+      );
+      const second = await startClarification(coordinator, 43, "r-second");
+      await rejects(
+        () =>
+          coordinator.draftView({ runId: second.run.runId, attemptId: started.attempt.attemptId }),
+        (error) => error.code === "attempt_not_found",
+      );
+    },
+    { tracker: fakeTracker(issueRead), sessions: liveSessions() },
+  );
 });
