@@ -733,11 +733,11 @@ export const openClarificationStore = ({
         if (
           line.attemptId !== undefined &&
           line.attemptId !== null &&
-          ownAttempt(line.attemptId) === undefined
+          ownAttempt(line.attemptId)?.run_id !== runId
         )
           throw storeError(
             "attempt_not_found",
-            `no attempt "${line.attemptId}" is visible to this host repo`,
+            `no attempt "${line.attemptId}" is visible on run "${runId}" in this host repo`,
           );
         return {
           lineId: `usage_${randomUUID()}`,

@@ -809,6 +809,23 @@ test("usage budget lines are durable, ordered, and host-repo-scoped", async () =
       () => store.appendUsageLines({ runId: run.runId, lines: [{ kind: "reported", unit: "  " }] }),
       (error) => error.code === "invalid_request",
     );
+
+    // A line may only attribute itself to an attempt of ITS OWN run —
+    // another run's attempt would misattribute the usage.
+    const { run: otherRun } = store.createRun({ issueId: "GH-42", requestId: "r-usage-other" });
+    const { attempt: foreignAttempt } = store.createAttempt({
+      runId: otherRun.runId,
+      requestId: "req-1",
+      intent,
+    });
+    throws(
+      () =>
+        store.appendUsageLines({
+          runId: run.runId,
+          lines: [{ kind: "reported", unit: "provider", attemptId: foreignAttempt.attemptId }],
+        }),
+      (error) => error.code === "attempt_not_found",
+    );
     store.close();
 
     // The budget spans attempts and restarts: a fresh handle on the same

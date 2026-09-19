@@ -208,7 +208,7 @@ test("an escalation record is a bounded handoff naming the next human decision",
     kind: "provider-failure",
     reason: "quota",
     remainingAuthority: ["manual-retry"],
-    decision: escalationFor.DECISION,
+    decision: "decide whether to start a fresh manual attempt or abandon this run",
     at: "2026-09-19T00:00:00Z",
   });
   strictEqual(FAILURE_SIGNATURE_HALT, 2);
