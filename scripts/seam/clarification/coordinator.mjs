@@ -106,7 +106,7 @@ export const createClarificationCoordinator = ({ store }) => {
       return attempt;
     },
 
-    discardEvidence({ runId, confirmation }) {
+    discardRunEvidence({ runId, confirmation }) {
       const run = store.discardRunEvidence({ runId, confirmation });
       announce(runId);
       return run;
@@ -114,13 +114,14 @@ export const createClarificationCoordinator = ({ store }) => {
 
     // Adoption of a run whose controller is gone: a fresh lease, a fresh
     // generation. A live lease refuses with who holds it — the "controls
-    // moved" facts, no takeover ceremony and no liveness claim.
+    // moved" facts, no takeover ceremony and no liveness claim. An omitted
+    // ttl takes the store's default.
     acquireLease({ runId, owner, ttlMs }) {
-      return store.acquireLease({ runId, owner, ...(ttlMs === undefined ? {} : { ttlMs }) });
+      return store.acquireLease({ runId, owner, ttlMs });
     },
 
     renewLease({ runId, token, ttlMs }) {
-      return store.renewLease({ runId, token, ...(ttlMs === undefined ? {} : { ttlMs }) });
+      return store.renewLease({ runId, token, ttlMs });
     },
 
     // Ownership and expiry arithmetic only — never the token.

@@ -549,11 +549,11 @@ test("discarding retained evidence is typed-confirmed and leaves the record hone
 
     // Anything but the exact typed confirmation destroys nothing.
     throws(
-      () => coordinator.discardEvidence({ runId: run.runId, confirmation: "discard" }),
+      () => coordinator.discardRunEvidence({ runId: run.runId, confirmation: "discard" }),
       (error) => error.code === "discard_unconfirmed",
     );
 
-    coordinator.discardEvidence({ runId: run.runId, confirmation: run.runId });
+    coordinator.discardRunEvidence({ runId: run.runId, confirmation: run.runId });
     const after = coordinator.observe({ runId: run.runId, afterCursor: 0 });
     // The evidence is gone and named as gone: an empty ledger, no invented
     // gap — while the record itself stays inspectable, marked discarded.
@@ -631,7 +631,7 @@ test("same-numbered issues in different repositories never collide or cross-read
       (error) => error.code === "run_not_found",
     );
     throws(
-      () => foreign.discardEvidence({ runId: run.runId, confirmation: run.runId }),
+      () => foreign.discardRunEvidence({ runId: run.runId, confirmation: run.runId }),
       (error) => error.code === "run_not_found",
     );
 

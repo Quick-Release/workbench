@@ -653,7 +653,7 @@ test("a recovered run's evidence round-trips the seam schema", async () => {
       to: "terminal",
       basis: "no dispatch evidence; cleanup verified",
     });
-    coordinator.discardEvidence({ runId: run.runId, confirmation: run.runId });
+    coordinator.discardRunEvidence({ runId: run.runId, confirmation: run.runId });
 
     const observed = await handleClarificationObservation(
       observation({

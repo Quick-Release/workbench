@@ -742,8 +742,7 @@ test("a stale generation cannot write a late completion, cancellation, cleanup r
   await withStore(async ({ databasePath }) => {
     let now = "2026-09-18T00:00:00Z";
     const store = open({ databasePath, clock: () => now });
-    const { run, attempt, token: deadToken } = seeded(store, "r-stale", "controller-a");
-    const dead = { token: deadToken };
+    const { run, attempt, token: dead } = seeded(store, "r-stale", "controller-a");
 
     // The controller dies silently; the lease expires; a new generation
     // adopts. Nothing about the old token is ever valid again.
@@ -762,21 +761,21 @@ test("a stale generation cannot write a late completion, cancellation, cleanup r
       store.updateAttemptState({
         attemptId: attempt.attemptId,
         to: "terminal",
-        leaseToken: dead.token,
+        leaseToken: dead,
       }),
     );
     stale(() =>
       store.updateAttemptState({
         attemptId: attempt.attemptId,
         to: "awaiting-human",
-        leaseToken: dead.token,
+        leaseToken: dead,
       }),
     );
     stale(() =>
       store.recordAttemptResult({
         attemptId: attempt.attemptId,
         result: { kind: "completion" },
-        leaseToken: dead.token,
+        leaseToken: dead,
       }),
     );
     stale(() =>
@@ -784,12 +783,10 @@ test("a stale generation cannot write a late completion, cancellation, cleanup r
         runId: run.runId,
         requestId: "req-late-retry",
         intent,
-        leaseToken: dead.token,
+        leaseToken: dead,
       }),
     );
-    stale(() =>
-      store.appendEvents({ runId: run.runId, events: [{ n: 1 }], leaseToken: dead.token }),
-    );
+    stale(() => store.appendEvents({ runId: run.runId, events: [{ n: 1 }], leaseToken: dead }));
 
     // The new generation writes, and the record shows no trace of the
     // stale writer's attempts.
@@ -1046,6 +1043,85 @@ test("reconciliation moves through reconciling and resolves the uncertainty it b
       () => store.resolveReconciliation({ runId: fresh.run.runId, to: "quarantined" }),
       (error) => error.code === "illegal_transition",
     );
+    store.close();
+  });
+});
+
+test("a recorded result is write-once: outcome evidence is never rewritten", async () => {
+  await withStore(async ({ databasePath }) => {
+    const store = open({ databasePath });
+    const { run, attempt, token } = seeded(store, "r-write-once");
+
+    // The controller records a requested-termination result while the
+    // attempt lives — with the descendant proof it genuinely has, this is
+    // the proof half of "descendant-termination attempts record proof or
+    // uncertainty".
+    store.recordAttemptResult({
+      attemptId: attempt.attemptId,
+      result: {
+        kind: "termination",
+        at: "2026-09-18T00:00:00Z",
+        proof: { runtimeExit: 0, descendantProcessesExited: true },
+        uncertainty: [],
+      },
+      leaseToken: token,
+    });
+
+    // Then the process dies anyway. The unknown still lands — the death is
+    // real — but the recorded result survives untouched, and the ledger
+    // carries the uncertainty for reconciliation.
+    store.recordProcessDeath({ runId: run.runId, attemptId: attempt.attemptId, exit: 143 });
+    const attemptRow = store.getAttempt(attempt.attemptId);
+    strictEqual(attemptRow.state, "unknown");
+    deepStrictEqual(attemptRow.result.proof, {
+      runtimeExit: 0,
+      descendantProcessesExited: true,
+    });
+
+    // A live lease cannot write a "completion" over the recorded evidence:
+    // the false completion this ticket forbids has no path in.
+    throws(
+      () =>
+        store.recordAttemptResult({
+          attemptId: attempt.attemptId,
+          result: { kind: "completion" },
+          leaseToken: token,
+        }),
+      (error) => error.code === "result_recorded",
+    );
+    strictEqual(store.getAttempt(attempt.attemptId).result.kind, "termination");
+    store.close();
+  });
+});
+
+test("a quarantined record is stuck for nobody: reconcile or discard both reach it", async () => {
+  await withStore(async ({ databasePath }) => {
+    const store = open({ databasePath });
+    const { run, attempt, token } = seeded(store, "r-unstuck");
+    store.recordProcessDeath({ runId: run.runId, attemptId: attempt.attemptId, exit: null });
+    store.beginAttemptReconciliation({ attemptId: attempt.attemptId });
+    store.resolveAttemptReconciliation({ attemptId: attempt.attemptId, to: "quarantined" });
+    store.beginReconciliation({ runId: run.runId });
+    store.resolveReconciliation({ runId: run.runId, to: "quarantined" });
+
+    // The human-resolution exit: quarantine yields to awaiting-human under
+    // the adopted lease, and from there reconciliation can even find the
+    // run resolvable — reuse restored by explicit decisions, never by
+    // default.
+    store.updateRunState({ runId: run.runId, to: "awaiting-human", leaseToken: token });
+    store.beginReconciliation({ runId: run.runId });
+    store.resolveReconciliation({ runId: run.runId, to: "active" });
+    const revived = store.createAttempt({
+      runId: run.runId,
+      requestId: "req-after-quarantine",
+      intent,
+      leaseToken: token,
+    });
+    strictEqual(revived.created, true);
+
+    // The discard exit is tested at "retained evidence is discarded...":
+    // quarantined is one of its states. Here the point is the record never
+    // has no way out.
     store.close();
   });
 });

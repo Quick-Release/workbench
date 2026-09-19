@@ -302,16 +302,13 @@ export const openClarificationStore = ({
       .prepare("SELECT * FROM leases WHERE run_id = ? AND host_repo = ?")
       .get(runId, hostRepo);
 
-  // The gate every fenced mutation passes: the presented token must be the
-  // run's current lease, and the lease must be unexpired. Order matters —
-  // a superseded generation is told it is fenced even when the current
-  // lease has itself since expired.
-  const requireLiveLease = (runId, token) => {
-    if (!isToken(token))
-      throw storeError(
-        "lease_required",
-        `this mutation of run "${runId}" needs the controller lease token`,
-      );
+  // The lease gate's shared core: the presented token must be the run's
+  // current lease, and the lease must be unexpired. Order matters — a
+  // superseded generation is told it is fenced even when the current lease
+  // has itself since expired. The expired message differs by caller (a
+  // fenced mutation invites reconciliation; a renewal invites a fresh
+  // acquisition), so it travels in.
+  const requireCurrentLease = (runId, token, expiredMessage) => {
     const row = ownLease(runId);
     if (row === undefined)
       throw storeError("lease_required", `run "${runId}" holds no controller lease`);
@@ -321,11 +318,23 @@ export const openClarificationStore = ({
         `the token presented for run "${runId}" is not the current controller lease (generation ${row.generation}) — a stale generation cannot write`,
       );
     if (Date.parse(row.expires_at) <= Date.parse(clock()))
-      throw storeError(
-        "lease_expired",
-        `the controller lease for run "${runId}" expired at ${row.expires_at} — expiry permits reconciliation, not adoption`,
-      );
+      throw storeError("lease_expired", expiredMessage(row.expires_at));
     return row;
+  };
+
+  // The gate every fenced mutation passes.
+  const requireLiveLease = (runId, token) => {
+    if (!isToken(token))
+      throw storeError(
+        "lease_required",
+        `this mutation of run "${runId}" needs the controller lease token`,
+      );
+    return requireCurrentLease(
+      runId,
+      token,
+      (expiresAt) =>
+        `the controller lease for run "${runId}" expired at ${expiresAt} — expiry permits reconciliation, not adoption`,
+    );
   };
 
   const applyTransition = ({ current, to, what }) => {
@@ -641,20 +650,13 @@ export const openClarificationStore = ({
       if (!Number.isInteger(ttlMs) || ttlMs <= 0)
         throw storeError("invalid_request", "a lease needs a positive ttl in milliseconds");
       return tx(() => {
-        const row = ownLease(runId);
-        if (row === undefined)
-          throw storeError("lease_required", `run "${runId}" holds no controller lease`);
-        if (row.token !== token)
-          throw storeError(
-            "lease_not_held",
-            `the token presented for run "${runId}" is not the current controller lease (generation ${row.generation})`,
-          );
+        const row = requireCurrentLease(
+          runId,
+          token,
+          (expiresAt) =>
+            `the controller lease for run "${runId}" expired at ${expiresAt} — acquire a new generation instead`,
+        );
         const now = clock();
-        if (Date.parse(row.expires_at) <= Date.parse(now))
-          throw storeError(
-            "lease_expired",
-            `the controller lease for run "${runId}" expired at ${row.expires_at} — acquire a new generation instead`,
-          );
         const expiresAt = new Date(Date.parse(now) + ttlMs).toISOString();
         database
           .prepare("UPDATE leases SET expires_at = ? WHERE run_id = ? AND host_repo = ?")
@@ -777,7 +779,10 @@ export const openClarificationStore = ({
     // The fenced result write: a completion, a cancellation, a cleanup
     // result, or a termination's recorded proof and uncertainty. It claims
     // an effect on the world, so it travels under the live lease like every
-    // mutation that claims one.
+    // mutation that claims one — and it is write-once: a recorded result is
+    // evidence of an outcome, so a later write (even the live controller's)
+    // is refused rather than allowed to rewrite history. A correction is a
+    // new attempt, never an edit.
     recordAttemptResult({ attemptId, result, leaseToken }) {
       if (!isPlainObject(result) || typeof result.kind !== "string" || result.kind.trim() === "")
         throw storeError("invalid_request", "an attempt result carries a non-empty kind");
@@ -791,13 +796,13 @@ export const openClarificationStore = ({
         requireLiveLease(row.run_id, leaseToken);
         const updated = database
           .prepare(
-            "UPDATE attempts SET result = ?, updated_at = ? WHERE attempt_id = ? AND host_repo = ?",
+            "UPDATE attempts SET result = ?, updated_at = ? WHERE attempt_id = ? AND host_repo = ? AND result IS NULL",
           )
           .run(JSON.stringify(result), clock(), attemptId, hostRepo);
         if (updated.changes === 0)
           throw storeError(
-            "attempt_not_found",
-            `no attempt "${attemptId}" is visible to this host repo`,
+            "result_recorded",
+            `the attempt "${attemptId}" already carries a recorded result — outcomes are evidence, first-write-wins; a correction is a new attempt`,
           );
         return attemptRow(ownAttempt(attemptId));
       });
@@ -807,12 +812,19 @@ export const openClarificationStore = ({
     // run in `unknown` with the termination evidence on the attempt. It is
     // lease-free on purpose — it records the LOSS of proof, claims no
     // effect, and must be writable exactly when the lease is gone (the
-    // holder is what died). The evidence separates what is proven (the
-    // runtime's observed exit, when it was observed) from what stays
-    // uncertain at this tier: the fate of the runtime's descendant
-    // processes, and the exit itself when it went unobserved. A second
-    // death report, an unknown attempt, or an attempt of another run is a
-    // typed rejection — nothing is rewritten.
+    // holder is what died). This is a deliberate reading of ADR 0020's
+    // "every mutating operation requires a controller lease": the moves
+    // fenced by the lease are the ones claiming an effect (a completion, a
+    // cancellation, a cleanup result, a retry); recording that proof is
+    // gone claims nothing and must not require the very holder that died.
+    // The evidence separates what is proven (the runtime's observed exit,
+    // when it was observed) from what stays uncertain at this tier: the
+    // fate of the runtime's descendant processes, and the exit itself when
+    // it went unobserved. Proving a descendant kill is the caller's to
+    // record, through the fenced result write, when it truly has that
+    // proof. A second death report, an unknown attempt, or an attempt of
+    // another run is a typed rejection — and an already-recorded result is
+    // kept, never rewritten (COALESCE).
     recordProcessDeath({ runId, attemptId, exit }) {
       if (exit !== null && typeof exit !== "number")
         throw storeError(
@@ -835,7 +847,7 @@ export const openClarificationStore = ({
 
         const attemptUpdate = database
           .prepare(
-            "UPDATE attempts SET state = 'unknown', result = ?, updated_at = ? WHERE attempt_id = ? AND host_repo = ? AND state = ?",
+            "UPDATE attempts SET state = 'unknown', result = COALESCE(result, ?), updated_at = ? WHERE attempt_id = ? AND host_repo = ? AND state = ?",
           )
           .run(
             JSON.stringify({
@@ -902,10 +914,14 @@ export const openClarificationStore = ({
     // it destroys — and the whole discard is one commit: the run closes
     // terminal with the discard stamped on it, and the ledger is purged
     // with it, so evidence cannot half-vanish. Lease-free like
-    // reconciliation: a quarantined record's controller is exactly what may
-    // no longer exist, and requiring a live lease would make an orphaned
-    // record undeletable forever. The attempt rows survive as records; the
-    // event evidence does not.
+    // reconciliation — a deliberate reading of ADR 0020's "every mutating
+    // operation requires a controller lease", flagged here for the ADR's
+    // owner: a quarantined record's controller is exactly what may no
+    // longer exist, and requiring a live lease would make an orphaned
+    // record undeletable forever; the typed confirmation is the authority.
+    // Awaiting-human counts as discardable on purpose: parked for a human
+    // decision includes the decision to discard. The attempt rows survive
+    // as records; the event evidence does not.
     discardRunEvidence({ runId, confirmation }) {
       if (confirmation !== runId)
         throw storeError(
