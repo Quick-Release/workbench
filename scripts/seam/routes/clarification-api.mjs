@@ -130,8 +130,10 @@ const coordinatorRejection = (error) => {
 const invalidRequest = (message) => ({ status: 400, json: { error: "invalid_request", message } });
 
 const issueFromQuery = (query) => {
-  const raw = query.get("issue");
-  if (raw === null || !/^\d+$/.test(raw)) return undefined;
+  // A missing query string is the same as a missing parameter: typed
+  // invalid request, never a TypeError.
+  const raw = query?.get("issue");
+  if (raw === null || raw === undefined || !/^\d+$/.test(raw)) return undefined;
   const issue = Number(raw);
   return Number.isInteger(issue) && issue > 0 ? issue : undefined;
 };
@@ -228,10 +230,12 @@ export const handleClarificationStart = async ({
 };
 
 const runQuery = (query) => {
-  const runId = query.get("run") ?? "";
+  // A missing query string is the same as a missing parameter: typed
+  // invalid request, never a TypeError.
+  const runId = query?.get("run") ?? "";
   if (runId === "") return { error: invalidRequest("the run route takes a run query parameter") };
-  const afterRaw = query.get("after");
-  const afterCursor = afterRaw === null ? 0 : Number(afterRaw);
+  const afterRaw = query?.get("after");
+  const afterCursor = afterRaw === null || afterRaw === undefined ? 0 : Number(afterRaw);
   if (!Number.isInteger(afterCursor) || afterCursor < 0)
     return { error: invalidRequest("the run route's after cursor is a non-negative integer") };
   return { runId, afterCursor };

@@ -138,15 +138,19 @@ export const createClarificationCoordinator = ({
   // serialize here, and the loser answers from the record the winner
   // wrote — a typed busy rejection, never a silent queue. (The dev server
   // is the single writer process for a host repo's records, ADR 0020; the
-  // store's request-id uniqueness stays as the durable backstop.)
+  // store's request-id uniqueness stays as the durable backstop.) The
+  // entry exists only while starts are chaining: once the tail settles
+  // and no newer start chained onto it, the map forgets the issue, so the
+  // map never grows with the number of issues ever started.
   const inFlightStarts = new Map();
   const serializedFor = (issueId, fn) => {
     const previous = inFlightStarts.get(issueId) ?? Promise.resolve();
     const next = previous.then(fn, fn);
-    inFlightStarts.set(
-      issueId,
-      next.catch(() => {}),
-    );
+    const tail = next.catch(() => {});
+    inFlightStarts.set(issueId, tail);
+    void tail.then(() => {
+      if (inFlightStarts.get(issueId) === tail) inFlightStarts.delete(issueId);
+    });
     return next;
   };
 
