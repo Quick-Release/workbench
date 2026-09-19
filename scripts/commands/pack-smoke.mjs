@@ -148,6 +148,24 @@ export const clarificationContractFailures = (phase, { status, json }) => {
 
 const delay = (ms) => new Promise((resolveDelay) => setTimeout(resolveDelay, ms));
 
+// bin.mjs passes no --host, so which loopback stack binds first differs by
+// platform (IPv6-first on CI runners): every request this smoke makes tries
+// the spellings and takes the first that answers.
+const LOOPBACK_SPELLINGS = ["localhost", "127.0.0.1", "[::1]"];
+
+// A bounded output tail for a spawned CLI's failure messages: the last few
+// kilobytes of whatever the install printed before it died or drifted.
+const captureChildOutput = (child) => {
+  const output = [];
+  const capture = (chunk) => {
+    output.push(chunk);
+    if (output.length > 400) output.shift();
+  };
+  child.stdout.on("data", capture);
+  child.stderr.on("data", capture);
+  return () => output.join("").slice(-4000);
+};
+
 // A port outside the OS ephemeral range: this smoke's own npm install and
 // the dev server's dependency fetches fill the ephemeral range with outbound
 // connections, and a vite dev server bound into that range has been observed
@@ -271,26 +289,18 @@ const bootEnv = async ({ hostDir, port, parentEnv }) => ({
 // Startup failures surface here because the CLI's startup path is exactly
 // what tickets #113/#195 protect.
 const awaitServing = async (child, port, timeoutMs) => {
-  const output = [];
-  const capture = (chunk) => {
-    output.push(chunk);
-    if (output.length > 400) output.shift();
-  };
-  child.stdout.on("data", capture);
-  child.stderr.on("data", capture);
-  const tail = () => output.join("").slice(-4000);
+  const tail = captureChildOutput(child);
   const exited = new Promise((resolveExit) => {
     child.once("exit", (code, signal) => resolveExit({ code, signal }));
   });
   // One request at a time, each hard-bounded: a cold-start request can hang
   // (Vite's dependency optimizer accepts the connection, then reloads the
   // server mid-flight), and an unbounded fetch would stall this loop past
-  // the deadline. bin.mjs passes no --host, so which loopback stack `localhost`
-  // binds first differs by platform (IPv6-first on CI runners); serving is
-  // confirmed when ANY one spelling answers 200 for both paths — never a
-  // conjunction across spellings, which can never all bind at once.
+  // the deadline. Serving is confirmed when ANY one loopback spelling
+  // answers 200 for both paths — never a conjunction across spellings,
+  // which can never all bind at once.
   const serving = async () => {
-    for (const host of ["localhost", "127.0.0.1", "[::1]"]) {
+    for (const host of LOOPBACK_SPELLINGS) {
       let served = true;
       for (const path of ["/", "/api/skills"]) {
         try {
@@ -348,15 +358,15 @@ const stopTree = async (child) => {
 };
 
 // One clarification probe against the installed boot. Which loopback
-// spelling bound is the platform's call (see awaitServing), so the probe
-// tries the spellings and takes the first that answers — an answered
-// response is returned whatever its status, because a contract drift is
-// exactly what the probe must catch. Only transport errors retry, so a
-// real drift fails the smoke instead of wearing the deadline down.
+// spelling bound is the platform's call, so the probe tries the spellings
+// and takes the first that answers — an answered response is returned
+// whatever its status, because a contract drift is exactly what the probe
+// must catch. Only transport errors retry, so a real drift fails the smoke
+// instead of wearing the deadline down.
 const probeClarification = async (port, path, init, attempts = 3) => {
   let lastError;
   for (let attempt = 1; ; attempt += 1) {
-    for (const host of ["localhost", "127.0.0.1", "[::1]"]) {
+    for (const host of LOOPBACK_SPELLINGS) {
       try {
         const response = await fetch(`http://${host}:${port}${path}`, {
           signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
@@ -379,16 +389,12 @@ const probeClarification = async (port, path, init, attempts = 3) => {
 // writing an incomplete clarification block moves the same boot — the
 // posture resolves per request — to the invalid posture, whose denial
 // names the offending elements; removing it restores the dormant state.
-// Every answer is held to the unit-tier contract before the smoke passes.
+// Every answer is held to the unit-tier contract before the smoke passes:
+// the same contract the unit tier holds, judging a different artifact —
+// statuses, error codes, postures and reasons as exact literals, human
+// message text by the same regexes the unit tier holds them to.
 const probeClarificationReadiness = async ({ child, port, hostDir }) => {
-  const output = [];
-  const capture = (chunk) => {
-    output.push(chunk);
-    if (output.length > 400) output.shift();
-  };
-  child.stdout.on("data", capture);
-  child.stderr.on("data", capture);
-  const tail = () => output.join("").slice(-4000);
+  const tail = captureChildOutput(child);
   const configPath = join(hostDir, "workbench.config.json");
   const expect = async (phase, path, init) => {
     const probe = await probeClarification(port, path, init);
