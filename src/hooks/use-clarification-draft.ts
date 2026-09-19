@@ -31,8 +31,13 @@ export const useClarificationDraft = (issueNumber: number | null) => {
         return;
       }
       const section = parseClarificationRunResult((await runResponse.json()) as unknown);
-      const attempt =
-        section.attempts.find((candidate) => candidate.state !== "terminal") ?? section.attempts[0];
+      // The newest attempt still worth talking to — a retry supersedes its
+      // predecessors, and the draft follows the attempt a conversation is
+      // happening on. An all-terminal run falls back to the last one, whose
+      // record stays inspectable.
+      const candidates = section.attempts.filter((candidate) => candidate.state !== "terminal");
+      const pool = candidates.length > 0 ? candidates : section.attempts;
+      const attempt = pool[pool.length - 1];
       if (!attempt) {
         setFailure("the run holds no attempt");
         return;

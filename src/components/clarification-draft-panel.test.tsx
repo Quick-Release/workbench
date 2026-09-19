@@ -279,6 +279,48 @@ describe("the clarification draft surface", () => {
     });
     container.remove();
   });
+
+  it("follows the newest attempt when a retry supersedes its predecessors", async () => {
+    const twoAttempts = {
+      ...runSection,
+      attempts: [
+        {
+          ...runSection.attempts[0],
+          attemptId: "attempt_1",
+          state: "unknown",
+        },
+        {
+          ...runSection.attempts[0],
+          attemptId: "attempt_2",
+          state: "active",
+        },
+      ],
+    };
+    const retried = {
+      ...draftView,
+      attemptId: "attempt_2",
+      draft: { ...draftDocument, behavior: "the retry attempt's draft" },
+    };
+    const fetchMock = vi.fn(async (url: string) => {
+      const target = String(url);
+      if (target.includes("/run?issue=")) return ok(twoAttempts)();
+      if (target.includes("/attempts/attempt_2/draft")) return ok(retried)();
+      if (target.includes("/attempts/attempt_1/draft"))
+        throw new Error("the superseded attempt must not be read");
+      throw new Error(`unexpected fetch ${target}`);
+    });
+    const { container, root } = await mount(fetchMock);
+
+    const behavior = container.querySelector<HTMLTextAreaElement>(
+      "textarea[aria-label='draft behavior']",
+    );
+    expect(behavior?.value).toBe("the retry attempt's draft");
+
+    await act(async () => {
+      root.unmount();
+    });
+    container.remove();
+  });
 });
 
 const deepEqualish = (actual: unknown, expected: unknown) => {

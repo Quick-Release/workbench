@@ -197,8 +197,11 @@ const listItems = (items) =>
     .map((item) => `- ${item}`);
 
 // The exact bytes publication would write for this draft: every section in
-// a fixed order, present only when it has content, assumptions labeled with
-// their materiality, evidence carrying its provenance kind. The visible
+// a fixed order, present only when it has content, and the profile's own
+// fields only under their profile — the body is shaped by the task profile,
+// the same way the completeness arithmetic is, so content written under one
+// profile never leaks into another profile's brief. Assumptions are labeled
+// with their materiality, evidence carries its provenance kind. The visible
 // diff renders from this same serialization, so the display and the
 // publication can never disagree about the body.
 export const publicationBodyFor = (draft) => {
@@ -209,14 +212,18 @@ export const publicationBodyFor = (draft) => {
     if (text !== "") parts.push(`## ${heading}\n\n${text}`);
   };
   section("Behavior", valid.behavior);
-  section("Actual behavior", valid.observation);
-  section("Reproduction", valid.reproduction);
-  section("User and system boundary", valid.boundary);
+  if (valid.profile === "bug") {
+    section("Actual behavior", valid.observation);
+    section("Reproduction", valid.reproduction);
+  }
+  if (valid.profile === "feature-request") {
+    section("User and system boundary", valid.boundary);
+    section("Dependencies and decisions", valid.dependencies);
+  }
   section("Scope", valid.scope);
   section("Exclusions", listItems(valid.exclusions).join("\n"));
   section("Acceptance criteria", listItems(valid.acceptance).join("\n"));
-  section("Dependencies and decisions", valid.dependencies);
-  if (hasContent(valid.performanceClaim)) {
+  if (valid.profile === "refactor" && hasContent(valid.performanceClaim)) {
     const claim = valid.performanceClaim.trim();
     const evidence = valid.performanceEvidence.trim();
     section("Performance claims", evidence === "" ? claim : `${claim}\n\nEvidence: ${evidence}`);

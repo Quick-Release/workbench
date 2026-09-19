@@ -576,8 +576,9 @@ export const handleClarificationDraft = async ({
     } catch {
       return invalidRequest("request body is not valid JSON");
     }
+    let document;
     try {
-      parseClarificationDraftDocument(raw);
+      document = parseClarificationDraftDocument(raw);
     } catch (error) {
       return invalidRequest(String(error?.message ?? error));
     }
@@ -586,7 +587,7 @@ export const handleClarificationDraft = async ({
       return {
         status: 200,
         json: parseClarificationDraftView(
-          await coordinator.saveDraft({ runId, attemptId, draft: raw }),
+          await coordinator.saveDraft({ runId, attemptId, draft: document }),
         ),
       };
     } catch (error) {

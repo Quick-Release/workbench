@@ -369,3 +369,25 @@ test("an oversized body still diffs exactly, without pretending minimality", () 
   deepStrictEqual(diff.lines[0], { kind: "removed", text: "old 0" });
   deepStrictEqual(diff.lines[2001], { kind: "added", text: "new 0" });
 });
+
+test("the publication body is shaped by the task profile — no cross-profile leakage", () => {
+  // Content written under one profile stays in the document but never
+  // serializes into another profile's brief — the body is shaped by the
+  // task profile the same way the completeness arithmetic is.
+  const body = publicationBodyFor(
+    bugDraft({
+      boundary: "a boundary",
+      dependencies: "a dependency",
+      performanceClaim: "30% faster",
+    }),
+  );
+  ok(!body.includes("User and system boundary"));
+  ok(!body.includes("Dependencies and decisions"));
+  ok(!body.includes("Performance claims"));
+
+  // Reclassifying brings the profile's own fields back.
+  const refactor = publicationBodyFor(
+    bugDraft({ profile: "refactor", performanceClaim: "30% faster", performanceEvidence: "bench" }),
+  );
+  ok(refactor.includes("## Performance claims"));
+});
