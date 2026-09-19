@@ -478,8 +478,10 @@ export const createClarificationCoordinator = ({
     const leaseToken = ensureDraftLease({ runId, attemptId });
     store.saveDraft({ attemptId, draft: validated, leaseToken });
     const { gaps } = briefCompletenessFor(validated);
-    store.appendEvent({
-      runId,
+    // The save's evidence shares the publication contract: durable first,
+    // waiters woken second — a connected viewer sees the timeline entry the
+    // moment the save commits, never an unrelated publish later.
+    recordEvent(runId, {
       kind: "draft.saved",
       data: { attemptId, profile: validated.profile, gapCount: gaps.length },
       leaseToken,
