@@ -32,11 +32,13 @@ export const createClarificationCoordinator = ({ store }) => {
   const waiters = new Map();
   let changeCounter = 0;
 
-  const wakeRun = (runId, stopped = false) => {
+  // Wake every stream waiting on the run; `false` is the "a change landed,
+  // re-read" signal — only detach resolves a wake with `true`.
+  const wakeRun = (runId) => {
     const waiting = waiters.get(runId);
     if (waiting === undefined) return;
     waiters.set(runId, []);
-    for (const wake of waiting) wake(stopped);
+    for (const wake of waiting) wake(false);
   };
 
   return {
@@ -65,8 +67,12 @@ export const createClarificationCoordinator = ({ store }) => {
     // after `afterCursor` (with a leading gap frame when the cursor is
     // expired), then every published event as it lands — ending when, and
     // only when, the watched attempt reaches its terminal classification.
-    // Validation happens before the generator is built, so an unknown run
-    // or attempt is a typed error at attach time, not a hang.
+    // Run-scope events ride the stream but never end it, and uncertainty
+    // is not terminal: `unknown` and `quarantined` keep the stream open
+    // until reconciliation resolves the attempt — the lifecycle's
+    // `terminal` is the only end. Validation happens before the generator
+    // is built, so an unknown run or attempt is a typed error at attach
+    // time, not a hang.
     streamEvents({ runId, attemptId, afterCursor }) {
       if (!Number.isInteger(afterCursor) || afterCursor < 0)
         throw observationError("invalid_request", "afterCursor must be a non-negative integer");

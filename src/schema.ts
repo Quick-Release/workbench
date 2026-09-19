@@ -877,12 +877,17 @@ export type ClarificationEventEnvelope = Schema.Schema.Type<
   typeof ClarificationEventEnvelopeSchema
 >;
 
+// The gap divider's payload, shared by the stream frame and the
+// observation result: the viewer's cursor, and the first cursor the ledger
+// can still serve.
+export const ClarificationEventGapSchema = Schema.Struct({
+  after: Schema.Number,
+  firstRetainedCursor: Schema.Number,
+});
+
 export const ClarificationGapFrameSchema = Schema.Struct({
   envelope: Schema.Literal(clarificationEventEnvelopeVersion),
-  gap: Schema.Struct({
-    after: Schema.Number,
-    firstRetainedCursor: Schema.Number,
-  }),
+  gap: ClarificationEventGapSchema,
 });
 
 // One SSE frame: a ledger envelope, or the explicit gap divider.
@@ -928,12 +933,7 @@ export const ClarificationObservationResultSchema = Schema.Struct({
   }),
   latestCursor: Schema.Number,
   events: Schema.Array(ClarificationEventEnvelopeSchema),
-  gap: Schema.optional(
-    Schema.Struct({
-      after: Schema.Number,
-      firstRetainedCursor: Schema.Number,
-    }),
-  ),
+  gap: Schema.optional(ClarificationEventGapSchema),
 });
 
 export type ClarificationObservationResult = Schema.Schema.Type<

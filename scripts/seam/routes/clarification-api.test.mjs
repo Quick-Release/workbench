@@ -347,6 +347,23 @@ test("an unknown run or attempt is a typed 404 from the coordinator", async () =
   strictEqual(missingAttempt.json.error, "attempt_not_found");
 });
 
+test("a cursor ahead of the ledger is a typed 400, never a fabricated gap", async () => {
+  // A viewer outliving a store reset holds a cursor nobody observed; the
+  // seam refuses it, and the viewer's recovery is to re-observe from zero.
+  const typedError = (code) => Object.assign(new Error(code), { code });
+  const ahead = await handleClarificationObservation(
+    observation({
+      coordinator: {
+        observe: () => {
+          throw typedError("invalid_cursor");
+        },
+      },
+    }),
+  );
+  strictEqual(ahead.status, 400);
+  strictEqual(ahead.json.error, "invalid_request");
+});
+
 test("observation without a coordinator answers the honest unavailable denial", async () => {
   const observed = await handleClarificationObservation(observation());
   strictEqual(observed.status, 501);

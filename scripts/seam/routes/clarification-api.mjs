@@ -136,15 +136,25 @@ export const handleClarificationStart = ({ method, pathname, host, origin, body,
 // The cursor the viewer reconnects from: digits only, defaulting to the
 // beginning of the retained ledger. Anything else is a named 400 before
 // the coordinator is consulted.
-const parseAfterCursor = (query) => {
+const afterCursorOf = (query) => {
   const raw = query?.get("afterCursor") ?? "0";
-  if (!/^\d+$/.test(raw)) return null;
-  return Number(raw);
+  return /^\d+$/.test(raw) ? Number(raw) : null;
+};
+
+const INVALID_CURSOR_RESPONSE = {
+  status: 400,
+  json: {
+    error: "invalid_request",
+    message: "afterCursor must be a non-negative integer",
+  },
 };
 
 // A typed coordinator error becomes the response part it deserves: an
 // invisible run or attempt is a 404, a cursor that cannot be served is a
-// 400, and anything else is the seam's failure, not the viewer's.
+// 400, and anything else is the seam's failure, not the viewer's. A cursor
+// AHEAD of the ledger — a viewer outliving a store reset — is a typed 400,
+// never a fabricated gap: its cursor names events nobody observed, so the
+// viewer's recovery is to drop the cursor and re-observe from the start.
 const typedFailure = (error) => {
   const code = error?.code;
   const message = String(error?.message ?? error);
@@ -177,15 +187,8 @@ export const handleClarificationObservation = ({
   if (method !== "GET") return methodMismatch("GET");
   if (!coordinator) return unavailable();
 
-  const afterCursor = parseAfterCursor(query);
-  if (afterCursor === null)
-    return {
-      status: 400,
-      json: {
-        error: "invalid_request",
-        message: "afterCursor must be a non-negative integer",
-      },
-    };
+  const afterCursor = afterCursorOf(query);
+  if (afterCursor === null) return INVALID_CURSOR_RESPONSE;
 
   let result;
   try {
@@ -213,15 +216,8 @@ export const handleClarificationEvents = ({
   if (method !== "GET") return methodMismatch("GET");
   if (!coordinator) return unavailable();
 
-  const afterCursor = parseAfterCursor(query);
-  if (afterCursor === null)
-    return {
-      status: 400,
-      json: {
-        error: "invalid_request",
-        message: "afterCursor must be a non-negative integer",
-      },
-    };
+  const afterCursor = afterCursorOf(query);
+  if (afterCursor === null) return INVALID_CURSOR_RESPONSE;
 
   try {
     const { stream, detach } = coordinator.streamEvents({

@@ -4,12 +4,24 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { LIFECYCLE_STATES, openClarificationStore } from "./store.mjs";
+import { LIFECYCLE_STATES, EVENT_ENVELOPE_VERSION, openClarificationStore } from "./store.mjs";
+import {
+  clarificationEventEnvelopeVersion,
+  clarificationLifecycleStates,
+} from "../../../src/types.ts";
 
 // Contract tests for the durable clarification store (spec #221, ticket #225,
 // ADR 0020): real SQLite on temp directories — nothing is mocked below the
 // port. The clock is injected so timestamps are deterministic; ids are the
 // store's own.
+
+test("the seam's mirrored observation vocabulary never drifts from the store's", () => {
+  // The store owns the lifecycle states and the ledger envelope version;
+  // the browser-facing schema mirrors them for validation. Neither side
+  // may move without the other.
+  deepStrictEqual([...LIFECYCLE_STATES], [...clarificationLifecycleStates]);
+  strictEqual(EVENT_ENVELOPE_VERSION, clarificationEventEnvelopeVersion);
+});
 
 const withStore = async (fn) => {
   const directory = await mkdtemp(join(tmpdir(), "workbench-clarification-store-"));
