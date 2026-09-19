@@ -9,6 +9,8 @@ import {
   handleClarificationApi,
   isClarificationApiRoute,
 } from "./clarification-api.mjs";
+import { parseClarificationConversationCommandResult } from "../../../src/schema.ts";
+import { parseClarificationConversationState } from "../../../src/schema.ts";
 import { noPublishingLine } from "../../../src/types.ts";
 
 const loopback = { host: "localhost:4051", origin: "http://localhost:4051" };
@@ -57,6 +59,28 @@ const run = (overrides = {}) => ({
   method: "GET",
   pathname: "/api/clarification/run",
   query: new URLSearchParams("run=run_1"),
+  posture: disabled,
+  coordinator: null,
+  ...loopback,
+  ...overrides,
+});
+
+const command = (overrides = {}) => ({
+  method: "POST",
+  pathname: "/api/clarification/runs/run_1/attempts/attempt_1/commands",
+  body: JSON.stringify({
+    requestId: "client-cmd-1",
+    command: { kind: "prompt", text: "next question" },
+  }),
+  posture: disabled,
+  coordinator: null,
+  ...loopback,
+  ...overrides,
+});
+
+const conversation = (overrides = {}) => ({
+  method: "GET",
+  pathname: "/api/clarification/runs/run_1/attempts/attempt_1/conversation",
   posture: disabled,
   coordinator: null,
   ...loopback,
@@ -145,6 +169,67 @@ const fakeCoordinator = (overrides = {}) => {
             },
           },
         ],
+      };
+    },
+    // The conversation commands record like every other coordinator call;
+    // the answers are the typed results the seam validates.
+    sendPrompt: async (args) => {
+      calls.push(["sendPrompt", args]);
+      return { sent: true, requestId: args.requestId };
+    },
+    steer: async (args) => {
+      calls.push(["steer", args]);
+      return { sent: true, requestId: args.requestId };
+    },
+    queueFollowUp: async (args) => {
+      calls.push(["queueFollowUp", args]);
+      return { sent: true, requestId: args.requestId };
+    },
+    clearQueue: async (args) => {
+      calls.push(["clearQueue", args]);
+      return { sent: true, requestId: args.requestId, cleared: [] };
+    },
+    stopTurn: async (args) => {
+      calls.push(["stopTurn", args]);
+      return {
+        sent: true,
+        requestId: args.requestId,
+        cleared: [{ requestId: "req_queue_1", text: "queued one" }],
+      };
+    },
+    answerDialog: async (args) => {
+      calls.push(["answerDialog", args]);
+      return { sent: true, requestId: args.requestId };
+    },
+    cancelDialog: async (args) => {
+      calls.push(["cancelDialog", args]);
+      return { sent: true, requestId: args.requestId };
+    },
+    conversationState: (args) => {
+      calls.push(["conversationState", args]);
+      return {
+        available: true,
+        sessionState: "ready",
+        pendingDialogs: [
+          {
+            dialogId: "dialog_1",
+            kind: "select",
+            request: { type: "select", options: ["a", "b"] },
+          },
+        ],
+        unsupportedCapabilities: [],
+      };
+    },
+    runForIssue: async (args) => {
+      calls.push(["runForIssue", args]);
+      return {
+        runId: "run_1",
+        hostRepo: "example/project",
+        issueId: String(args.issueNumber),
+        requestId: "req-1",
+        state: "active",
+        createdAt: "2026-09-18T10:00:01.000Z",
+        updatedAt: "2026-09-18T10:00:01.000Z",
       };
     },
     ...overrides,
@@ -909,4 +994,198 @@ test("the real store and coordinator stream typed frames the schema accepts", as
     );
     for (const frame of frames) parseClarificationStreamFrame(frame);
   });
+});
+
+// --- Conversation commands (spec #221, ticket #232): the Developer's
+// explicit acts cross the seam as typed, schema-validated requests; the
+// policy gates speak first, and the coordinator's typed rejections keep
+// their own statuses.
+
+test("the command route recognizes itself and rejects foreign hosts", async () => {
+  strictEqual(
+    isClarificationApiRoute("/api/clarification/runs/run_1/attempts/attempt_1/commands"),
+    true,
+  );
+  strictEqual(
+    isClarificationApiRoute("/api/clarification/runs/run_1/attempts/attempt_1/conversation"),
+    true,
+  );
+
+  const foreign = await handleClarificationApi(command({ host: "host-repo.example:4051" }));
+  strictEqual(foreign.status, 403);
+  strictEqual(foreign.json.error, "forbidden_host");
+});
+
+test("the command route answers POST only and denies a dormant install before reading the body", async () => {
+  const coordinator = fakeCoordinator();
+  const wrongMethod = await handleClarificationApi(
+    command({ method: "GET", coordinator, posture: enabled }),
+  );
+  strictEqual(wrongMethod.status, 405);
+  strictEqual(wrongMethod.json.error, "method_not_allowed");
+
+  const dormant = await handleClarificationApi(command({ coordinator }));
+  strictEqual(dormant.status, 403);
+  strictEqual(dormant.json.error, "clarification_disabled");
+  deepStrictEqual(coordinator.calls, []);
+});
+
+test("a conversation command crosses schema validation and reaches the coordinator as its kind", async () => {
+  const cases = [
+    {
+      body: { requestId: "c1", command: { kind: "prompt", text: "next" } },
+      expected: [
+        "sendPrompt",
+        { runId: "run_1", attemptId: "attempt_1", requestId: "c1", text: "next" },
+      ],
+    },
+    {
+      body: { requestId: "c2", command: { kind: "steer", text: "focus" } },
+      expected: [
+        "steer",
+        { runId: "run_1", attemptId: "attempt_1", requestId: "c2", text: "focus" },
+      ],
+    },
+    {
+      body: { requestId: "c3", command: { kind: "queue", text: "later" } },
+      expected: [
+        "queueFollowUp",
+        { runId: "run_1", attemptId: "attempt_1", requestId: "c3", text: "later" },
+      ],
+    },
+    {
+      body: { requestId: "c4", command: { kind: "clear-queue" } },
+      expected: ["clearQueue", { runId: "run_1", attemptId: "attempt_1", requestId: "c4" }],
+    },
+    {
+      body: { requestId: "c5", command: { kind: "stop-turn" } },
+      expected: ["stopTurn", { runId: "run_1", attemptId: "attempt_1", requestId: "c5" }],
+    },
+    {
+      body: {
+        requestId: "c6",
+        command: { kind: "answer-dialog", dialogId: "dialog_1", value: "a" },
+      },
+      expected: [
+        "answerDialog",
+        {
+          runId: "run_1",
+          attemptId: "attempt_1",
+          requestId: "c6",
+          dialogId: "dialog_1",
+          value: "a",
+        },
+      ],
+    },
+    {
+      body: { requestId: "c7", command: { kind: "cancel-dialog", dialogId: "dialog_1" } },
+      expected: [
+        "cancelDialog",
+        { runId: "run_1", attemptId: "attempt_1", requestId: "c7", dialogId: "dialog_1" },
+      ],
+    },
+  ];
+  for (const { body, expected } of cases) {
+    const coordinator = fakeCoordinator();
+    const handled = await handleClarificationApi(
+      command({ posture: enabled, coordinator, body: JSON.stringify(body) }),
+    );
+    strictEqual(handled.status, 200);
+    deepStrictEqual(coordinator.calls, [expected]);
+    strictEqual(handled.json.sent, true);
+    parseClarificationConversationCommandResult(handled.json);
+  }
+});
+
+test("a malformed command body is a named 400 before the coordinator is asked", async () => {
+  const coordinator = fakeCoordinator();
+  for (const body of [
+    "not json",
+    JSON.stringify({ command: { kind: "prompt", text: "no request id" } }),
+    JSON.stringify({ requestId: "c1", command: { kind: "terminate-runtime" } }),
+    JSON.stringify({ requestId: "c1", command: { kind: "prompt" } }),
+  ]) {
+    const handled = await handleClarificationApi(command({ posture: enabled, coordinator, body }));
+    strictEqual(handled.status, 400);
+    strictEqual(handled.json.error, "invalid_request");
+  }
+  deepStrictEqual(coordinator.calls, []);
+});
+
+test("typed command rejections keep their own statuses at the seam", async () => {
+  const rejections = [
+    { code: "turn_in_flight", status: 409 },
+    { code: "turn_not_in_flight", status: 409 },
+    { code: "queue_full", status: 409 },
+    { code: "dialog_not_found", status: 409 },
+    { code: "conversation_unavailable", status: 503 },
+    { code: "lease_expired", status: 409 },
+  ];
+  for (const { code, status } of rejections) {
+    const coordinator = fakeCoordinator({
+      sendPrompt: async () => {
+        throw Object.assign(new Error(code), { code });
+      },
+    });
+    const handled = await handleClarificationApi(command({ posture: enabled, coordinator }));
+    strictEqual(handled.status, status);
+    strictEqual(handled.json.error, code);
+  }
+});
+
+test("the conversation state read answers the typed questions and capabilities", async () => {
+  const coordinator = fakeCoordinator();
+  const handled = await handleClarificationApi(conversation({ coordinator }));
+  strictEqual(handled.status, 200);
+  strictEqual(handled.json.available, true);
+  strictEqual(handled.json.sessionState, "ready");
+  strictEqual(handled.json.pendingDialogs[0].kind, "select");
+  deepStrictEqual(coordinator.calls, [
+    ["conversationState", { runId: "run_1", attemptId: "attempt_1" }],
+  ]);
+  parseClarificationConversationState(handled.json);
+
+  const missing = fakeCoordinator({
+    conversationState: () => {
+      throw Object.assign(new Error("no such attempt"), { code: "attempt_not_found" });
+    },
+  });
+  const notFound = await handleClarificationApi(conversation({ coordinator: missing }));
+  strictEqual(notFound.status, 404);
+  strictEqual(notFound.json.error, "attempt_not_found");
+
+  const wrongMethod = await handleClarificationApi(
+    conversation({ method: "POST", coordinator: fakeCoordinator() }),
+  );
+  strictEqual(wrongMethod.status, 405);
+});
+
+test("the run route finds a run by issue for the surface's reconnect-after-refresh", async () => {
+  const coordinator = fakeCoordinator();
+  const byIssue = await handleClarificationApi(
+    run({ posture: enabled, coordinator, query: new URLSearchParams("issue=230") }),
+  );
+  strictEqual(byIssue.status, 200);
+  deepStrictEqual(coordinator.calls, [
+    ["runForIssue", { issueNumber: 230 }],
+    ["runSection", { runId: "run_1", afterCursor: 0 }],
+  ]);
+
+  const unknown = fakeCoordinator({
+    runForIssue: async () => null,
+  });
+  const absent = await handleClarificationApi(
+    run({ posture: enabled, coordinator: unknown, query: new URLSearchParams("issue=231") }),
+  );
+  strictEqual(absent.status, 404);
+  strictEqual(absent.json.error, "run_not_found");
+
+  const badIssue = await handleClarificationApi(
+    run({
+      posture: enabled,
+      coordinator: fakeCoordinator(),
+      query: new URLSearchParams("issue=x"),
+    }),
+  );
+  strictEqual(badIssue.status, 400);
 });

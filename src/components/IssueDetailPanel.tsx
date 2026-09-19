@@ -4,6 +4,7 @@ import { ExternalLink, Network, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { ClarificationConversation } from "@/components/ClarificationConversation";
 import { PhaseMoveSelect } from "@/components/PhaseMoveSelect";
 import { deriveDisplayState } from "@/lib/display-state";
 import { indexWorkItems, mapFor, openBlockers } from "@/lib/frontier";
@@ -208,6 +209,8 @@ function IssueRecordSections({
           // The clarification entry point (spec #221, ticket #222): visible
           // the moment the posture answers enabled, honest about the runtime
           // not shipping yet — the affordance is present, not pretend-enabled.
+          // The conversation surface (ticket #232) renders below whenever the
+          // issue has a run; with no run it renders nothing at all.
           <section data-slot="panel-clarification" className="flex flex-col gap-2">
             <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
               Clarification
@@ -218,6 +221,7 @@ function IssueRecordSections({
                 Clarify
               </Button>
             </div>
+            <ClarificationConversation issueNumber={Number(number)} />
           </section>
         )}
 
