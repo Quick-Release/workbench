@@ -8,8 +8,15 @@
 // (stubbed `gh`, no tokens, no telemetry), asserting the dashboard and one
 // read-only API endpoint answer.
 //
+// Ticket #240 extends the same smoke, it does not duplicate it: the tarball
+// must carry the owned-clarification capability, and the installed boot must
+// expose it per its posture — the capability answering its typed dormant and
+// denial readiness states offline, with the shapes the unit tier
+// (scripts/seam/routes/clarification-api.test.mjs) holds the seam to.
+//
 // CI-only (`pnpm test:pack`): it needs registry access and a few minutes, so
 // the per-commit gate (`pnpm test`) deliberately does not run it.
+import { deepStrictEqual } from "node:assert";
 import { execFileSync, spawn } from "node:child_process";
 import { chmod, mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { createServer as netCreateServer } from "node:net";
@@ -35,7 +42,129 @@ export const forbiddenTarballEntries = (entries) =>
 export const shippedConfigViolations = (configText) =>
   FORBIDDEN_CONFIG_REFERENCES.filter((reference) => configText.includes(reference));
 
+// The capability ships dark but it must ship (spec #221, ADR 0013): every
+// module the installed boot's clarification seam is built from, present in
+// the artifact. The tarball-cleanliness guards above stay exactly as they
+// are — this is a positive assertion, never a second forbidden list.
+const CAPABILITY_ENTRIES = [
+  "package/scripts/seam/routes/clarification-api.mjs",
+  "package/scripts/seam/clarification/posture.mjs",
+  "package/scripts/seam/clarification/context-packet.mjs",
+  "package/scripts/seam/clarification/coordinator.mjs",
+  "package/scripts/seam/clarification/pi-managed.mjs",
+  "package/scripts/seam/clarification/store.mjs",
+  "package/scripts/host/config.mjs",
+  "package/src/schema.ts",
+];
+
+export const missingCapabilityEntries = (entries) => {
+  const present = new Set(entries);
+  return CAPABILITY_ENTRIES.filter((entry) => !present.has(entry));
+};
+
+// The installed boot's clarification answers, held to the exact shapes the
+// unit tier holds the seam to — restated here as literals on purpose: the
+// package tier's job is to catch an installed artifact answering anything
+// else, so it must not import the seam it is judging. The probes run
+// offline against the fixture host, where the capability has no config
+// block: its readiness is the typed dormant posture, and its start route
+// answers the typed policy denial, whatever the body carried. Writing an
+// incomplete clarification block into the fixture host moves the same boot
+// to the invalid posture — the posture resolves per request — and the
+// denial then names the offending elements.
+const INVALID_POSTURE_REASONS = [
+  "clarification.provider is required when clarification is enabled",
+  "clarification.dataDestination is required when clarification is enabled",
+];
+
+const matches = (actual, expected) => {
+  try {
+    deepStrictEqual(actual, expected);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+export const clarificationContractFailures = (phase, { status, json }) => {
+  const failures = [];
+  const named = (failure) => failures.push(`${phase}: ${failure}`);
+
+  if (json === undefined) return [`${phase}: response body was not JSON`];
+
+  switch (phase) {
+    case "dormant-status":
+    case "restored-status": {
+      if (status !== 200) named(`status must be 200, got ${status}`);
+      if (json?.posture !== "disabled")
+        named(`posture must be "disabled", got ${JSON.stringify(json?.posture)}`);
+      if (json?.available !== false)
+        named(`available must be false, got ${JSON.stringify(json?.available)}`);
+      if (json?.reasons !== undefined)
+        named(`must carry no reasons, got ${JSON.stringify(json?.reasons)}`);
+      if (json?.message !== undefined)
+        named(`must carry no message, got ${JSON.stringify(json?.message)}`);
+      break;
+    }
+    case "dormant-start": {
+      if (status !== 403) named(`status must be 403, got ${status}`);
+      if (json?.error !== "clarification_disabled")
+        named(`error must be "clarification_disabled", got ${JSON.stringify(json?.error)}`);
+      if (!/not enabled/.test(String(json?.message)))
+        named(`message must name the disabled posture, got ${JSON.stringify(json?.message)}`);
+      break;
+    }
+    case "invalid-status": {
+      if (status !== 200) named(`status must be 200, got ${status}`);
+      if (json?.posture !== "invalid")
+        named(`posture must be "invalid", got ${JSON.stringify(json?.posture)}`);
+      if (json?.available !== false)
+        named(`available must be false, got ${JSON.stringify(json?.available)}`);
+      if (!matches(json?.reasons, INVALID_POSTURE_REASONS))
+        named(
+          `posture reasons must be the two missing-element reasons, got ${JSON.stringify(json?.reasons)}`,
+        );
+      if (json?.message !== undefined)
+        named(`must carry no message, got ${JSON.stringify(json?.message)}`);
+      break;
+    }
+    case "invalid-start": {
+      if (status !== 403) named(`status must be 403, got ${status}`);
+      if (json?.error !== "clarification_posture_invalid")
+        named(`error must be "clarification_posture_invalid", got ${JSON.stringify(json?.error)}`);
+      if (!matches(json?.reasons, INVALID_POSTURE_REASONS))
+        named(
+          `denial reasons must be the two missing-element reasons, got ${JSON.stringify(json?.reasons)}`,
+        );
+      if (!/clarification\.provider is required/.test(String(json?.message)))
+        named(`message must name the offending elements, got ${JSON.stringify(json?.message)}`);
+      break;
+    }
+    default:
+      return [`${phase}: unknown probe phase`];
+  }
+  return failures;
+};
+
 const delay = (ms) => new Promise((resolveDelay) => setTimeout(resolveDelay, ms));
+
+// bin.mjs passes no --host, so which loopback stack binds first differs by
+// platform (IPv6-first on CI runners): every request this smoke makes tries
+// the spellings and takes the first that answers.
+const LOOPBACK_SPELLINGS = ["localhost", "127.0.0.1", "[::1]"];
+
+// A bounded output tail for a spawned CLI's failure messages: the last few
+// kilobytes of whatever the install printed before it died or drifted.
+const captureChildOutput = (child) => {
+  const output = [];
+  const capture = (chunk) => {
+    output.push(chunk);
+    if (output.length > 400) output.shift();
+  };
+  child.stdout.on("data", capture);
+  child.stderr.on("data", capture);
+  return () => output.join("").slice(-4000);
+};
 
 // A port outside the OS ephemeral range: this smoke's own npm install and
 // the dev server's dependency fetches fill the ephemeral range with outbound
@@ -84,6 +213,15 @@ const assertTarballIsClean = (tarballPath) => {
     throw new Error(
       `shipped vite.config.ts references dev-only resources: ${violations.join(", ")}`,
     );
+};
+
+// The positive counterpart to the cleanliness guard: the artifact must not
+// merely be clean of test resources — it must carry the clarification
+// capability it claims to ship dark (ticket #240).
+const assertTarballCarriesCapability = (tarballPath) => {
+  const missing = missingCapabilityEntries(run("tar", ["-tzf", tarballPath]).split("\n"));
+  if (missing.length > 0)
+    throw new Error(`tarball is missing the clarification capability: ${missing.join(", ")}`);
 };
 
 // Fixture host repo: a real git checkout with one commit and no remote, so
@@ -151,26 +289,18 @@ const bootEnv = async ({ hostDir, port, parentEnv }) => ({
 // Startup failures surface here because the CLI's startup path is exactly
 // what tickets #113/#195 protect.
 const awaitServing = async (child, port, timeoutMs) => {
-  const output = [];
-  const capture = (chunk) => {
-    output.push(chunk);
-    if (output.length > 400) output.shift();
-  };
-  child.stdout.on("data", capture);
-  child.stderr.on("data", capture);
-  const tail = () => output.join("").slice(-4000);
+  const tail = captureChildOutput(child);
   const exited = new Promise((resolveExit) => {
     child.once("exit", (code, signal) => resolveExit({ code, signal }));
   });
   // One request at a time, each hard-bounded: a cold-start request can hang
   // (Vite's dependency optimizer accepts the connection, then reloads the
   // server mid-flight), and an unbounded fetch would stall this loop past
-  // the deadline. bin.mjs passes no --host, so which loopback stack `localhost`
-  // binds first differs by platform (IPv6-first on CI runners); serving is
-  // confirmed when ANY one spelling answers 200 for both paths — never a
-  // conjunction across spellings, which can never all bind at once.
+  // the deadline. Serving is confirmed when ANY one loopback spelling
+  // answers 200 for both paths — never a conjunction across spellings,
+  // which can never all bind at once.
   const serving = async () => {
-    for (const host of ["localhost", "127.0.0.1", "[::1]"]) {
+    for (const host of LOOPBACK_SPELLINGS) {
       let served = true;
       for (const path of ["/", "/api/skills"]) {
         try {
@@ -227,6 +357,72 @@ const stopTree = async (child) => {
   }
 };
 
+// One clarification probe against the installed boot. Which loopback
+// spelling bound is the platform's call, so the probe tries the spellings
+// and takes the first that answers — an answered response is returned
+// whatever its status, because a contract drift is exactly what the probe
+// must catch. Only transport errors retry, so a real drift fails the smoke
+// instead of wearing the deadline down.
+const probeClarification = async (port, path, init, attempts = 3) => {
+  let lastError;
+  for (let attempt = 1; ; attempt += 1) {
+    for (const host of LOOPBACK_SPELLINGS) {
+      try {
+        const response = await fetch(`http://${host}:${port}${path}`, {
+          signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+          ...init,
+        });
+        const text = await response.text();
+        return { status: response.status, text };
+      } catch (error) {
+        lastError = error;
+      }
+    }
+    if (attempt >= attempts) throw lastError ?? new Error("no loopback spelling answered");
+    await delay(1_000);
+  }
+};
+
+// The offline readiness walk (ticket #240). The fixture host has no
+// workbench.config.json, so the installed capability's readiness is the
+// typed dormant posture and its start route the typed policy denial;
+// writing an incomplete clarification block moves the same boot — the
+// posture resolves per request — to the invalid posture, whose denial
+// names the offending elements; removing it restores the dormant state.
+// Every answer is held to the unit-tier contract before the smoke passes:
+// the same contract the unit tier holds, judging a different artifact —
+// statuses, error codes, postures and reasons as exact literals, human
+// message text by the same regexes the unit tier holds them to.
+const probeClarificationReadiness = async ({ child, port, hostDir }) => {
+  const tail = captureChildOutput(child);
+  const configPath = join(hostDir, "workbench.config.json");
+  const expect = async (phase, path, init) => {
+    const probe = await probeClarification(port, path, init);
+    let json;
+    try {
+      json = JSON.parse(probe.text);
+    } catch {
+      json = undefined;
+    }
+    const failures = clarificationContractFailures(phase, { status: probe.status, json });
+    if (failures.length > 0)
+      throw new Error(
+        `installed clarification boot drifted from the unit-tier contract:\n  ${failures.join(
+          "\n  ",
+        )}\n${tail()}`,
+      );
+    console.log(`[pack-smoke] ${phase} matches the unit-tier contract`);
+  };
+
+  await expect("dormant-status", "/api/clarification");
+  await expect("dormant-start", "/api/clarification/start", { method: "POST", body: "{}" });
+  await writeFile(configPath, `${JSON.stringify({ clarification: { enabled: true } }, null, 2)}\n`);
+  await expect("invalid-status", "/api/clarification");
+  await expect("invalid-start", "/api/clarification/start", { method: "POST", body: "{}" });
+  await rm(configPath, { force: true });
+  await expect("restored-status", "/api/clarification");
+};
+
 const main = async () => {
   const workspace = await mkdtemp(join(tmpdir(), "workbench-pack-smoke-"));
   const destination = join(workspace, "pack");
@@ -237,6 +433,7 @@ const main = async () => {
   try {
     const tarballPath = await packTarball(destination);
     assertTarballIsClean(tarballPath);
+    assertTarballCarriesCapability(tarballPath);
     console.log(`[pack-smoke] packed ${tarballPath}`);
 
     await seedHostRepo(hostDir);
@@ -260,6 +457,11 @@ const main = async () => {
     });
     await awaitServing(child, port, BOOT_TIMEOUT_MS);
     console.log("[pack-smoke] installed CLI serves / and /api/skills with 200");
+
+    // Still offline: the same stubbed gh, no tokens, no telemetry as the
+    // boot — the capability must answer its readiness states without any
+    // of it (ticket #240).
+    await probeClarificationReadiness({ child, port, hostDir });
   } finally {
     await stopTree(child);
     await rm(workspace, { recursive: true, force: true });
