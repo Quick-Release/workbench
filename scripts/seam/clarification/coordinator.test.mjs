@@ -938,3 +938,567 @@ test("publish persists to the ledger before any viewer is served", async () => {
     );
   });
 });
+
+// --- The conversation commands (spec #221, ticket #232): the Developer's
+// explicit acts on one live attempt — prompt, steer, queue, clear-queue,
+// stop-turn, dialogs — each deduplicated across reconnects and recorded as
+// durable evidence around the runtime side effect it names. The scripted
+// session fake stands in for the managed runtime: commands ride the same
+// port the real adapter will satisfy, and acceptance stays the runtime's
+// own signal, never the coordinator's assumption.
+
+const scriptedSession = () => {
+  const calls = [];
+  const turns = [];
+  const queue = [];
+  const session = {
+    calls,
+    sessionId: "pi-session-scripted",
+    state: () => "ready",
+    turns,
+    queue,
+    sendPrompt: (text) => {
+      // Like the adapter: one live turn at a time — a second prompt is a
+      // synchronous typed refusal before any frame is written.
+      if (turns.some((t) => !t.settled))
+        throw Object.assign(
+          new Error(
+            "a prompt is already awaiting settlement — steer, queue it, or stop the turn first",
+          ),
+          { code: "turn_in_flight" },
+        );
+      calls.push(["sendPrompt", text]);
+      const requestId = `req_${turns.length + 1}`;
+      let accept;
+      let settle;
+      const accepted = new Promise((resolve, reject) => {
+        accept = { resolve, reject };
+      });
+      const settled = new Promise((resolve, reject) => {
+        settle = { resolve, reject };
+      });
+      const turn = {
+        requestId,
+        accept,
+        settle,
+        text,
+        settled: false,
+        // The runtime's settle: acceptance then settlement, the floor free
+        // only after this.
+        complete: () => {
+          turn.accept.resolve();
+          turn.settled = true;
+          turn.settle.resolve();
+        },
+      };
+      turns.push(turn);
+      return { requestId, accepted, settled };
+    },
+    steer: (text) => {
+      // Like the adapter: steering rides the live turn — with no turn in
+      // flight it is a typed refusal before any frame is written.
+      if (!turns.some((t) => !t.settled))
+        throw Object.assign(new Error("no turn is live"), { code: "turn_not_in_flight" });
+      calls.push(["steer", text]);
+      const requestId = `req_steer_${calls.filter(([k]) => k === "steer").length}`;
+      // The ack never lands in these tests; the coordinator disposes of it.
+      const accepted = new Promise(() => {});
+      return { requestId, accepted };
+    },
+    queueFollowUp: (text) => {
+      // Like the adapter: a follow-up queues behind the live turn.
+      if (!turns.some((t) => !t.settled))
+        throw Object.assign(new Error("no turn is live"), { code: "turn_not_in_flight" });
+      calls.push(["queueFollowUp", text]);
+      const requestId = `req_queue_${calls.filter(([k]) => k === "queueFollowUp").length}`;
+      // These promises never settle: the runtime delivers a queued entry as
+      // its own turn, which these tests model only through stop/clear.
+      const accepted = new Promise(() => {});
+      const settled = new Promise(() => {});
+      const entry = { requestId, text, settledFlag: false };
+      queue.push(entry);
+      return { requestId, accepted, settled };
+    },
+    clearQueue: () => {
+      calls.push(["clearQueue"]);
+      const cleared = queue
+        .splice(0)
+        .map((entry) => ({ requestId: entry.requestId, text: entry.text }));
+      return { cleared };
+    },
+    stopTurn: () => {
+      const live = turns.find((t) => !t.settled);
+      if (live === undefined)
+        throw Object.assign(new Error("no turn is live"), { code: "turn_not_in_flight" });
+      calls.push(["stopTurn"]);
+      // The adapter's order: the queue clears FIRST, then the abort rides
+      // the wire. The live turn's settle becomes its cancelled outcome.
+      const cleared = queue
+        .splice(0)
+        .map((entry) => ({ requestId: entry.requestId, text: entry.text }));
+      live.settled = true;
+      live.accept.reject(
+        Object.assign(new Error("the turn was explicitly stopped"), { code: "cancelled" }),
+      );
+      live.settle.reject(
+        Object.assign(new Error("the turn was explicitly stopped"), { code: "cancelled" }),
+      );
+      return { requestId: "req_abort_1", cleared };
+    },
+    answerDialog: (args) => {
+      calls.push(["answerDialog", args]);
+      return { dialogId: args.dialogId, answered: true };
+    },
+    cancelDialog: (args) => {
+      calls.push(["cancelDialog", args]);
+      return { dialogId: args.dialogId, cancelled: true };
+    },
+    // The streaming port: frames the test emits land in a queue the
+    // coordinator's pump consumes — the same contract the managed adapter
+    // satisfies with its retained event buffer.
+    emit: (event) => {
+      const frame = { cursor: session.frames.length + 1, envelope: "pi-managed/v1", event };
+      session.frames.push(frame);
+      for (const wake of session.frameWaiters.splice(0)) wake();
+      return frame;
+    },
+    frames: [],
+    frameWaiters: [],
+    closed: false,
+    subscribe: async function* (fromCursor) {
+      let last = fromCursor;
+      while (true) {
+        for (const frame of session.frames) {
+          if (frame.cursor > last) {
+            last = frame.cursor;
+            yield frame;
+          }
+        }
+        if (session.closed) return;
+        await new Promise((resolve) => session.frameWaiters.push(resolve));
+      }
+    },
+    pendingDialogs: () => [],
+    unsupportedCapabilities: () => [],
+  };
+  return session;
+};
+
+// A coordinator whose attempt is started against a scripted session: the
+// full start path runs for real (durable run, lease, attempt), so every
+// conversation test begins from the record a real start leaves behind.
+const withLiveConversation = async (fn) => {
+  const directory = await mkdtemp(join(tmpdir(), "workbench-clarification-conversation-"));
+  const databasePath = join(directory, "runs.sqlite");
+  const store = openClarificationStore({
+    hostRepo: "example/project",
+    databasePath,
+    clock: () => "2026-09-18T00:00:00Z",
+  });
+  const session = scriptedSession();
+  const coordinator = createClarificationCoordinator({
+    store,
+    clock: () => "2026-09-18T00:00:00Z",
+    tracker: fakeTracker(collectedIssue()),
+    sessions: {
+      start: async () => session,
+    },
+  });
+  try {
+    const { run, attempt } = await coordinator.start({
+      issueNumber: 230,
+      requestId: "start-req-1",
+      revision: {
+        updatedAt: "2026-09-18T10:00:00.000Z",
+        bodyHash: "sha-256:abc",
+      },
+    });
+    return await fn({ coordinator, store, session, run, attempt });
+  } finally {
+    store.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+};
+
+test("a prompt dispatches once and the replay is answered from the record, never re-sent", async () => {
+  await withLiveConversation(async ({ coordinator, session, run, attempt }) => {
+    const turn = session.calls.length;
+    const first = await coordinator.sendPrompt({
+      runId: run.runId,
+      attemptId: attempt.attemptId,
+      requestId: "client-prompt-1",
+      text: "what does this issue need clarified?",
+    });
+    strictEqual(first.sent, true);
+    strictEqual(session.calls.length, turn + 1);
+    deepStrictEqual(session.calls.at(-1), ["sendPrompt", "what does this issue need clarified?"]);
+
+    // The prompt is durable evidence before the replay arrives: the
+    // operational ledger carries the client request id, so a reconnect
+    // replay is answered from the record — the runtime never sees it twice.
+    const replay = await coordinator.sendPrompt({
+      runId: run.runId,
+      attemptId: attempt.attemptId,
+      requestId: "client-prompt-1",
+      text: "what does this issue need clarified?",
+    });
+    strictEqual(replay.sent, false);
+    strictEqual(session.calls.length, turn + 1);
+  });
+});
+
+test("a prompt while a turn is live is a typed refusal with the refusal as evidence", async () => {
+  await withLiveConversation(async ({ coordinator, session, store, run, attempt }) => {
+    const first = await coordinator.sendPrompt({
+      runId: run.runId,
+      attemptId: attempt.attemptId,
+      requestId: "client-prompt-1",
+      text: "first",
+    });
+    strictEqual(first.sent, true);
+
+    // The floor is busy: the second prompt is refused typed, and the
+    // refusal lands in the ledger — intent, then refusal — so the record
+    // never claims a dispatch that did not happen.
+    throws(
+      () =>
+        coordinator.sendPrompt({
+          runId: run.runId,
+          attemptId: attempt.attemptId,
+          requestId: "client-prompt-2",
+          text: "second",
+        }),
+      (error) => error.code === "turn_in_flight",
+    );
+    const kinds = store
+      .readEvents({ runId: run.runId, afterCursor: 0 })
+      .events.filter(({ event }) => event.type === "operational")
+      .map(({ event }) => event.kind);
+    deepStrictEqual(kinds, [
+      "run.started",
+      "attempt.recorded",
+      "conversation.prompt",
+      "conversation.prompt",
+      "conversation.prompt-refused",
+    ]);
+
+    // The refused request id is spent: a replay answers from the record,
+    // and the runtime still saw only the first prompt.
+    const replay = await coordinator.sendPrompt({
+      runId: run.runId,
+      attemptId: attempt.attemptId,
+      requestId: "client-prompt-2",
+      text: "second",
+    });
+    strictEqual(replay.sent, false);
+    strictEqual(session.calls.filter(([kind]) => kind === "sendPrompt").length, 1);
+  });
+});
+
+test("steer and queue are explicit, distinct acts with their own evidence", async () => {
+  await withLiveConversation(async ({ coordinator, session, store, run, attempt }) => {
+    await coordinator.sendPrompt({
+      runId: run.runId,
+      attemptId: attempt.attemptId,
+      requestId: "client-prompt-1",
+      text: "first",
+    });
+
+    // Steer rides the live turn: its evidence names the guidance, and the
+    // runtime received exactly that.
+    const steer = await coordinator.steer({
+      runId: run.runId,
+      attemptId: attempt.attemptId,
+      requestId: "client-steer-1",
+      text: "keep it about the acceptance criteria",
+    });
+    strictEqual(steer.sent, true);
+    deepStrictEqual(session.calls.at(-1), ["steer", "keep it about the acceptance criteria"]);
+
+    // A follow-up queues behind the live turn: explicitly held work, not a
+    // second prompt.
+    const queued = await coordinator.queueFollowUp({
+      runId: run.runId,
+      attemptId: attempt.attemptId,
+      requestId: "client-follow-up-1",
+      text: "then list the open questions",
+    });
+    strictEqual(queued.sent, true);
+    deepStrictEqual(session.calls.at(-1), ["queueFollowUp", "then list the open questions"]);
+
+    // Each act is its own operational evidence, in the order it happened.
+    const kinds = store
+      .readEvents({ runId: run.runId, afterCursor: 0 })
+      .events.filter(({ event }) => event.type === "operational")
+      .map(({ event }) => event.kind);
+    deepStrictEqual(kinds, [
+      "run.started",
+      "attempt.recorded",
+      "conversation.prompt",
+      "conversation.steer",
+      "conversation.follow-up-queued",
+    ]);
+
+    // Both deduplicate on their own request ids across reconnects.
+    strictEqual(
+      (
+        await coordinator.steer({
+          runId: run.runId,
+          attemptId: attempt.attemptId,
+          requestId: "client-steer-1",
+          text: "keep it about the acceptance criteria",
+        })
+      ).sent,
+      false,
+    );
+    strictEqual(
+      (
+        await coordinator.queueFollowUp({
+          runId: run.runId,
+          attemptId: attempt.attemptId,
+          requestId: "client-follow-up-1",
+          text: "then list the open questions",
+        })
+      ).sent,
+      false,
+    );
+    strictEqual(session.calls.filter(([kind]) => kind === "steer").length, 1);
+    strictEqual(session.calls.filter(([kind]) => kind === "queueFollowUp").length, 1);
+  });
+});
+
+test("stop-turn clears the queue first and the stop names the cleared work", async () => {
+  await withLiveConversation(async ({ coordinator, session, store, run, attempt }) => {
+    await coordinator.sendPrompt({
+      runId: run.runId,
+      attemptId: attempt.attemptId,
+      requestId: "client-prompt-1",
+      text: "first",
+    });
+    await coordinator.queueFollowUp({
+      runId: run.runId,
+      attemptId: attempt.attemptId,
+      requestId: "client-follow-up-1",
+      text: "queued one",
+    });
+    await coordinator.queueFollowUp({
+      runId: run.runId,
+      attemptId: attempt.attemptId,
+      requestId: "client-follow-up-2",
+      text: "queued two",
+    });
+
+    const stopped = coordinator.stopTurn({
+      runId: run.runId,
+      attemptId: attempt.attemptId,
+      requestId: "client-stop-1",
+    });
+    strictEqual(stopped.sent, true);
+    deepStrictEqual(stopped.cleared, [
+      { requestId: "req_queue_1", text: "queued one" },
+      { requestId: "req_queue_2", text: "queued two" },
+    ]);
+    // The queue cleared before the abort rode the wire — the adapter's
+    // order, asserted on the runtime side.
+    const stopIndex = session.calls.findIndex(([kind]) => kind === "stopTurn");
+    ok(stopIndex !== -1);
+    strictEqual(session.calls.length, stopIndex + 1);
+
+    // The stop's ledger evidence names exactly what was cleared with it —
+    // work that will never deliver is visible as never delivered.
+    const stopEvent = store
+      .readEvents({ runId: run.runId, afterCursor: 0 })
+      .events.map(({ event }) => event)
+      .filter((event) => event.type === "operational" && event.kind === "conversation.turn-stopped")
+      .at(-1);
+    deepStrictEqual(stopEvent.data.cleared, [
+      { requestId: "req_queue_1", text: "queued one" },
+      { requestId: "req_queue_2", text: "queued two" },
+    ]);
+
+    // The floor is free again: the next prompt dispatches.
+    const next = await coordinator.sendPrompt({
+      runId: run.runId,
+      attemptId: attempt.attemptId,
+      requestId: "client-prompt-2",
+      text: "second",
+    });
+    strictEqual(next.sent, true);
+
+    // The stop's request id is spent: a replayed stop answers from the
+    // record and never aborts the new turn.
+    const replay = coordinator.stopTurn({
+      runId: run.runId,
+      attemptId: attempt.attemptId,
+      requestId: "client-stop-1",
+    });
+    strictEqual(replay.sent, false);
+    strictEqual(session.calls.filter(([kind]) => kind === "stopTurn").length, 1);
+  });
+});
+
+test("dialogs answer typed and the conversation state surfaces them as questions", async () => {
+  await withLiveConversation(async ({ coordinator, session, store, run, attempt }) => {
+    // The runtime asks a typed question: a select dialog pending.
+    const dialog = {
+      dialogId: "dialog_1",
+      kind: "select",
+      request: { type: "select", options: ["a", "b"] },
+    };
+    session.pendingDialogs = () => [dialog];
+
+    const state = coordinator.conversationState({ runId: run.runId, attemptId: attempt.attemptId });
+    strictEqual(state.available, true);
+    strictEqual(state.sessionState, "ready");
+    deepStrictEqual(state.pendingDialogs, [dialog]);
+
+    // The Developer's answer is evidence: what was asked, what was answered.
+    const answered = coordinator.answerDialog({
+      runId: run.runId,
+      attemptId: attempt.attemptId,
+      requestId: "client-answer-1",
+      dialogId: "dialog_1",
+      value: "a",
+    });
+    strictEqual(answered.sent, true);
+    deepStrictEqual(session.calls.at(-1), ["answerDialog", { dialogId: "dialog_1", value: "a" }]);
+    const answeredEvent = store
+      .readEvents({ runId: run.runId, afterCursor: 0 })
+      .events.map(({ event }) => event)
+      .filter(
+        (event) => event.type === "operational" && event.kind === "conversation.dialog-answered",
+      )
+      .at(-1);
+    deepStrictEqual(answeredEvent.data, {
+      attemptId: attempt.attemptId,
+      requestId: "client-answer-1",
+      dialogId: "dialog_1",
+      value: "a",
+    });
+
+    // A cancelled dialog is a typed cancellation, never a default answer.
+    session.pendingDialogs = () => [];
+    const cancelled = coordinator.cancelDialog({
+      runId: run.runId,
+      attemptId: attempt.attemptId,
+      requestId: "client-cancel-1",
+      dialogId: "dialog_2",
+    });
+    strictEqual(cancelled.sent, true);
+    deepStrictEqual(session.calls.at(-1), ["cancelDialog", { dialogId: "dialog_2" }]);
+
+    // Both deduplicate on their request ids.
+    strictEqual(
+      coordinator.answerDialog({
+        runId: run.runId,
+        attemptId: attempt.attemptId,
+        requestId: "client-answer-1",
+        dialogId: "dialog_1",
+        value: "a",
+      }).sent,
+      false,
+    );
+  });
+});
+
+test("unsupported widgets surface as the capability list, never a silent drop", async () => {
+  await withLiveConversation(async ({ coordinator, session, run, attempt }) => {
+    session.unsupportedCapabilities = () => [
+      {
+        capability: "custom-widget",
+        count: 2,
+        frame: { type: "extension_widget", widget: "custom-widget" },
+      },
+    ];
+    const state = coordinator.conversationState({ runId: run.runId, attemptId: attempt.attemptId });
+    deepStrictEqual(state.unsupportedCapabilities, [
+      {
+        capability: "custom-widget",
+        count: 2,
+        frame: { type: "extension_widget", widget: "custom-widget" },
+      },
+    ]);
+  });
+});
+
+const settle = async () => {
+  for (let i = 0; i < 5; i += 1) await new Promise((resolve) => setImmediate(resolve));
+};
+
+test("a two-turn conversation streams text and tool frames as durable evidence, in context", async () => {
+  await withLiveConversation(async ({ coordinator, session, store, run, attempt }) => {
+    // Turn one: the prompt, the runtime's ack, streamed text and a tool
+    // activity frame, then settlement.
+    await coordinator.sendPrompt({
+      runId: run.runId,
+      attemptId: attempt.attemptId,
+      requestId: "client-prompt-1",
+      text: "first question",
+    });
+    session.emit({ type: "accepted", id: "req_1" });
+    session.emit({ type: "message_update", text: "reading the issue…" });
+    session.emit({ type: "tool_execution", tool: "read_file", input: { path: "CONTEXT.md" } });
+    session.emit({ type: "message_update", text: "the issue asks for X" });
+    session.turns[0].complete();
+
+    // Turn two on the same session: context carries.
+    await coordinator.sendPrompt({
+      runId: run.runId,
+      attemptId: attempt.attemptId,
+      requestId: "client-prompt-2",
+      text: "follow-up question",
+    });
+    session.emit({ type: "accepted", id: "req_2" });
+    session.emit({ type: "message_update", text: "answering from what I read before" });
+    session.turns[1].complete();
+    await settle();
+
+    // Every runtime frame is durable conversation evidence, in order, each
+    // wrapped in the ledger's own envelope.
+    const conversation = store
+      .readEvents({ runId: run.runId, afterCursor: 0 })
+      .events.filter(({ event }) => event.type === "conversation")
+      .map(({ event }) => event);
+    strictEqual(conversation.length, 6);
+    for (const event of conversation) {
+      strictEqual(event.attemptId, attempt.attemptId);
+      ok(event.session.cursor >= 1);
+      strictEqual(event.session.envelope, "pi-managed/v1");
+    }
+    deepStrictEqual(
+      conversation.map(({ session: { event } }) => event.type),
+      [
+        "accepted",
+        "message_update",
+        "tool_execution",
+        "message_update",
+        "accepted",
+        "message_update",
+      ],
+    );
+
+    // The run section serves the same conversation — a reconnecting viewer
+    // gets both turns back, never a re-send of either prompt.
+    const section = await coordinator.runSection({ runId: run.runId, afterCursor: 0 });
+    deepStrictEqual(section.events.filter(({ event }) => event.type === "conversation").length, 6);
+    strictEqual(section.run.runId, run.runId);
+    // One session carried both turns.
+    strictEqual(session.calls.filter(([kind]) => kind === "sendPrompt").length, 2);
+  });
+});
+
+test("the run for an issue is findable for the surface's reconnect-after-refresh", async () => {
+  await withLiveConversation(async ({ coordinator, store, run }) => {
+    const found = await coordinator.runForIssue({ issueNumber: 230 });
+    strictEqual(found.runId, run.runId);
+    // No run for an untouched issue is an honest null, not an error.
+    strictEqual(await coordinator.runForIssue({ issueNumber: 231 }), null);
+
+    // An unknown issue number is a typed invalid request, like the manifest.
+    await rejects(
+      () => coordinator.runForIssue({ issueNumber: -1 }),
+      (error) => error.code === "invalid_request",
+    );
+    ok(store !== null);
+  });
+});

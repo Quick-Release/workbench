@@ -77,7 +77,11 @@ const projectAttempt = (attempt) => ({
 // The run section and the observation read speak the full snapshot
 // vocabulary — everything but the attempt's result column, which is
 // lifecycle evidence the ledger's operational events carry in its own time.
-const projectAttemptSnapshot = ({ result, ...snapshot }) => snapshot;
+const projectAttemptSnapshot = (attempt) => {
+  const snapshot = { ...attempt };
+  delete snapshot.result;
+  return snapshot;
+};
 
 const validateStart = ({ issueNumber, requestId, revision }) => {
   if (!Number.isInteger(issueNumber) || issueNumber <= 0)
@@ -172,6 +176,125 @@ export const createClarificationCoordinator = ({
     changeCounter += 1;
     wakeRun(runId);
     return envelope;
+  };
+
+  // The live managed sessions this process started: attemptId → the session
+  // handle and the lease token the start held. Runtime state is in-memory —
+  // the durable record is the ledger — so a dev-server restart finds the
+  // record intact and the conversation honestly unavailable; re-driving it
+  // is recovery's explicit work, never a silent re-dispatch.
+  const liveSessions = new Map();
+
+  // The conversation commands' shared gate: validate the request, find the
+  // visible attempt, refuse what this process cannot drive, prove the
+  // controller lease is still current, deduplicate on the client request id
+  // from the durable ledger, and only then let the caller touch the
+  // runtime. `dispatch` performs the side effect; it receives the session
+  // and a `record` callback that appends the command's operational event
+  // under the live lease.
+  const conversationCommand = ({ runId, attemptId, requestId, kind }, dispatch) => {
+    if (typeof runId !== "string" || runId === "")
+      throw clarificationError("invalid_request", "a conversation command names a run id");
+    if (typeof attemptId !== "string" || attemptId === "")
+      throw clarificationError("invalid_request", "a conversation command names an attempt id");
+    if (typeof requestId !== "string" || requestId.trim() === "")
+      throw clarificationError("invalid_request", "a conversation command carries a request id");
+    const run = store.getRun(runId);
+    if (!run)
+      throw clarificationError(
+        "run_not_found",
+        `no clarification run "${runId}" is visible to this host repo`,
+      );
+    const attempt = store.getAttempt(attemptId);
+    if (attempt === null || attempt.runId !== runId)
+      throw clarificationError(
+        "attempt_not_found",
+        `no attempt "${attemptId}" is visible on run "${runId}" in this host repo`,
+      );
+
+    // A client request id names one submission: the ledger answers a
+    // replayed command from the record, and the runtime never sees it
+    // twice — the reconnect fence for every command, prompts included.
+    const ledger = store.readEvents({ runId, afterCursor: 0 });
+    const replayed = ledger.events.some(
+      ({ event }) =>
+        event.type === "operational" && event.kind === kind && event.data?.requestId === requestId,
+    );
+    if (replayed) return { sent: false, requestId };
+
+    const live = liveSessions.get(attemptId);
+    if (live === undefined)
+      throw clarificationError(
+        "conversation_unavailable",
+        `the managed session for attempt "${attemptId}" is not live on this install — the record stays inspectable, and the conversation continues through a new attempt`,
+      );
+    // Every command is a controller act: the held lease must still be
+    // current. An expired lease refuses the command typed — reconciliation
+    // is the way back, never a silent adoption.
+    store.renewLease({ runId, token: live.leaseToken });
+    return dispatch(
+      live.session,
+      (data) =>
+        store.appendEvent({
+          runId,
+          kind,
+          data: { attemptId, requestId, ...data },
+          leaseToken: live.leaseToken,
+        }),
+      live.leaseToken,
+    );
+  };
+
+  // The turn-shaped commands' shared body — prompt, steer, queue: durable
+  // intent first, the runtime dispatch second, a synchronous refusal
+  // recorded as evidence and rethrown typed. Acceptance and settlement
+  // stay the runtime's signals; the stream carries their evidence, and
+  // their rejections are never unhandled crashes.
+  const dispatchTurnCommand = ({ runId, attemptId, requestId, kind, data }, sessionCall) =>
+    conversationCommand({ runId, attemptId, requestId, kind }, (session, record, leaseToken) => {
+      record(data);
+      try {
+        const result = sessionCall(session);
+        result?.accepted?.catch(() => {});
+        result?.settled?.catch(() => {});
+        return { sent: true, requestId };
+      } catch (error) {
+        store.appendEvent({
+          runId,
+          kind: `${kind}-refused`,
+          data: { attemptId, requestId, code: error?.code ?? "unknown" },
+          leaseToken,
+        });
+        throw clarificationError(error?.code ?? "command_refused", String(error?.message ?? error));
+      }
+    });
+
+  // The evidence pump: the runtime's frames become durable conversation
+  // events as they land — ledger first, viewer fan-out second, so what a
+  // live viewer sees is always already evidence. One pump per live attempt,
+  // from the start of the retained buffer; it ends when the session's
+  // stream ends. A session whose port cannot stream records everything
+  // else; its transcript stays readable from the runtime's own history.
+  const pumpAttempt = ({ runId, attemptId, session }) => {
+    if (typeof session?.subscribe !== "function") return;
+    void (async () => {
+      try {
+        for await (const frame of session.subscribe(0)) {
+          if (frame === null || typeof frame !== "object" || Array.isArray(frame)) continue;
+          publishEvent({
+            runId,
+            event: {
+              type: "conversation",
+              attemptId,
+              session: { cursor: frame.cursor, envelope: frame.envelope, event: frame.event },
+            },
+          });
+        }
+      } catch {
+        // The pump dies with its stream; the ledger keeps what landed. The
+        // runtime's end is lifecycle evidence, published by whoever saw it.
+      }
+    })();
   };
 
   return {
@@ -296,7 +419,15 @@ export const createClarificationCoordinator = ({
         // move. A fencing refusal while recording that evidence surfaces
         // typed: a stale writer records nothing quietly.
         try {
-          await sessions.start({ runId: run.runId, attemptId: attempt.attemptId, issueNumber });
+          const session = await sessions.start({
+            runId: run.runId,
+            attemptId: attempt.attemptId,
+            issueNumber,
+          });
+          // The one live handle: commands drive this session, fenced by the
+          // lease the start holds — and its frames pump into the ledger.
+          liveSessions.set(attempt.attemptId, { session, leaseToken: token });
+          pumpAttempt({ runId: run.runId, attemptId: attempt.attemptId, session });
         } catch (error) {
           const code = error?.code ?? "unknown";
           store.recordAttemptResult({
@@ -353,6 +484,20 @@ export const createClarificationCoordinator = ({
       });
     },
 
+    // The run for one issue, latest first: how the issue panel finds the
+    // conversation again after a refresh. No run is an honest null — the
+    // panel then renders the manifest, never a fabricated attempt.
+    async runForIssue({ issueNumber }) {
+      if (!Number.isInteger(issueNumber) || issueNumber <= 0)
+        throw clarificationError("invalid_request", "an issue is a positive integer");
+      const issueId = String(issueNumber);
+      const runs = store
+        .listRuns()
+        .filter((run) => run.issueId === issueId)
+        .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+      return runs[0] ?? null;
+    },
+
     // The run section's read: lifecycle, attempts, the reconnect snapshot
     // baseline, and the operational event ledger after the viewer's cursor
     // — the same envelope vocabulary the live stream carries, all from the
@@ -384,6 +529,177 @@ export const createClarificationCoordinator = ({
         events: ledger.events,
         ...(ledger.gap ? { gap: ledger.gap } : {}),
       };
+    },
+
+    // The Developer's explicit prompt: durable evidence first, the runtime
+    // dispatch second, acceptance and settlement staying the runtime's own
+    // signals. A prompt while a turn is live is a typed refusal — the
+    // explicit ways to hold work are steer and queue, never a hidden queue.
+    sendPrompt({ runId, attemptId, requestId, text }) {
+      if (typeof text !== "string" || text.trim() === "")
+        throw clarificationError("invalid_request", "a prompt needs a non-empty text");
+      return dispatchTurnCommand(
+        { runId, attemptId, requestId, kind: "conversation.prompt", data: { text } },
+        (session) => session.sendPrompt(text),
+      );
+    },
+
+    // Steer rides the live turn — explicit guidance, never an implicit
+    // interruption and never a second prompt.
+    steer({ runId, attemptId, requestId, text }) {
+      if (typeof text !== "string" || text.trim() === "")
+        throw clarificationError("invalid_request", "a steer needs a non-empty text");
+      return dispatchTurnCommand(
+        { runId, attemptId, requestId, kind: "conversation.steer", data: { text } },
+        (session) => session.steer(text),
+      );
+    },
+
+    // A follow-up queues behind the live turn — explicit, bounded, FIFO.
+    queueFollowUp({ runId, attemptId, requestId, text }) {
+      if (typeof text !== "string" || text.trim() === "")
+        throw clarificationError("invalid_request", "a follow-up needs a non-empty text");
+      return dispatchTurnCommand(
+        { runId, attemptId, requestId, kind: "conversation.follow-up-queued", data: { text } },
+        (session) => session.queueFollowUp(text),
+      );
+    },
+
+    // Drops every queued follow-up — they will never deliver — and the
+    // runtime is told to clear whatever it holds queued too.
+    clearQueue({ runId, attemptId, requestId }) {
+      return conversationCommand(
+        { runId, attemptId, requestId, kind: "conversation.queue-cleared" },
+        (session, record, leaseToken) => {
+          try {
+            const { cleared } = session.clearQueue();
+            record({ cleared });
+            return { sent: true, requestId, cleared };
+          } catch (error) {
+            store.appendEvent({
+              runId,
+              kind: "conversation.queue-cleared-refused",
+              data: { attemptId, requestId, code: error?.code ?? "unknown" },
+              leaseToken,
+            });
+            throw clarificationError(
+              error?.code ?? "command_refused",
+              String(error?.message ?? error),
+            );
+          }
+        },
+      );
+    },
+
+    // Stop-turn: the queue clears FIRST, then the live turn aborts — the
+    // stop's evidence names exactly which held work died with it.
+    stopTurn({ runId, attemptId, requestId }) {
+      return conversationCommand(
+        { runId, attemptId, requestId, kind: "conversation.turn-stopped" },
+        (session, record, leaseToken) => {
+          try {
+            const { cleared } = session.stopTurn();
+            record({ cleared });
+            return { sent: true, requestId, cleared };
+          } catch (error) {
+            store.appendEvent({
+              runId,
+              kind: "conversation.turn-stopped-refused",
+              data: { attemptId, requestId, code: error?.code ?? "unknown" },
+              leaseToken,
+            });
+            throw clarificationError(
+              error?.code ?? "command_refused",
+              String(error?.message ?? error),
+            );
+          }
+        },
+      );
+    },
+
+    // The conversation's live state read: the session's own word for where
+    // it stands, its typed pending questions, and the unsupported
+    // capabilities it surfaced. Open like every read — no lease — and
+    // honest about a session this process cannot drive.
+    conversationState({ runId, attemptId }) {
+      if (typeof runId !== "string" || runId === "")
+        throw clarificationError("invalid_request", "a conversation state read names a run id");
+      if (typeof attemptId !== "string" || attemptId === "")
+        throw clarificationError(
+          "invalid_request",
+          "a conversation state read names an attempt id",
+        );
+      const attempt = store.getAttempt(attemptId);
+      if (attempt === null || attempt.runId !== runId)
+        throw clarificationError(
+          "attempt_not_found",
+          `no attempt "${attemptId}" is visible on run "${runId}" in this host repo`,
+        );
+      const live = liveSessions.get(attemptId);
+      if (live === undefined) return { available: false };
+      return {
+        available: true,
+        sessionState: live.session.state?.() ?? null,
+        pendingDialogs: live.session.pendingDialogs?.() ?? [],
+        unsupportedCapabilities: live.session.unsupportedCapabilities?.() ?? [],
+      };
+    },
+
+    // Answers a typed dialog — the Developer's explicit response, recorded
+    // with the value the runtime receives.
+    answerDialog({ runId, attemptId, requestId, dialogId, value }) {
+      if (typeof dialogId !== "string" || dialogId === "")
+        throw clarificationError("invalid_request", "a dialog answer names the dialog");
+      if (value === undefined)
+        throw clarificationError("invalid_request", "a dialog answer carries a value");
+      return conversationCommand(
+        { runId, attemptId, requestId, kind: "conversation.dialog-answered" },
+        (session, record, leaseToken) => {
+          try {
+            session.answerDialog({ dialogId, value });
+            record({ dialogId, value });
+            return { sent: true, requestId };
+          } catch (error) {
+            store.appendEvent({
+              runId,
+              kind: "conversation.dialog-answered-refused",
+              data: { attemptId, requestId, dialogId, code: error?.code ?? "unknown" },
+              leaseToken,
+            });
+            throw clarificationError(
+              error?.code ?? "command_refused",
+              String(error?.message ?? error),
+            );
+          }
+        },
+      );
+    },
+
+    // Cancels a typed dialog — a typed cancellation, never a default.
+    cancelDialog({ runId, attemptId, requestId, dialogId }) {
+      if (typeof dialogId !== "string" || dialogId === "")
+        throw clarificationError("invalid_request", "a dialog cancellation names the dialog");
+      return conversationCommand(
+        { runId, attemptId, requestId, kind: "conversation.dialog-cancelled" },
+        (session, record, leaseToken) => {
+          try {
+            session.cancelDialog({ dialogId });
+            record({ dialogId });
+            return { sent: true, requestId };
+          } catch (error) {
+            store.appendEvent({
+              runId,
+              kind: "conversation.dialog-cancelled-refused",
+              data: { attemptId, requestId, dialogId, code: error?.code ?? "unknown" },
+              leaseToken,
+            });
+            throw clarificationError(
+              error?.code ?? "command_refused",
+              String(error?.message ?? error),
+            );
+          }
+        },
+      );
     },
 
     // The reconnect read: the run's snapshot plus the events after the

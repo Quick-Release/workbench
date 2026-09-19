@@ -554,6 +554,8 @@ export type OverviewData = {
 // schema import is type-only — no runtime cycle, no schema code in the bundle.
 import type { Schema } from "effect";
 import type {
+  ClarificationConversationCommandResultSchema,
+  ClarificationConversationStateSchema,
   ClarificationManifestResultSchema,
   ClarificationRunResultSchema,
   ClarificationStartResultSchema,
@@ -619,6 +621,22 @@ export type ClarificationLifecycleState = (typeof clarificationLifecycleStates)[
 // One operational event names its subject: the run, or one attempt on it.
 export const clarificationEventScopes = ["run", "attempt"] as const;
 
+// The conversation commands (spec #221, ticket #232): the Developer's
+// explicit acts on one live attempt. Steer and queue are distinct kinds —
+// the seam refuses to choose for the Developer.
+export const clarificationConversationCommands = [
+  "prompt",
+  "steer",
+  "queue",
+  "clear-queue",
+  "stop-turn",
+  "answer-dialog",
+  "cancel-dialog",
+] as const;
+
+export type ClarificationConversationCommandKind =
+  (typeof clarificationConversationCommands)[number];
+
 // The versioned envelope the run-level observation stream travels in. The
 // managed session's own envelope (pi-managed/v1) travels nested inside
 // conversation events and never replaces this one.
@@ -640,3 +658,11 @@ export type ClarificationManifestResult = Schema.Schema.Type<
 export type ClarificationStartResult = Schema.Schema.Type<typeof ClarificationStartResultSchema>;
 
 export type ClarificationRunResult = Schema.Schema.Type<typeof ClarificationRunResultSchema>;
+
+export type ClarificationConversationCommandResult = Schema.Schema.Type<
+  typeof ClarificationConversationCommandResultSchema
+>;
+
+export type ClarificationConversationState = Schema.Schema.Type<
+  typeof ClarificationConversationStateSchema
+>;
