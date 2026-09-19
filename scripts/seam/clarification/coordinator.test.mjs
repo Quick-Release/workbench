@@ -1487,7 +1487,37 @@ test("a two-turn conversation streams text and tool frames as durable evidence, 
   });
 });
 
-test("the run for an issue is findable for the surface's reconnect-after-refresh", async () => {
+test("a dispatch the runtime never accepts lands in the ledger as failure evidence", async () => {
+  await withLiveConversation(async ({ coordinator, session, store, run, attempt }) => {
+    await coordinator.sendPrompt({
+      runId: run.runId,
+      attemptId: attempt.attemptId,
+      requestId: "client-prompt-1",
+      text: "first",
+    });
+
+    // The runtime takes the frame but rejects the ack: the ledger already
+    // holds the intent, so the uncertainty becomes typed evidence too.
+    session.turns[0].accept.reject(Object.assign(new Error("provider quota"), { code: "quota" }));
+    await settle();
+
+    const failure = store
+      .readEvents({ runId: run.runId, afterCursor: 0 })
+      .events.map(({ event }) => event)
+      .filter(
+        (event) => event.type === "operational" && event.kind === "conversation.prompt-failed",
+      )
+      .at(-1);
+    ok(failure !== undefined);
+    deepStrictEqual(failure.data, {
+      attemptId: attempt.attemptId,
+      requestId: "client-prompt-1",
+      code: "quota",
+    });
+  });
+});
+
+test("the run for an issue is findable for the surface's reconnect", async () => {
   await withLiveConversation(async ({ coordinator, store, run }) => {
     const found = await coordinator.runForIssue({ issueNumber: 230 });
     strictEqual(found.runId, run.runId);

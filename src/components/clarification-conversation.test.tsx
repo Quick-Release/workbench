@@ -135,6 +135,14 @@ describe("the clarification conversation surface", () => {
           event: { type: "message_update", text: "answering from what I read before" },
         },
       }),
+      // A steer the runtime refused after the intent landed: the stream
+      // must show the refusal, never just the ask.
+      envelope(7, {
+        type: "operational",
+        kind: "conversation.steer-refused",
+        data: { attemptId: "attempt_1", requestId: "s9", code: "turn_not_in_flight" },
+        at: "t",
+      }),
     ];
     const fetchMock = vi.fn(async (url: string, _init?: RequestInit) => {
       if (url.includes("/run?issue=")) return ok(runSection(events))();
@@ -151,6 +159,7 @@ describe("the clarification conversation surface", () => {
     expect(stream?.textContent).toContain("tool · read_file");
     expect(stream?.textContent).toContain("you · second question");
     expect(stream?.textContent).toContain("answering from what I read before");
+    expect(stream?.textContent).toContain("refused · steer (turn_not_in_flight)");
     expect(container.textContent).toContain("provider · openai-codex-oauth");
     expect(container.textContent).toContain("destination · https://api.openai.com");
 

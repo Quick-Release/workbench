@@ -15,9 +15,10 @@ import type {
 // The managed conversation surface's client (spec #221, ticket #232): one
 // hook per issue panel. It finds the issue's run (a 404 is the honest
 // no-run answer, not a failure), reads the run section plus the live
-// conversation state, subscribes to the attempt's SSE stream so new ledger
-// events refetch, and POSTs the Developer's commands with fresh request ids
-// so a retry of a submission can never double-send a prompt.
+// conversation state, and subscribes to the attempt's SSE stream so new
+// ledger events reload the reads. The Developer's commands travel with
+// caller-chosen request ids so a retried submission can never double-send
+// an accepted prompt.
 
 export type ClarificationCommandError = { error: string; message: string };
 
@@ -100,13 +101,17 @@ export const useClarificationConversation = (issueNumber: number | null) => {
     };
   }, [streamAttempt, load]);
 
+  // The caller names the request id — one id per user submission, kept
+  // stable across retries until the seam definitively answers. That is the
+  // reconnect fence's other half: the ledger dedups the id, so a retry of
+  // an ambiguous submission can never double-send an accepted prompt.
   const sendCommand = useCallback(
     async (
       runId: string,
       attemptId: string,
       command: ClarificationConversationCommand,
+      requestId: string,
     ): Promise<ClarificationConversationCommandResult | ClarificationCommandError> => {
-      const requestId = globalThis.crypto.randomUUID();
       try {
         const response = await fetch(
           `/api/clarification/runs/${runId}/attempts/${attemptId}/commands`,
@@ -132,5 +137,5 @@ export const useClarificationConversation = (issueNumber: number | null) => {
     [],
   );
 
-  return { section, conversationState, absent, failure, refresh: load, sendCommand };
+  return { section, conversationState, absent, failure, reload: load, sendCommand };
 };

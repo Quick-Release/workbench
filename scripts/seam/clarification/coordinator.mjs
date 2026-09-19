@@ -182,7 +182,7 @@ export const createClarificationCoordinator = ({
   // handle and the lease token the start held. Runtime state is in-memory —
   // the durable record is the ledger — so a dev-server restart finds the
   // record intact and the conversation honestly unavailable; re-driving it
-  // is recovery's explicit work, never a silent re-dispatch.
+  // is reconciliation's explicit work, never a silent re-dispatch.
   const liveSessions = new Map();
 
   // The conversation commands' shared gate: validate the request, find the
@@ -247,15 +247,29 @@ export const createClarificationCoordinator = ({
 
   // The turn-shaped commands' shared body — prompt, steer, queue: durable
   // intent first, the runtime dispatch second, a synchronous refusal
-  // recorded as evidence and rethrown typed. Acceptance and settlement
-  // stay the runtime's signals; the stream carries their evidence, and
-  // their rejections are never unhandled crashes.
+  // recorded as evidence and rethrown typed. Acceptance and settlement stay
+  // the runtime's signals — and when acceptance fails after the ledger
+  // already holds the intent, that uncertainty is evidence too: a typed
+  // failure event lands in the ledger and wakes the viewers, so nothing
+  // post-dispatch is ever swallowed silently.
   const dispatchTurnCommand = ({ runId, attemptId, requestId, kind, data }, sessionCall) =>
     conversationCommand({ runId, attemptId, requestId, kind }, (session, record, leaseToken) => {
       record(data);
       try {
         const result = sessionCall(session);
-        result?.accepted?.catch(() => {});
+        result?.accepted?.catch((error) => {
+          publishEvent({
+            runId,
+            event: {
+              type: "operational",
+              kind: `${kind}-failed`,
+              data: { attemptId, requestId, code: error?.code ?? "unknown" },
+              at: clock(),
+            },
+          });
+        });
+        // The settlement's own rejection is the same outcome the runtime's
+        // frames will show; the acceptance carries the typed evidence.
         result?.settled?.catch(() => {});
         return { sent: true, requestId };
       } catch (error) {
@@ -269,12 +283,41 @@ export const createClarificationCoordinator = ({
       }
     });
 
+  // The queue- and dialog-shaped commands' shared body: dispatch first, then
+  // record what the runtime confirmed; a synchronous refusal is recorded as
+  // evidence and rethrown typed.
+  const dispatchRecordedCommand = (
+    { runId, attemptId, requestId, kind, refusedData = {} },
+    sessionCall,
+    confirmedData,
+  ) =>
+    conversationCommand({ runId, attemptId, requestId, kind }, (session, record, leaseToken) => {
+      try {
+        const result = sessionCall(session);
+        record(confirmedData(result));
+        return {
+          sent: true,
+          requestId,
+          ...(result.cleared !== undefined ? { cleared: result.cleared } : {}),
+        };
+      } catch (error) {
+        store.appendEvent({
+          runId,
+          kind: `${kind}-refused`,
+          data: { attemptId, requestId, ...refusedData, code: error?.code ?? "unknown" },
+          leaseToken,
+        });
+        throw clarificationError(error?.code ?? "command_refused", String(error?.message ?? error));
+      }
+    });
+
   // The evidence pump: the runtime's frames become durable conversation
   // events as they land — ledger first, viewer fan-out second, so what a
   // live viewer sees is always already evidence. One pump per live attempt,
   // from the start of the retained buffer; it ends when the session's
   // stream ends. A session whose port cannot stream records everything
-  // else; its transcript stays readable from the runtime's own history.
+  // else; the runtime's own history still reads back. A pump that dies with
+  // its stream records that too — the silence would claim a live runtime.
   const pumpAttempt = ({ runId, attemptId, session }) => {
     if (typeof session?.subscribe !== "function") return;
     void (async () => {
@@ -290,9 +333,16 @@ export const createClarificationCoordinator = ({
             },
           });
         }
-      } catch {
-        // The pump dies with its stream; the ledger keeps what landed. The
-        // runtime's end is lifecycle evidence, published by whoever saw it.
+      } catch (error) {
+        publishEvent({
+          runId,
+          event: {
+            type: "operational",
+            kind: "conversation.stream-failed",
+            data: { attemptId, code: error?.code ?? "unknown" },
+            at: clock(),
+          },
+        });
       }
     })();
   };
@@ -568,52 +618,20 @@ export const createClarificationCoordinator = ({
     // Drops every queued follow-up — they will never deliver — and the
     // runtime is told to clear whatever it holds queued too.
     clearQueue({ runId, attemptId, requestId }) {
-      return conversationCommand(
+      return dispatchRecordedCommand(
         { runId, attemptId, requestId, kind: "conversation.queue-cleared" },
-        (session, record, leaseToken) => {
-          try {
-            const { cleared } = session.clearQueue();
-            record({ cleared });
-            return { sent: true, requestId, cleared };
-          } catch (error) {
-            store.appendEvent({
-              runId,
-              kind: "conversation.queue-cleared-refused",
-              data: { attemptId, requestId, code: error?.code ?? "unknown" },
-              leaseToken,
-            });
-            throw clarificationError(
-              error?.code ?? "command_refused",
-              String(error?.message ?? error),
-            );
-          }
-        },
+        (session) => session.clearQueue(),
+        (result) => ({ cleared: result.cleared }),
       );
     },
 
     // Stop-turn: the queue clears FIRST, then the live turn aborts — the
     // stop's evidence names exactly which held work died with it.
     stopTurn({ runId, attemptId, requestId }) {
-      return conversationCommand(
+      return dispatchRecordedCommand(
         { runId, attemptId, requestId, kind: "conversation.turn-stopped" },
-        (session, record, leaseToken) => {
-          try {
-            const { cleared } = session.stopTurn();
-            record({ cleared });
-            return { sent: true, requestId, cleared };
-          } catch (error) {
-            store.appendEvent({
-              runId,
-              kind: "conversation.turn-stopped-refused",
-              data: { attemptId, requestId, code: error?.code ?? "unknown" },
-              leaseToken,
-            });
-            throw clarificationError(
-              error?.code ?? "command_refused",
-              String(error?.message ?? error),
-            );
-          }
-        },
+        (session) => session.stopTurn(),
+        (result) => ({ cleared: result.cleared }),
       );
     },
 
@@ -652,26 +670,16 @@ export const createClarificationCoordinator = ({
         throw clarificationError("invalid_request", "a dialog answer names the dialog");
       if (value === undefined)
         throw clarificationError("invalid_request", "a dialog answer carries a value");
-      return conversationCommand(
-        { runId, attemptId, requestId, kind: "conversation.dialog-answered" },
-        (session, record, leaseToken) => {
-          try {
-            session.answerDialog({ dialogId, value });
-            record({ dialogId, value });
-            return { sent: true, requestId };
-          } catch (error) {
-            store.appendEvent({
-              runId,
-              kind: "conversation.dialog-answered-refused",
-              data: { attemptId, requestId, dialogId, code: error?.code ?? "unknown" },
-              leaseToken,
-            });
-            throw clarificationError(
-              error?.code ?? "command_refused",
-              String(error?.message ?? error),
-            );
-          }
+      return dispatchRecordedCommand(
+        {
+          runId,
+          attemptId,
+          requestId,
+          kind: "conversation.dialog-answered",
+          refusedData: { dialogId },
         },
+        (session) => session.answerDialog({ dialogId, value }),
+        () => ({ dialogId, value }),
       );
     },
 
@@ -679,26 +687,16 @@ export const createClarificationCoordinator = ({
     cancelDialog({ runId, attemptId, requestId, dialogId }) {
       if (typeof dialogId !== "string" || dialogId === "")
         throw clarificationError("invalid_request", "a dialog cancellation names the dialog");
-      return conversationCommand(
-        { runId, attemptId, requestId, kind: "conversation.dialog-cancelled" },
-        (session, record, leaseToken) => {
-          try {
-            session.cancelDialog({ dialogId });
-            record({ dialogId });
-            return { sent: true, requestId };
-          } catch (error) {
-            store.appendEvent({
-              runId,
-              kind: "conversation.dialog-cancelled-refused",
-              data: { attemptId, requestId, dialogId, code: error?.code ?? "unknown" },
-              leaseToken,
-            });
-            throw clarificationError(
-              error?.code ?? "command_refused",
-              String(error?.message ?? error),
-            );
-          }
+      return dispatchRecordedCommand(
+        {
+          runId,
+          attemptId,
+          requestId,
+          kind: "conversation.dialog-cancelled",
+          refusedData: { dialogId },
         },
+        (session) => session.cancelDialog({ dialogId }),
+        () => ({ dialogId }),
       );
     },
 

@@ -99,6 +99,16 @@ const eventRow = (envelope: ClarificationEventEnvelope) => {
 };
 
 const conversationOperationalRow = (kind: string, data: Record<string, unknown>) => {
+  // Refusals and post-dispatch failures are rows of their own — evidence
+  // the runtime never accepted (or never settled) the work, next to the
+  // intent that says it was asked for.
+  const base = kind.slice("conversation.".length);
+  if (base.endsWith("-refused"))
+    return `refused · ${base.replace(/-refused$/, "")} (${String(data.code)})`;
+  if (base.endsWith("-failed"))
+    return `not accepted · ${base.replace(/-failed$/, "")} (${String(data.code)})`;
+  if (kind === "conversation.stream-failed")
+    return `the live stream ended unexpectedly (${String(data.code)})`;
   if (kind === "conversation.prompt") return `you · ${String(data.text)}`;
   if (kind === "conversation.steer") return `steer · ${String(data.text)}`;
   if (kind === "conversation.follow-up-queued") return `queued · ${String(data.text)}`;
@@ -187,11 +197,16 @@ const DialogAnswer = ({
 };
 
 export const ClarificationConversation = ({ issueNumber }: { issueNumber: number }) => {
-  const { section, conversationState, absent, failure, refresh, sendCommand } =
+  const { section, conversationState, absent, failure, reload, sendCommand } =
     useClarificationConversation(issueNumber);
   const [draft, setDraft] = useState("");
   const [confirmingStop, setConfirmingStop] = useState(false);
   const [commandError, setCommandError] = useState<string | null>(null);
+  // One request id per user submission: it stays stable across retries of
+  // an ambiguous submission (the ledger dedups it, so a retry can never
+  // double-send an accepted prompt) and is spent the moment the seam
+  // definitively answers.
+  const [submissionId, setSubmissionId] = useState(() => globalThis.crypto.randomUUID());
 
   if (absent) return null;
   if (!section)
@@ -203,7 +218,6 @@ export const ClarificationConversation = ({ issueNumber }: { issueNumber: number
 
   const attempt =
     section.attempts.find((candidate) => candidate.state !== "terminal") ?? section.attempts[0];
-  const run = section;
   const events: Ledger = section.events;
   const inFlight = turnInFlight(events);
   const queue = pendingQueue(events);
@@ -212,6 +226,7 @@ export const ClarificationConversation = ({ issueNumber }: { issueNumber: number
   const dispatchIntent = (attempt?.dispatchIntent ?? null) as {
     provider?: unknown;
     dataDestination?: unknown;
+    model?: unknown;
   } | null;
   const provider =
     typeof dispatchIntent?.provider === "string" ? dispatchIntent.provider : "unknown provider";
@@ -219,14 +234,37 @@ export const ClarificationConversation = ({ issueNumber }: { issueNumber: number
     typeof dispatchIntent?.dataDestination === "string"
       ? dispatchIntent.dataDestination
       : "unknown destination";
+  const model = typeof dispatchIntent?.model === "string" ? dispatchIntent.model : null;
+
+  const dispatch = async (
+    command:
+      | { kind: "prompt" | "steer" | "queue"; text: string }
+      | { kind: "clear-queue" }
+      | { kind: "stop-turn" }
+      | { kind: "answer-dialog"; dialogId: string; value: unknown }
+      | { kind: "cancel-dialog"; dialogId: string },
+  ): Promise<boolean> => {
+    const result = await sendCommand(section.run.runId, attempt.attemptId, command, submissionId);
+    // An unreachable seam is not an answer: the submission keeps its id, so
+    // the Developer's retry dedups against the ledger. Anything else — a
+    // typed result or a typed refusal — spends the id.
+    if ("error" in result) {
+      setCommandError(result.message);
+      if (result.error === "unreachable") return false;
+    } else {
+      setCommandError(null);
+    }
+    setSubmissionId(globalThis.crypto.randomUUID());
+    void reload();
+    return true;
+  };
 
   const submit = async (kind: "prompt" | "steer" | "queue") => {
     if (draft.trim() === "") return;
-    const result = await sendCommand(run.run.runId, attempt.attemptId, { kind, text: draft });
-    if ("error" in result) setCommandError(result.message);
-    else setCommandError(null);
-    setDraft("");
-    void refresh();
+    const answered = await dispatch({ kind, text: draft });
+    // An unanswered submission keeps its draft: the retry is the same act,
+    // under the same request id.
+    if (answered) setDraft("");
   };
 
   const act = async (
@@ -236,11 +274,8 @@ export const ClarificationConversation = ({ issueNumber }: { issueNumber: number
       | { kind: "answer-dialog"; dialogId: string; value: unknown }
       | { kind: "cancel-dialog"; dialogId: string },
   ) => {
-    const result = await sendCommand(run.run.runId, attempt.attemptId, command);
-    if ("error" in result) setCommandError(result.message);
-    else setCommandError(null);
+    await dispatch(command);
     setConfirmingStop(false);
-    void refresh();
   };
 
   const timeline = events.filter(
@@ -252,8 +287,9 @@ export const ClarificationConversation = ({ issueNumber }: { issueNumber: number
   return (
     <div data-slot="clarification-conversation" className="flex flex-col gap-2">
       <div className="flex flex-wrap items-center gap-2">
-        <Badge variant="outline">{run.run.state}</Badge>
+        <Badge variant="outline">{section.run.state}</Badge>
         <span className="text-xs text-muted-foreground">provider · {provider}</span>
+        {model && <span className="text-xs text-muted-foreground">model · {model}</span>}
         <span className="text-xs text-muted-foreground">destination · {destination}</span>
       </div>
 
@@ -268,6 +304,13 @@ export const ClarificationConversation = ({ issueNumber }: { issueNumber: number
         )}
         {events.map(eventRow)}
       </div>
+
+      {conversationState?.available === false && (
+        <p className="text-xs text-muted-foreground italic">
+          the managed session is not live on this install — the recorded evidence above stays
+          inspectable, and the conversation continues through a new attempt
+        </p>
+      )}
 
       {conversationState?.available &&
         dialogs.map((dialog) => (
