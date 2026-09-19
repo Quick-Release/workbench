@@ -26,6 +26,7 @@ import {
   decisionSources,
   decisionStatuses,
   engines,
+  noPublishingLine,
   reviewEngines,
   serviceStatuses,
   skillFlowEdgeKinds,
@@ -826,26 +827,75 @@ export type ClarificationStatusResult = Schema.Schema.Type<typeof ClarificationS
 export const parseClarificationStatusResult: (input: unknown) => ClarificationStatusResult =
   Schema.decodeUnknownSync(ClarificationStatusResultSchema, { onExcessProperty: "error" });
 
-// The clarification start request (spec #221): the first slice takes no
-// fields — the target issue, context packet, and approval manifest arrive
-// with the clarification coordinator (ticket 09 of the clarification
-// build). Until then the route exists so its denials are real, not
-// hypothetical.
-export const ClarificationStartRequestSchema = Schema.Struct({});
+// The pinned issue revision, as the pre-start manifest renders it and the
+// start presents it back: the tracker's own last-update stamp plus the
+// body hash — together, what "unchanged since the manifest" means.
+const ClarificationRevisionSchema = Schema.Struct({
+  updatedAt: Schema.String,
+  bodyHash: Schema.String,
+});
+
+// The clarification pre-start manifest (spec #221, ticket #230): the fixed
+// display contract an enabled install's issue panel renders before any
+// start — the pinned issue revision, the declared provider and data
+// destination, the read/research capability summary, the egress statement,
+// and the honest budget line. The no-publishing line is a schema literal:
+// the manifest can never be answerable without it, nor with a rewording of
+// it.
+export const ClarificationManifestResultSchema = Schema.Struct({
+  issue: Schema.Struct({
+    number: Schema.Number,
+    title: Schema.String,
+    revision: ClarificationRevisionSchema,
+  }),
+  provider: Schema.String,
+  dataDestination: Schema.String,
+  capabilitySummary: Schema.Array(Schema.String),
+  egressStatement: Schema.String,
+  budgetLine: Schema.String,
+  noPublishingLine: Schema.Literals([noPublishingLine]),
+});
+
+export type ClarificationManifestResult = Schema.Schema.Type<
+  typeof ClarificationManifestResultSchema
+>;
+
+export const parseClarificationManifestResult: (input: unknown) => ClarificationManifestResult =
+  Schema.decodeUnknownSync(ClarificationManifestResultSchema, { onExcessProperty: "error" });
+
+// The clarification start request (spec #221, ticket #230): the explicit
+// act on the visible manifest — the issue, the client request id that
+// deduplicates across reconnects, and the manifest's pinned revision the
+// Developer saw. A revision the tracker no longer reports is a typed
+// stale rejection and a re-rendered manifest. The seam's own invariants
+// hold at the seam: a positive integer issue and a non-empty request id
+// are named 400s here, not failures the coordinator discovers later.
+const PositiveInt = Schema.Int.pipe(
+  Schema.refine((n): n is number => n > 0, { message: "expected a positive integer" }),
+);
+
+export const ClarificationStartRequestSchema = Schema.Struct({
+  issue: PositiveInt,
+  requestId: Schema.NonEmptyString,
+  revision: ClarificationRevisionSchema,
+});
 
 export type ClarificationStartRequest = Schema.Schema.Type<typeof ClarificationStartRequestSchema>;
 
 export const parseClarificationStartRequest: (input: unknown) => ClarificationStartRequest =
   Schema.decodeUnknownSync(ClarificationStartRequestSchema, { onExcessProperty: "error" });
 
-// Live observation of an attempt (spec #221, ticket #231, ADR 0020): the
-// typed events the operational event ledger serves and the SSE stream
+// Live observation of an attempt (spec #221, tickets #230 + #231, ADR 0020):
+// the typed events the operational event ledger serves and the SSE stream
 // carries. A lifecycle event names a run- or attempt-level state move; a
 // conversation event carries one managed-session envelope verbatim — the
 // session's frames are evidence, preserved exactly as the adapter observed
-// them. A gap frame is the stream's explicit divider: the viewer's cursor
-// predates the ledger's retention, and the frame says which cursors are
-// gone instead of letting the viewer believe its history complete.
+// them; an operational event is one fenced controller annotation (a start,
+// a recorded attempt, a reconciliation) kept verbatim as the timeline's
+// plain-language layer. A gap frame is the stream's explicit divider: the
+// viewer's cursor predates the ledger's retention, and the frame says which
+// cursors are gone instead of letting the viewer believe its history
+// complete.
 export const ClarificationEventSchema = Schema.Union([
   Schema.Struct({
     type: Schema.Literal("lifecycle"),
@@ -862,6 +912,12 @@ export const ClarificationEventSchema = Schema.Union([
       envelope: Schema.Literals(["pi-managed/v1"]),
       event: Schema.Unknown,
     }),
+  }),
+  Schema.Struct({
+    type: Schema.Literal("operational"),
+    kind: Schema.String,
+    data: Schema.Unknown,
+    at: Schema.String,
   }),
 ]);
 
@@ -946,6 +1002,57 @@ export const parseClarificationObservationResult: (
   ClarificationObservationResultSchema,
   { onExcessProperty: "error" },
 );
+
+// The start's answer: whether this request created the attempt or was
+// answered from the durable record (a reconnect replay), over the run and
+// attempt identities. The display projection only — the dispatch intent,
+// the lease token, and the host-repo scoping stay behind the seam.
+const ClarificationRunViewSchema = Schema.Struct({
+  runId: Schema.String,
+  issueId: Schema.String,
+  state: Schema.String,
+  createdAt: Schema.String,
+  updatedAt: Schema.String,
+});
+
+const ClarificationAttemptViewSchema = Schema.Struct({
+  attemptId: Schema.String,
+  state: Schema.String,
+  createdAt: Schema.String,
+  updatedAt: Schema.String,
+});
+
+export const ClarificationStartResultSchema = Schema.Struct({
+  started: Schema.Boolean,
+  run: ClarificationRunViewSchema,
+  attempt: ClarificationAttemptViewSchema,
+});
+
+export type ClarificationStartResult = Schema.Schema.Type<typeof ClarificationStartResultSchema>;
+
+export const parseClarificationStartResult: (input: unknown) => ClarificationStartResult =
+  Schema.decodeUnknownSync(ClarificationStartResultSchema, { onExcessProperty: "error" });
+
+// The run section's read (spec #221, tickets #230 + #231): the run's
+// lifecycle, its attempts, the reconnect snapshot baseline with its saved-at
+// stamp, and the operational event ledger after the viewer's cursor — the
+// same envelope vocabulary the live stream carries, so the run section and
+// the stream are one history, never two. An expired cursor's explicit gap
+// rides through, never a silently complete history.
+export const ClarificationRunResultSchema = Schema.Struct({
+  run: ClarificationRunSnapshotSchema,
+  attempts: Schema.Array(ClarificationAttemptSnapshotSchema),
+  snapshot: Schema.optional(Schema.Unknown),
+  snapshotSavedAt: Schema.optional(Schema.String),
+  latestCursor: Schema.Number,
+  events: Schema.Array(ClarificationEventEnvelopeSchema),
+  gap: Schema.optional(ClarificationEventGapSchema),
+});
+
+export type ClarificationRunResult = Schema.Schema.Type<typeof ClarificationRunResultSchema>;
+
+export const parseClarificationRunResult: (input: unknown) => ClarificationRunResult =
+  Schema.decodeUnknownSync(ClarificationRunResultSchema, { onExcessProperty: "error" });
 
 // The run's event stream (epic #20, ticket #26; issue #40): the runner's
 // typed events as the UI consumes them — a started echo of the request (the

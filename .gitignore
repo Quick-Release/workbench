@@ -5,6 +5,11 @@ dist/
 # Alchemy local deploy state (per-stage, never committed).
 .alchemy/
 
+# Owned clarification's durable local records (spec #221): the run-record
+# store and managed-session storage are host-repo-scoped local state,
+# never committed.
+.workbench/
+
 # Project-specific configuration belongs to the host repository.
 workbench.config.json
 
