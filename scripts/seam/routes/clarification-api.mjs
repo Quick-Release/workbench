@@ -1,6 +1,9 @@
 import { resolve } from "node:path";
 
 import {
+  parseClarificationConversationCommandRequest,
+  parseClarificationConversationCommandResult,
+  parseClarificationConversationState,
   parseClarificationManifestResult,
   parseClarificationObservationResult,
   parseClarificationRunResult,
@@ -44,6 +47,9 @@ const START_ROUTE = /^\/api\/clarification\/start\/?$/;
 const RUN_ROUTE = /^\/api\/clarification\/run\/?$/;
 const OBSERVATION_ROUTE = /^\/api\/clarification\/runs\/([^/]+)\/observation\/?$/;
 const EVENTS_ROUTE = /^\/api\/clarification\/runs\/([^/]+)\/attempts\/([^/]+)\/events\/?$/;
+const COMMANDS_ROUTE = /^\/api\/clarification\/runs\/([^/]+)\/attempts\/([^/]+)\/commands\/?$/;
+const CONVERSATION_ROUTE =
+  /^\/api\/clarification\/runs\/([^/]+)\/attempts\/([^/]+)\/conversation\/?$/;
 
 export const isClarificationApiRoute = (pathname) =>
   STATUS_ROUTE.test(pathname) ||
@@ -51,7 +57,9 @@ export const isClarificationApiRoute = (pathname) =>
   START_ROUTE.test(pathname) ||
   RUN_ROUTE.test(pathname) ||
   OBSERVATION_ROUTE.test(pathname) ||
-  EVENTS_ROUTE.test(pathname);
+  EVENTS_ROUTE.test(pathname) ||
+  COMMANDS_ROUTE.test(pathname) ||
+  CONVERSATION_ROUTE.test(pathname);
 
 const NOT_AVAILABLE_MESSAGE =
   "owned clarification is enabled — starts are recorded durably, but the managed conversation runtime is not wired on this install yet";
@@ -94,20 +102,29 @@ const postureDenial = (posture) => {
 };
 
 // The coordinator's typed rejections cross the seam with their own status,
-// each naming its cause — duplicate and busy starts are rejections, never
-// silent queues; an invisible run or attempt is a 404; a cursor that cannot
-// be served is the viewer's 400; anything else is the seam's failure.
+// each naming its cause — duplicate and busy starts, live-floor conflicts,
+// and stale leases are rejections, never silent queues; an invisible run or
+// attempt is a 404; a cursor that cannot be served is the viewer's 400;
+// anything else is the seam's failure.
 const coordinatorRejection = (error) => {
   const message = String(error?.message ?? error);
   switch (error?.code) {
     case "busy":
     case "manifest_stale":
     case "request_reused":
+    case "turn_in_flight":
+    case "turn_not_in_flight":
+    case "queue_full":
+    case "dialog_not_found":
+    case "lease_required":
+    case "lease_not_held":
+    case "lease_expired":
       return { status: 409, json: { error: error.code, message } };
     case "invalid_cursor":
     case "invalid_request":
       return { status: 400, json: { error: "invalid_request", message } };
     case "context_unavailable":
+    case "conversation_unavailable":
       return { status: 503, json: { error: error.code, message } };
     case "start_denied":
       return {
@@ -260,6 +277,37 @@ export const handleClarificationRun = async ({
   const denial = postureDenial(posture);
   if (denial) return denial;
 
+  // Two handles on the same read: `run` for a known run id, `issue` for the
+  // issue panel finding its run again after a refresh. An issue with no run
+  // is a typed 404 — the panel renders the manifest, never a fabricated
+  // attempt.
+  const issueRaw = query.get("issue");
+  if (issueRaw !== null) {
+    if (!/^\d+$/.test(issueRaw) || Number(issueRaw) <= 0)
+      return invalidRequest("the run route's issue parameter is a positive integer");
+    if (!coordinator)
+      return {
+        status: 501,
+        json: { error: "clarification_unavailable", message: NOT_AVAILABLE_MESSAGE },
+      };
+    try {
+      const found = await coordinator.runForIssue({ issueNumber: Number(issueRaw) });
+      if (found === null)
+        return {
+          status: 404,
+          json: { error: "run_not_found", message: `no clarification run for issue ${issueRaw}` },
+        };
+      return {
+        status: 200,
+        json: parseClarificationRunResult(
+          await coordinator.runSection({ runId: found.runId, afterCursor: 0 }),
+        ),
+      };
+    } catch (error) {
+      return coordinatorRejection(error);
+    }
+  }
+
   const parsed = runQuery(query);
   if (parsed.error) return parsed.error;
 
@@ -268,6 +316,105 @@ export const handleClarificationRun = async ({
       status: 200,
       json: parseClarificationRunResult(
         await coordinator.runSection({ runId: parsed.runId, afterCursor: parsed.afterCursor }),
+      ),
+    };
+  } catch (error) {
+    return coordinatorRejection(error);
+  }
+};
+
+// The conversation commands: the Developer's explicit acts, one typed route.
+// The dispatch is a pure mapping — each command kind names the coordinator
+// method it drives and nothing else.
+const COMMAND_DISPATCH = {
+  prompt: (coordinator, args, { text }) => coordinator.sendPrompt({ ...args, text }),
+  steer: (coordinator, args, { text }) => coordinator.steer({ ...args, text }),
+  queue: (coordinator, args, { text }) => coordinator.queueFollowUp({ ...args, text }),
+  "clear-queue": (coordinator, args) => coordinator.clearQueue(args),
+  "stop-turn": (coordinator, args) => coordinator.stopTurn(args),
+  "answer-dialog": (coordinator, args, { dialogId, value }) =>
+    coordinator.answerDialog({ ...args, dialogId, value }),
+  "cancel-dialog": (coordinator, args, { dialogId }) =>
+    coordinator.cancelDialog({ ...args, dialogId }),
+};
+
+export const handleClarificationConversationCommand = async ({
+  method,
+  pathname,
+  host,
+  origin,
+  body,
+  posture,
+  coordinator,
+}) => {
+  const match = COMMANDS_ROUTE.exec(pathname);
+  if (!match) return null;
+
+  const gate = gateRejection({ host, origin });
+  if (gate) return gate;
+
+  if (method !== "POST") return methodMismatch("POST");
+
+  const denial = postureDenial(posture);
+  if (denial) return denial;
+  if (!coordinator)
+    return {
+      status: 501,
+      json: { error: "clarification_unavailable", message: NOT_AVAILABLE_MESSAGE },
+    };
+
+  let raw;
+  try {
+    raw = JSON.parse(body ?? "");
+  } catch {
+    return invalidRequest("request body is not valid JSON");
+  }
+  let parsed;
+  try {
+    parsed = parseClarificationConversationCommandRequest(raw);
+  } catch (error) {
+    return invalidRequest(String(error?.message ?? error));
+  }
+
+  try {
+    const args = { runId: match[1], attemptId: match[2], requestId: parsed.requestId };
+    const result = await COMMAND_DISPATCH[parsed.command.kind](coordinator, args, parsed.command);
+    return {
+      status: 200,
+      json: parseClarificationConversationCommandResult(result),
+    };
+  } catch (error) {
+    return coordinatorRejection(error);
+  }
+};
+
+// The conversation's live state read: posture-free like the other reads —
+// the pending questions and capability lists are evidence too.
+export const handleClarificationConversationState = ({
+  method,
+  pathname,
+  host,
+  origin,
+  coordinator,
+}) => {
+  const match = CONVERSATION_ROUTE.exec(pathname);
+  if (!match) return null;
+
+  const gate = gateRejection({ host, origin });
+  if (gate) return gate;
+
+  if (method !== "GET") return methodMismatch("GET");
+  if (!coordinator)
+    return {
+      status: 501,
+      json: { error: "clarification_unavailable", message: NOT_AVAILABLE_MESSAGE },
+    };
+
+  try {
+    return {
+      status: 200,
+      json: parseClarificationConversationState(
+        coordinator.conversationState({ runId: match[1], attemptId: match[2] }),
       ),
     };
   } catch (error) {
@@ -379,7 +526,9 @@ export const handleClarificationApi = async (deps) =>
   (await handleClarificationRun(deps)) ??
   (await handleClarificationStart(deps)) ??
   handleClarificationObservation(deps) ??
-  handleClarificationEvents(deps);
+  handleClarificationEvents(deps) ??
+  (await handleClarificationConversationCommand(deps)) ??
+  handleClarificationConversationState(deps);
 
 // Turns the host's config block into the posture, with the unreadable-config
 // case as its own invalid posture — a config that cannot be read at all is

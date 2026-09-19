@@ -1054,6 +1054,103 @@ export type ClarificationRunResult = Schema.Schema.Type<typeof ClarificationRunR
 export const parseClarificationRunResult: (input: unknown) => ClarificationRunResult =
   Schema.decodeUnknownSync(ClarificationRunResultSchema, { onExcessProperty: "error" });
 
+// The conversation commands (spec #221, ticket #232): the Developer's
+// explicit acts on one live attempt, a kind-discriminated union. Steer and
+// queue are distinct kinds with distinct evidence — the command request can
+// never blur "correct the live turn" into "hold work for later".
+export const ClarificationConversationCommandSchema = Schema.Union([
+  Schema.Struct({ kind: Schema.Literal("prompt"), text: Schema.String }),
+  Schema.Struct({ kind: Schema.Literal("steer"), text: Schema.String }),
+  Schema.Struct({ kind: Schema.Literal("queue"), text: Schema.String }),
+  Schema.Struct({ kind: Schema.Literal("clear-queue") }),
+  Schema.Struct({ kind: Schema.Literal("stop-turn") }),
+  Schema.Struct({
+    kind: Schema.Literal("answer-dialog"),
+    dialogId: Schema.String,
+    value: Schema.Unknown,
+  }),
+  Schema.Struct({ kind: Schema.Literal("cancel-dialog"), dialogId: Schema.String }),
+]);
+
+export type ClarificationConversationCommand = Schema.Schema.Type<
+  typeof ClarificationConversationCommandSchema
+>;
+
+export const ClarificationConversationCommandRequestSchema = Schema.Struct({
+  requestId: Schema.String,
+  command: ClarificationConversationCommandSchema,
+});
+
+export type ClarificationConversationCommandRequest = Schema.Schema.Type<
+  typeof ClarificationConversationCommandRequestSchema
+>;
+
+export const parseClarificationConversationCommandRequest: (
+  input: unknown,
+) => ClarificationConversationCommandRequest = Schema.decodeUnknownSync(
+  ClarificationConversationCommandRequestSchema,
+  { onExcessProperty: "error" },
+);
+
+// A command's answer: whether this request dispatched (a replayed request id
+// answers `sent: false` from the durable record — the runtime never sees it
+// twice) and, for the queue-clearing acts, exactly which held work died.
+export const ClarificationConversationCommandResultSchema = Schema.Struct({
+  sent: Schema.Boolean,
+  requestId: Schema.String,
+  cleared: Schema.optional(
+    Schema.Array(Schema.Struct({ requestId: Schema.String, text: Schema.String })),
+  ),
+});
+
+export type ClarificationConversationCommandResult = Schema.Schema.Type<
+  typeof ClarificationConversationCommandResultSchema
+>;
+
+export const parseClarificationConversationCommandResult: (
+  input: unknown,
+) => ClarificationConversationCommandResult = Schema.decodeUnknownSync(
+  ClarificationConversationCommandResultSchema,
+  { onExcessProperty: "error" },
+);
+
+// The conversation's live state read: the session's own word for where it
+// stands, its typed pending questions, and the unsupported capabilities it
+// surfaced — the capability list is evidence, never a silent drop.
+export const ClarificationConversationStateSchema = Schema.Struct({
+  available: Schema.Boolean,
+  sessionState: Schema.optional(Schema.String),
+  pendingDialogs: Schema.optional(
+    Schema.Array(
+      Schema.Struct({
+        dialogId: Schema.String,
+        kind: Schema.String,
+        request: Schema.Unknown,
+      }),
+    ),
+  ),
+  unsupportedCapabilities: Schema.optional(
+    Schema.Array(
+      Schema.Struct({
+        capability: Schema.String,
+        count: Schema.Number,
+        frame: Schema.Unknown,
+      }),
+    ),
+  ),
+});
+
+export type ClarificationConversationState = Schema.Schema.Type<
+  typeof ClarificationConversationStateSchema
+>;
+
+export const parseClarificationConversationState: (
+  input: unknown,
+) => ClarificationConversationState = Schema.decodeUnknownSync(
+  ClarificationConversationStateSchema,
+  { onExcessProperty: "error" },
+);
+
 // The run's event stream (epic #20, ticket #26; issue #40): the runner's
 // typed events as the UI consumes them — a started echo of the request (the
 // PR for reviews, the issue and model for the agent), output chunks, a

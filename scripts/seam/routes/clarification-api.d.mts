@@ -67,6 +67,18 @@ export declare const handleClarificationRun: (input: {
   posture: ClarificationPosture;
   coordinator: unknown;
 }) => Promise<ApiResponse>;
+export declare const handleClarificationConversationCommand: (input: {
+  method: string | undefined;
+  pathname: string;
+  host: string | undefined;
+  origin: string | undefined;
+  body: string | undefined;
+  posture: ClarificationPosture;
+  coordinator: unknown;
+}) => Promise<ApiResponse>;
+export declare const handleClarificationConversationState: (
+  input: ObservationRequest,
+) => ApiResponse;
 export declare const handleClarificationObservation: (input: ObservationRequest) => HandlerResponse;
 export declare const handleClarificationEvents: (input: ObservationRequest) => HandlerResponse;
 export declare const handleClarificationApi: (input: {

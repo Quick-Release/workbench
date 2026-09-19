@@ -554,6 +554,8 @@ export type OverviewData = {
 // schema import is type-only — no runtime cycle, no schema code in the bundle.
 import type { Schema } from "effect";
 import type {
+  ClarificationConversationCommandResultSchema,
+  ClarificationConversationStateSchema,
   ClarificationManifestResultSchema,
   ClarificationRunResultSchema,
   ClarificationStartResultSchema,
@@ -640,3 +642,11 @@ export type ClarificationManifestResult = Schema.Schema.Type<
 export type ClarificationStartResult = Schema.Schema.Type<typeof ClarificationStartResultSchema>;
 
 export type ClarificationRunResult = Schema.Schema.Type<typeof ClarificationRunResultSchema>;
+
+export type ClarificationConversationCommandResult = Schema.Schema.Type<
+  typeof ClarificationConversationCommandResultSchema
+>;
+
+export type ClarificationConversationState = Schema.Schema.Type<
+  typeof ClarificationConversationStateSchema
+>;
