@@ -10,6 +10,27 @@ export declare type ClarificationPosture =
 
 type ApiResponse = { status: number; json: unknown } | null;
 
+// The live-observation stream response part: an SSE stream with its
+// detach — and deliberately no cancel, so a viewer hang-up can never
+// cancel an attempt (spec #221, ADR 0020).
+type StreamResponse = {
+  status: number;
+  contentType: "text/event-stream";
+  stream: AsyncIterable<unknown>;
+  detach: () => void;
+};
+
+type HandlerResponse = ApiResponse | StreamResponse;
+
+type ObservationRequest = {
+  method: string | undefined;
+  pathname: string;
+  host: string | undefined;
+  origin: string | undefined;
+  query: URLSearchParams | undefined;
+  coordinator: unknown;
+};
+
 export declare const isClarificationApiRoute: (pathname: string) => boolean;
 export declare const statusResultFor: (posture: ClarificationPosture) => unknown;
 export declare const handleClarificationStatus: (input: {
@@ -27,15 +48,19 @@ export declare const handleClarificationStart: (input: {
   body: string | undefined;
   posture: ClarificationPosture;
 }) => ApiResponse;
+export declare const handleClarificationObservation: (input: ObservationRequest) => HandlerResponse;
+export declare const handleClarificationEvents: (input: ObservationRequest) => HandlerResponse;
 export declare const handleClarificationApi: (input: {
   method: string | undefined;
   pathname: string;
   host: string | undefined;
   origin: string | undefined;
   body?: string | undefined;
-  posture: ClarificationPosture;
-}) => Promise<ApiResponse>;
+  query?: URLSearchParams | undefined;
+  posture?: ClarificationPosture | undefined;
+  coordinator?: unknown;
+}) => Promise<HandlerResponse>;
 export declare const clarificationPostureLoader: (
   loadClarificationConfig: () => Promise<unknown>,
 ) => () => Promise<ClarificationPosture>;
-export declare const clarificationApiPlugin: () => Plugin;
+export declare const clarificationApiPlugin: (options?: { coordinator?: unknown }) => Plugin;

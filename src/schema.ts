@@ -16,6 +16,9 @@ import type {
 import {
   artifactKinds,
   blockerEdgeSources,
+  clarificationEventEnvelopeVersion,
+  clarificationEventScopes,
+  clarificationLifecycleStates,
   clarificationPostures,
   clientTicketKinds,
   decisionTicketKinds,
@@ -834,6 +837,115 @@ export type ClarificationStartRequest = Schema.Schema.Type<typeof ClarificationS
 
 export const parseClarificationStartRequest: (input: unknown) => ClarificationStartRequest =
   Schema.decodeUnknownSync(ClarificationStartRequestSchema, { onExcessProperty: "error" });
+
+// Live observation of an attempt (spec #221, ticket #231, ADR 0020): the
+// typed events the operational event ledger serves and the SSE stream
+// carries. A lifecycle event names a run- or attempt-level state move; a
+// conversation event carries one managed-session envelope verbatim — the
+// session's frames are evidence, preserved exactly as the adapter observed
+// them. A gap frame is the stream's explicit divider: the viewer's cursor
+// predates the ledger's retention, and the frame says which cursors are
+// gone instead of letting the viewer believe its history complete.
+export const ClarificationEventSchema = Schema.Union([
+  Schema.Struct({
+    type: Schema.Literal("lifecycle"),
+    scope: Schema.Literals(clarificationEventScopes),
+    id: Schema.String,
+    state: Schema.Literals(clarificationLifecycleStates),
+    at: Schema.String,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("conversation"),
+    attemptId: Schema.String,
+    session: Schema.Struct({
+      cursor: Schema.Number,
+      envelope: Schema.Literals(["pi-managed/v1"]),
+      event: Schema.Unknown,
+    }),
+  }),
+]);
+
+export type ClarificationEvent = Schema.Schema.Type<typeof ClarificationEventSchema>;
+
+export const ClarificationEventEnvelopeSchema = Schema.Struct({
+  cursor: Schema.Number,
+  envelope: Schema.Literal(clarificationEventEnvelopeVersion),
+  event: ClarificationEventSchema,
+});
+
+export type ClarificationEventEnvelope = Schema.Schema.Type<
+  typeof ClarificationEventEnvelopeSchema
+>;
+
+// The gap divider's payload, shared by the stream frame and the
+// observation result: the viewer's cursor, and the first cursor the ledger
+// can still serve.
+export const ClarificationEventGapSchema = Schema.Struct({
+  after: Schema.Number,
+  firstRetainedCursor: Schema.Number,
+});
+
+export const ClarificationGapFrameSchema = Schema.Struct({
+  envelope: Schema.Literal(clarificationEventEnvelopeVersion),
+  gap: ClarificationEventGapSchema,
+});
+
+// One SSE frame: a ledger envelope, or the explicit gap divider.
+export const ClarificationStreamFrameSchema = Schema.Union([
+  ClarificationEventEnvelopeSchema,
+  ClarificationGapFrameSchema,
+]);
+
+export type ClarificationStreamFrame = Schema.Schema.Type<typeof ClarificationStreamFrameSchema>;
+
+export const parseClarificationStreamFrame: (input: unknown) => ClarificationStreamFrame =
+  Schema.decodeUnknownSync(ClarificationStreamFrameSchema, { onExcessProperty: "error" });
+
+export const ClarificationRunSnapshotSchema = Schema.Struct({
+  runId: Schema.String,
+  hostRepo: Schema.String,
+  issueId: Schema.String,
+  requestId: Schema.String,
+  state: Schema.Literals(clarificationLifecycleStates),
+  createdAt: Schema.String,
+  updatedAt: Schema.String,
+});
+
+export const ClarificationAttemptSnapshotSchema = Schema.Struct({
+  attemptId: Schema.String,
+  runId: Schema.String,
+  hostRepo: Schema.String,
+  requestId: Schema.String,
+  // The dispatch intent is durable evidence, not a seam vocabulary: it
+  // travels verbatim.
+  dispatchIntent: Schema.Unknown,
+  state: Schema.Literals(clarificationLifecycleStates),
+  createdAt: Schema.String,
+  updatedAt: Schema.String,
+});
+
+// The reconnect read: the run's snapshot plus the events after the viewer's
+// cursor — with the gap named when that cursor predates retention.
+export const ClarificationObservationResultSchema = Schema.Struct({
+  snapshot: Schema.Struct({
+    run: ClarificationRunSnapshotSchema,
+    attempts: Schema.Array(ClarificationAttemptSnapshotSchema),
+  }),
+  latestCursor: Schema.Number,
+  events: Schema.Array(ClarificationEventEnvelopeSchema),
+  gap: Schema.optional(ClarificationEventGapSchema),
+});
+
+export type ClarificationObservationResult = Schema.Schema.Type<
+  typeof ClarificationObservationResultSchema
+>;
+
+export const parseClarificationObservationResult: (
+  input: unknown,
+) => ClarificationObservationResult = Schema.decodeUnknownSync(
+  ClarificationObservationResultSchema,
+  { onExcessProperty: "error" },
+);
 
 // The run's event stream (epic #20, ticket #26; issue #40): the runner's
 // typed events as the UI consumes them — a started echo of the request (the

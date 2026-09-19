@@ -37,3 +37,26 @@ export const guardedApi = (body) => async (request, response, next) => {
     next(error);
   }
 };
+
+// Writes one handler-provided stream as server-sent events: one JSON frame
+// per `data:` line, the response ending with the stream. The response's own
+// close is the client hang-up signal; the handler's `detach` is what a
+// hang-up triggers — and nothing else. This is the seam's disconnect
+// posture (spec #221, ADR 0020): a viewer going away detaches and the work
+// continues; no cancellation travels through this path, which is the
+// permanent fence on the Factory 11 defect where a page disconnect
+// cancelled a running review.
+export const writeEventStream = async (response, handled) => {
+  response.statusCode = handled.status;
+  response.setHeader("content-type", handled.contentType);
+  let clientGone = false;
+  response.on("close", () => {
+    clientGone = true;
+    handled.detach?.();
+  });
+  for await (const frame of handled.stream) {
+    if (clientGone) break;
+    response.write(`data: ${JSON.stringify(frame)}\n\n`);
+  }
+  if (!clientGone) response.end();
+};
