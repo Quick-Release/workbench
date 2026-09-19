@@ -1517,6 +1517,39 @@ test("a dispatch the runtime never accepts lands in the ledger as failure eviden
   });
 });
 
+test("command evidence wakes live viewers the moment it is durable", async () => {
+  await withLiveConversation(async ({ coordinator, run, attempt }) => {
+    const { stream } = coordinator.streamEvents({
+      runId: run.runId,
+      attemptId: attempt.attemptId,
+      afterCursor: 0,
+    });
+    const frames = [];
+    const read = async () => {
+      const { value, done } = await stream.next();
+      if (!done) frames.push(value);
+      return done;
+    };
+    // Drain the start's replay: run.started, attempt.recorded, active.
+    for (let i = 0; i < 3; i += 1) await read();
+
+    // The stream is waiting; a fenced command write must reach it without
+    // any publication event riding along.
+    const pending = read();
+    await coordinator.sendPrompt({
+      runId: run.runId,
+      attemptId: attempt.attemptId,
+      requestId: "client-prompt-9",
+      text: "hello the stream",
+    });
+    strictEqual(await pending, false);
+    const last = frames.at(-1);
+    strictEqual(last.event.type, "operational");
+    strictEqual(last.event.kind, "conversation.prompt");
+    stream.return();
+  });
+});
+
 test("the run for an issue is findable for the surface's reconnect", async () => {
   await withLiveConversation(async ({ coordinator, store, run }) => {
     const found = await coordinator.runForIssue({ issueNumber: 230 });

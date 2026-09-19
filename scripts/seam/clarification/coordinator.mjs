@@ -182,6 +182,16 @@ export const createClarificationCoordinator = ({
     return envelope;
   };
 
+  // The fenced append with the same viewer contract: command evidence is
+  // durable first, then live viewers learn about it — a fenced write never
+  // leaves a connected viewer waiting for an unrelated publish.
+  const recordEvent = (runId, event) => {
+    const envelope = store.appendEvent({ runId, ...event });
+    changeCounter += 1;
+    wakeRun(runId);
+    return envelope;
+  };
+
   // The live managed sessions this process started: attemptId → the session
   // handle and the lease token the start held. Runtime state is in-memory —
   // the durable record is the ledger — so a dev-server restart finds the
@@ -239,8 +249,7 @@ export const createClarificationCoordinator = ({
     return dispatch(
       live.session,
       (data) =>
-        store.appendEvent({
-          runId,
+        recordEvent(runId, {
           kind,
           data: { attemptId, requestId, ...data },
           leaseToken: live.leaseToken,
@@ -277,8 +286,7 @@ export const createClarificationCoordinator = ({
         result?.settled?.catch(() => {});
         return { sent: true, requestId };
       } catch (error) {
-        store.appendEvent({
-          runId,
+        recordEvent(runId, {
           kind: `${kind}-refused`,
           data: { attemptId, requestId, code: error?.code ?? "unknown" },
           leaseToken,
@@ -305,8 +313,7 @@ export const createClarificationCoordinator = ({
           ...(result.cleared !== undefined ? { cleared: result.cleared } : {}),
         };
       } catch (error) {
-        store.appendEvent({
-          runId,
+        recordEvent(runId, {
           kind: `${kind}-refused`,
           data: { attemptId, requestId, ...refusedData, code: error?.code ?? "unknown" },
           leaseToken,
@@ -659,9 +666,13 @@ export const createClarificationCoordinator = ({
         );
       const live = liveSessions.get(attemptId);
       if (live === undefined) return { available: false };
+      // sessionState is optional in the seam's contract: a session that
+      // cannot name its state omits the field rather than sending a null
+      // the schema would refuse.
+      const sessionState = live.session.state?.();
       return {
         available: true,
-        sessionState: live.session.state?.() ?? null,
+        ...(typeof sessionState === "string" ? { sessionState } : {}),
         pendingDialogs: live.session.pendingDialogs?.() ?? [],
         unsupportedCapabilities: live.session.unsupportedCapabilities?.() ?? [],
       };

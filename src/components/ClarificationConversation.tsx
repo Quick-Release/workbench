@@ -41,16 +41,22 @@ const pendingQueue = (events: Ledger) => {
       if (frame.type === "follow_up" && typeof frame.id === "string") cleared.add(frame.id);
     }
   }
-  return [...queued].filter(([requestId]) => !cleared.has(requestId));
+  // An entry without a request id could never be matched against a clear
+  // or a delivery — it would queue forever, so it is not an entry.
+  return [...queued].filter(
+    ([requestId, text]) => requestId !== "undefined" && text !== "" && !cleared.has(requestId),
+  );
 };
 
 // Whether a turn is live, from the evidence: a prompt whose settlement or
-// stop has not been observed yet.
+// stop has not been observed yet. A prompt the runtime never accepted
+// (its acceptance failed) freed the floor when it failed.
 const turnInFlight = (events: Ledger) => {
   let live = false;
   for (const { event } of events) {
     if (event.type === "operational" && event.kind === "conversation.prompt") live = true;
     if (event.type === "operational" && event.kind === "conversation.turn-stopped") live = false;
+    if (event.type === "operational" && event.kind === "conversation.prompt-failed") live = false;
     if (event.type === "conversation") {
       const frame = event.session.event as { type?: unknown };
       if (frame.type === "agent_settled") live = false;
@@ -299,7 +305,7 @@ export const ClarificationConversation = ({ issueNumber }: { issueNumber: number
       >
         {section.gap && (
           <p className="text-xs text-amber-600" data-slot="clarification-gap">
-            gap — events before cursor {section.gap.after + 1} are no longer retained
+            gap — events before cursor {section.gap.firstRetainedCursor} are no longer retained
           </p>
         )}
         {events.map(eventRow)}
