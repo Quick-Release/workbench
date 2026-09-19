@@ -59,6 +59,7 @@ export const OUTCOME_KINDS = [
 
 // The named provider failure kinds (ADR 0018's adapter vocabulary); the
 // adapter maps everything else it cannot correlate onto `provider_failure`.
+// Fenced against the adapter's own list in failures.test.mjs.
 export const PROVIDER_FAILURE_REASONS = ["auth_required", "quota", "provider_failure"];
 
 // The adapter's start denials (ADR 0018): every one fires before the
@@ -235,7 +236,7 @@ export const failureSignature = (verdict) => {
 export const usageLine = ({ kind, unit, value, detail } = {}) => {
   if (!USAGE_LINE_KINDS.includes(kind))
     throw policyError("invalid_usage_line", `"${String(kind)}" is not a usage line kind`);
-  if (typeof unit !== "string" || unit.trim() === "")
+  if (typeof unit !== "string" || unit.trim() !== unit)
     throw policyError("invalid_usage_line", "a usage line names its unit");
   if (value !== undefined && value !== null) {
     if (typeof value !== "number" || !Number.isFinite(value) || value < 0)
@@ -284,7 +285,8 @@ const ESCALATION_DECISION = "decide whether to start a fresh manual attempt or a
 // failure (its signature and repeat count), the authority that remains, and
 // the next human decision. The verbatim failure evidence stays in the
 // attempt's outcome event on the ledger — the record references it and
-// stays bounded.
+// stays bounded. Optional fields are omitted, never null, so the record and
+// the ledger event built from it validate against the seam's schema.
 export const escalationFor = ({ runId, attemptId, verdict, signature, repeats, at }) => ({
   runId,
   attemptId,
@@ -292,9 +294,8 @@ export const escalationFor = ({ runId, attemptId, verdict, signature, repeats, a
   repeats,
   classification: verdict.classification,
   kind: verdict.kind,
-  reason: verdict.reason,
+  ...(verdict.reason !== null ? { reason: verdict.reason } : {}),
   remainingAuthority: ["manual-retry"],
   decision: ESCALATION_DECISION,
   at,
 });
-escalationFor.DECISION = ESCALATION_DECISION;

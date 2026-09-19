@@ -594,6 +594,29 @@ test("repeated identical failure signatures halt the run with an escalation reco
   });
 });
 
+test("a halt on a reason-less failure stays servable evidence", async () => {
+  await withCoordinator(async ({ coordinator, store }) => {
+    const { run } = store.createRun({ issueId: "GH-42", requestId: "r-reasonless-halt" });
+    const first = store.createAttempt({ runId: run.runId, requestId: "a-1", intent: {} });
+    const second = store.createAttempt({ runId: run.runId, requestId: "a-2", intent: {} });
+    const outcome = { kind: "rejected", evidence: { error: "bad prompt" } };
+
+    coordinator.recordOutcome({ runId: run.runId, attemptId: first.attempt.attemptId, outcome });
+    coordinator.recordOutcome({ runId: run.runId, attemptId: second.attempt.attemptId, outcome });
+    strictEqual(store.getRun(run.runId).state, "awaiting-human");
+
+    // The escalation event omits `reason` rather than carrying a null the
+    // observation schema would refuse — the halt must be servable evidence.
+    const escalations = store
+      .readEvents({ runId: run.runId, afterCursor: 0 })
+      .events.map((envelope) => envelope.event)
+      .filter((event) => event.type === "escalation");
+    strictEqual(escalations.length, 1);
+    strictEqual("reason" in escalations[0], false);
+    strictEqual(escalations[0].kind, "rejected");
+  });
+});
+
 test("different failure signatures count separately; the human decision reopens a halt", async () => {
   await withCoordinator(async ({ coordinator, store }) => {
     const { run } = store.createRun({ issueId: "GH-42", requestId: "r-two-sigs" });

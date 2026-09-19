@@ -710,6 +710,23 @@ test("failure signature counts accumulate durably per run", async () => {
         }),
       (error) => error.code === "run_not_found",
     );
+
+    // Another run's attempt must never inflate this run's loop counter.
+    const { run: otherRun } = again.createRun({ issueId: "GH-42", requestId: "r-signature-other" });
+    const { attempt: foreignAttempt } = again.createAttempt({
+      runId: otherRun.runId,
+      requestId: "req-1",
+      intent,
+    });
+    throws(
+      () =>
+        again.recordFailureSignature({
+          runId: run.runId,
+          signature: "sig-x",
+          attemptId: foreignAttempt.attemptId,
+        }),
+      (error) => error.code === "attempt_not_found",
+    );
     again.close();
   });
 });

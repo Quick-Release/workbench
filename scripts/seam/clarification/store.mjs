@@ -628,10 +628,12 @@ export const openClarificationStore = ({
         throw storeError("invalid_request", "a failure signature is a non-empty string");
       if (ownRun(runId) === undefined)
         throw storeError("run_not_found", `no run "${runId}" is visible to this host repo`);
-      if (ownAttempt(attemptId) === undefined)
+      // The counted attempt must belong to THIS run: another run's attempt
+      // must never inflate this run's loop counter.
+      if (ownAttempt(attemptId)?.run_id !== runId)
         throw storeError(
           "attempt_not_found",
-          `no attempt "${attemptId}" is visible to this host repo`,
+          `no attempt "${attemptId}" is visible on run "${runId}" in this host repo`,
         );
       const row = database
         .prepare(

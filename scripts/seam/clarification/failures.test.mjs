@@ -16,6 +16,7 @@ import {
   summarizeUsageBudget,
   usageLine,
 } from "./failures.mjs";
+import { PROVIDER_FAILURE_KINDS } from "./pi-managed.mjs";
 import {
   clarificationFailureClassifications,
   clarificationLifecycleStates,
@@ -169,6 +170,18 @@ test("usage lines keep reported, estimated and unknown distinct", () => {
     () => usageLine({ kind: "reported", unit: "  ", value: 1 }),
     (error) => error.code === "invalid_usage_line",
   );
+  // The unit rule matches the store's: no padding, no inner-only blanks.
+  throws(
+    () => usageLine({ kind: "reported", unit: " tokens ", value: 1 }),
+    (error) => error.code === "invalid_usage_line",
+  );
+});
+
+test("the policy's provider reasons cover everything the adapter can name", () => {
+  // The adapter (ADR 0018) names its provider failure kinds; the policy's
+  // closed list must accept every one of them, plus the normalized
+  // `provider_failure` the adapter folds the unnamed rest into.
+  deepStrictEqual([...PROVIDER_FAILURE_REASONS], [...PROVIDER_FAILURE_KINDS, "provider_failure"]);
 });
 
 test("budget totals sum within a kind and unit, and never across them", () => {
@@ -212,4 +225,22 @@ test("an escalation record is a bounded handoff naming the next human decision",
     at: "2026-09-19T00:00:00Z",
   });
   strictEqual(FAILURE_SIGNATURE_HALT, 2);
+});
+
+test("an escalation for a reason-less failure omits the reason instead of nulling it", () => {
+  // `rejected` and `policy-denied` carry no reason; the record must omit
+  // the field entirely, or the ledger event built from it would carry a
+  // null the seam's schema refuses — the halt's own evidence unservable.
+  const verdict = classifyOutcome({ kind: "rejected", evidence: { error: "x" } });
+  const escalation = escalationFor({
+    runId: "run_1",
+    attemptId: "attempt_1",
+    verdict,
+    signature: failureSignature(verdict),
+    repeats: 2,
+    at: "2026-09-19T00:00:00Z",
+  });
+  strictEqual("reason" in escalation, false);
+  strictEqual(escalation.classification, "known-failure");
+  strictEqual(escalation.kind, "rejected");
 });

@@ -82,14 +82,34 @@ export const createClarificationCoordinator = ({
       `the coordinator retry fires only on durable evidence that no provider or tool dispatch occurred: ${why}`,
     );
 
+  // The attempt-visibility rule every policy command leans on: the attempt
+  // exists and belongs to THIS run — another run's attempt, like a missing
+  // one, is indistinguishable from missing.
+  const visibleAttempt = (runId, attemptId) => {
+    const attempt = store.getAttempt(attemptId);
+    if (attempt === null || attempt.runId !== runId)
+      throw observationError(
+        "attempt_not_found",
+        `no attempt "${attemptId}" is visible on run "${runId}" in this host repo`,
+      );
+    return attempt;
+  };
+
+  // The durable-first publication: append commits, waiters wake. Shared by
+  // the public publish command and the retry decision, so nothing depends
+  // on `this` binding.
+  const publishEvent = (runId, event) => {
+    const [envelope] = store.appendEvents({ runId, events: [event] });
+    changeCounter += 1;
+    wakeRun(runId);
+    return envelope;
+  };
+
   return {
     // The durable-first publication: append commits, waiters wake. The
     // returned envelope is the persisted evidence, cursors and all.
     publish({ runId, event }) {
-      const [envelope] = store.appendEvents({ runId, events: [event] });
-      changeCounter += 1;
-      wakeRun(runId);
-      return envelope;
+      return publishEvent(runId, event);
     },
 
     // The failure policy's entry point (ADR 0023): one observed outcome in,
@@ -103,12 +123,7 @@ export const createClarificationCoordinator = ({
     // typed rejection that writes nothing.
     recordOutcome({ runId, attemptId, outcome }) {
       const verdict = classifyOutcome(outcome);
-      const attempt = store.getAttempt(attemptId);
-      if (attempt === null || attempt.runId !== runId)
-        throw observationError(
-          "attempt_not_found",
-          `no attempt "${attemptId}" is visible on run "${runId}" in this host repo`,
-        );
+      visibleAttempt(runId, attemptId);
       const at = clock();
       const signature = failureSignature(verdict);
       const outcomeEvent = {
@@ -195,12 +210,7 @@ export const createClarificationCoordinator = ({
     // "no dispatch occurred" can never be proven again — the one coordinator
     // retry is gone for this attempt, whatever its outcome claims.
     markDispatched({ runId, attemptId, evidence }) {
-      const attempt = store.getAttempt(attemptId);
-      if (attempt === null || attempt.runId !== runId)
-        throw observationError(
-          "attempt_not_found",
-          `no attempt "${attemptId}" is visible on run "${runId}" in this host repo`,
-        );
+      visibleAttempt(runId, attemptId);
       const marked = store.markAttemptDispatched({
         attemptId,
         at: clock(),
@@ -227,12 +237,7 @@ export const createClarificationCoordinator = ({
           "run_not_active",
           `run "${runId}" is ${run.state} — a halted run dispatches nothing until the human decides`,
         );
-      const from = store.getAttempt(fromAttemptId);
-      if (from === null || from.runId !== runId)
-        throw observationError(
-          "attempt_not_found",
-          `no attempt "${fromAttemptId}" is visible on run "${runId}" in this host repo`,
-        );
+      const from = visibleAttempt(runId, fromAttemptId);
       if (from.outcome === undefined || from.outcome === null)
         throw retryNotEligible(`attempt "${fromAttemptId}" has no recorded outcome`);
       if (!NON_DISPATCH_OUTCOME_KINDS.includes(from.outcome.kind))
@@ -247,20 +252,16 @@ export const createClarificationCoordinator = ({
         intent,
         origin: "coordinator-retry",
       });
-      if (created) {
-        this.publish({
-          runId,
-          event: {
-            type: "retry",
-            scope: "run",
-            id: runId,
-            fromAttemptId,
-            attemptId: attempt.attemptId,
-            basis: "proven-non-dispatch",
-            at: clock(),
-          },
+      if (created)
+        publishEvent(runId, {
+          type: "retry",
+          scope: "run",
+          id: runId,
+          fromAttemptId,
+          attemptId: attempt.attemptId,
+          basis: "proven-non-dispatch",
+          at: clock(),
         });
-      }
       return { attempt, created };
     },
 
