@@ -867,10 +867,16 @@ export const parseClarificationManifestResult: (input: unknown) => Clarification
 // act on the visible manifest — the issue, the client request id that
 // deduplicates across reconnects, and the manifest's pinned revision the
 // Developer saw. A revision the tracker no longer reports is a typed
-// stale rejection and a re-rendered manifest.
+// stale rejection and a re-rendered manifest. The seam's own invariants
+// hold at the seam: a positive integer issue and a non-empty request id
+// are named 400s here, not failures the coordinator discovers later.
+const PositiveInt = Schema.Int.pipe(
+  Schema.refine((n): n is number => n > 0, { message: "expected a positive integer" }),
+);
+
 export const ClarificationStartRequestSchema = Schema.Struct({
-  issue: Schema.Number,
-  requestId: Schema.String,
+  issue: PositiveInt,
+  requestId: Schema.NonEmptyString,
   revision: ClarificationRevisionSchema,
 });
 
