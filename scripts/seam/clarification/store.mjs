@@ -26,6 +26,11 @@ import { DatabaseSync } from "node:sqlite";
 
 export const SCHEMA_VERSION = "1";
 
+// The operational event ledger's own envelope version (ADR 0020): the
+// run-level observation stream carries this, never the managed adapter's
+// inner envelope version, which travels nested inside conversation events.
+export const EVENT_ENVELOPE_VERSION = "clarification-events/v1";
+
 export const LIFECYCLE_STATES = [
   "active",
   "reconciling",
@@ -77,6 +82,14 @@ CREATE TABLE IF NOT EXISTS attempts (
   updated_at TEXT NOT NULL,
   UNIQUE (run_id, request_id)
 );
+CREATE TABLE IF NOT EXISTS events (
+  host_repo TEXT NOT NULL,
+  run_id TEXT NOT NULL REFERENCES runs(run_id),
+  seq INTEGER NOT NULL,
+  event TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (host_repo, run_id, seq)
+);
 `;
 
 // Opens the store for one host repo. `clock` is injected so timestamps are
@@ -84,10 +97,13 @@ CREATE TABLE IF NOT EXISTS attempts (
 export const openClarificationStore = ({
   hostRepo,
   databasePath,
+  eventLedgerLimit = 1000,
   clock = () => new Date().toISOString(),
 }) => {
   if (!hostRepo || typeof hostRepo !== "string")
     throw storeError("invalid_store", "the clarification store must be opened for a host repo");
+  if (!Number.isInteger(eventLedgerLimit) || eventLedgerLimit < 1)
+    throw storeError("invalid_store", "the event ledger limit must be an integer of at least 1");
 
   const database = new DatabaseSync(databasePath);
   database.exec("PRAGMA journal_mode = WAL;");
@@ -360,6 +376,102 @@ export const openClarificationStore = ({
 
     updateAttemptState({ attemptId, to }) {
       return transitionAttempt({ id: attemptId, to });
+    },
+
+    // The operational event ledger (ADR 0020): a bounded, sequenced record
+    // of one run's lifecycle and conversation events. The append commits
+    // atomically — one transaction assigns the per-run cursors and persists
+    // every event — so the moment this returns, the events are durable
+    // evidence a reader (and any viewer publication) can be served from.
+    // Events are evidence: they are stored verbatim, never interpreted.
+    appendEvents({ runId, events }) {
+      if (!Array.isArray(events) || events.length === 0)
+        throw storeError("invalid_request", "an append carries at least one event");
+      for (const event of events)
+        if (event === null || typeof event !== "object" || Array.isArray(event))
+          throw storeError("invalid_request", "every ledger event is a JSON object");
+      if (ownRun(runId) === undefined)
+        throw storeError("run_not_found", `no run "${runId}" is visible to this host repo`);
+
+      const now = clock();
+      database.exec("BEGIN");
+      try {
+        const persisted = events.map((event) => {
+          // Earlier inserts of this same batch are already visible inside
+          // the transaction, so the per-row MAX is the whole sequence.
+          const cursor =
+            database
+              .prepare(
+                "SELECT COALESCE(MAX(seq), 0) AS seq FROM events WHERE host_repo = ? AND run_id = ?",
+              )
+              .get(hostRepo, runId).seq + 1;
+          database
+            .prepare(
+              "INSERT INTO events (host_repo, run_id, seq, event, created_at) VALUES (?, ?, ?, ?, ?)",
+            )
+            .run(hostRepo, runId, cursor, JSON.stringify(event), now);
+          return { cursor, envelope: EVENT_ENVELOPE_VERSION, event };
+        });
+        // The bound is enforced inside the same transaction: retention is
+        // part of the append, so an expired cursor can only ever name events
+        // the ledger truly no longer holds.
+        database
+          .prepare("DELETE FROM events WHERE host_repo = ? AND run_id = ? AND seq <= ?")
+          .run(
+            hostRepo,
+            runId,
+            database
+              .prepare("SELECT MAX(seq) AS seq FROM events WHERE host_repo = ? AND run_id = ?")
+              .get(hostRepo, runId).seq - eventLedgerLimit,
+          );
+        database.exec("COMMIT");
+        return persisted;
+      } catch (error) {
+        database.exec("ROLLBACK");
+        throw error;
+      }
+    },
+
+    // The events-after-cursor read reconnect is answered from: every
+    // retained envelope after `afterCursor`, the latest cursor, and — when
+    // the viewer's cursor predates the ledger's retention — the explicit
+    // gap naming the first retained cursor. History is never invented: the
+    // gap says exactly what cannot be served.
+    readEvents({ runId, afterCursor }) {
+      if (!Number.isInteger(afterCursor) || afterCursor < 0)
+        throw storeError("invalid_request", "afterCursor must be a non-negative integer");
+      if (ownRun(runId) === undefined)
+        throw storeError("run_not_found", `no run "${runId}" is visible to this host repo`);
+      const bounds = database
+        .prepare(
+          "SELECT MIN(seq) AS first, MAX(seq) AS last FROM events WHERE host_repo = ? AND run_id = ?",
+        )
+        .get(hostRepo, runId);
+      const latestCursor = bounds.last ?? 0;
+      if (afterCursor > latestCursor)
+        throw storeError(
+          "invalid_cursor",
+          `cursor ${afterCursor} is ahead of the ledger's latest cursor ${latestCursor} — no viewer has observed that yet`,
+        );
+      const events = database
+        .prepare(
+          "SELECT seq, event FROM events WHERE host_repo = ? AND run_id = ? AND seq > ? ORDER BY seq ASC",
+        )
+        .all(hostRepo, runId, afterCursor)
+        .map((row) => ({
+          cursor: row.seq,
+          envelope: EVENT_ENVELOPE_VERSION,
+          event: JSON.parse(row.event),
+        }));
+      // The gap: the viewer's cursor predates retention — the events between
+      // its cursor and the first retained one are gone and are named as
+      // gone, never skipped silently. An empty ledger holds nothing back.
+      const firstRetained = bounds.first;
+      const gap =
+        typeof firstRetained === "number" && afterCursor < firstRetained - 1
+          ? { after: afterCursor, firstRetainedCursor: firstRetained }
+          : undefined;
+      return { events, latestCursor, gap };
     },
   };
 };
