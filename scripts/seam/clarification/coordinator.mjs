@@ -561,6 +561,68 @@ export const createClarificationCoordinator = ({
   return {
     publish: publishEvent,
 
+    // Recovery (ticket #236, ADR 0020): process death ends in an explicit
+    // Unknown — never a silent retry, never a false completion — with the
+    // termination evidence (proof and uncertainty) on the attempt; then
+    // reconciliation resolves the uncertainty to a classification, terminal
+    // only with its evidence basis cited; adoption takes a fresh lease, and
+    // the one destructive path — discarding retained evidence — is the
+    // typed confirmation, nothing softer. Each command commits first and
+    // wakes after (`wakeAfterStore`), so a viewer never sees what is not
+    // yet durable.
+    recordProcessDeath({ runId, attemptId, exit }) {
+      const resolved = store.recordProcessDeath({ runId, attemptId, exit });
+      wakeAfterStore(runId);
+      return resolved;
+    },
+
+    beginReconciliation({ runId }) {
+      const run = store.beginReconciliation({ runId });
+      wakeAfterStore(runId);
+      return run;
+    },
+
+    resolveReconciliation({ runId, to, basis }) {
+      const run = store.resolveReconciliation({ runId, to, basis });
+      wakeAfterStore(runId);
+      return run;
+    },
+
+    beginAttemptReconciliation({ attemptId }) {
+      const attempt = store.beginAttemptReconciliation({ attemptId });
+      wakeAfterStore(attempt.runId);
+      return attempt;
+    },
+
+    resolveAttemptReconciliation({ attemptId, to, basis }) {
+      const attempt = store.resolveAttemptReconciliation({ attemptId, to, basis });
+      wakeAfterStore(attempt.runId);
+      return attempt;
+    },
+
+    discardRunEvidence({ runId, confirmation }) {
+      const run = store.discardRunEvidence({ runId, confirmation });
+      wakeAfterStore(runId);
+      return run;
+    },
+
+    // Adoption of a run whose controller is gone: a fresh lease, a fresh
+    // generation. A live lease refuses with who holds it — the "controls
+    // moved" facts, no takeover ceremony and no liveness claim. An omitted
+    // ttl takes the store's default.
+    acquireLease({ runId, owner, ttlMs }) {
+      return store.acquireLease({ runId, owner, ttlMs });
+    },
+
+    renewLease({ runId, token, ttlMs }) {
+      return store.renewLease({ runId, token, ttlMs });
+    },
+
+    // Ownership and expiry arithmetic only — never the token.
+    getLease(runId) {
+      return store.getLease(runId);
+    },
+
     // The fixed pre-start manifest for one issue: what starting grants,
     // rendered from the fresh collected read and the install's declared
     // provider and data destination, ending with the no-publishing line.

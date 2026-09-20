@@ -970,6 +970,10 @@ export const ClarificationRunSnapshotSchema = Schema.Struct({
   state: Schema.Literals(clarificationLifecycleStates),
   createdAt: Schema.String,
   updatedAt: Schema.String,
+  // Set only by the typed destructive discard of the retained evidence
+  // (ticket #236); the record stays inspectable after it. Optional like
+  // every field added after its mirror first shipped.
+  discardedAt: Schema.optional(Schema.NullOr(Schema.String)),
 });
 
 export const ClarificationAttemptSnapshotSchema = Schema.Struct({

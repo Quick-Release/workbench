@@ -142,6 +142,7 @@ const fakeCoordinator = (overrides = {}) => {
           state: "awaiting-human",
           createdAt: "2026-09-18T10:00:01.000Z",
           updatedAt: "2026-09-18T10:00:09.000Z",
+          discardedAt: null,
         },
         attempts: [
           {
@@ -744,6 +745,7 @@ test("a snapshot read round-trips the schema: snapshot, events, gap", async () =
         state: "awaiting-human",
         createdAt: "2026-09-18T00:00:00Z",
         updatedAt: "2026-09-18T00:00:05Z",
+        discardedAt: null,
       },
       attempts: [
         {
@@ -813,6 +815,7 @@ test("the failure policy's evidence round-trips the schema", async () => {
         state: "awaiting-human",
         createdAt: "2026-09-18T00:00:00Z",
         updatedAt: "2026-09-18T00:00:06Z",
+        discardedAt: null,
       },
       attempts: [
         {
@@ -1437,4 +1440,70 @@ test("the draft route is one of the clarification routes", () => {
     isClarificationApiRoute("/api/clarification/runs/run_1/attempts/attempt_1/other"),
     false,
   );
+});
+
+test("a recovered run's evidence round-trips the seam schema", async () => {
+  await withTempStore(async ({ store }) => {
+    const coordinator = createClarificationCoordinator({
+      store,
+      clock: () => "2026-09-18T00:00:00Z",
+      tracker: { readContext: async () => ({}) },
+      sessions: { start: async () => ({}) },
+    });
+    const { run } = store.createRun({ issueId: "GH-42", requestId: "approve-9" });
+    const { lease } = store.acquireLease({ runId: run.runId, owner: "controller" });
+    const { attempt } = store.createAttempt({
+      runId: run.runId,
+      requestId: "approve-9-attempt",
+      intent: { adapter: "pi-managed/v1" },
+      leaseToken: lease.token,
+    });
+
+    // Process death, then reconciliation to a terminal classification that
+    // cites its basis: exactly the recovery path ticket #236 builds.
+    coordinator.recordProcessDeath({ runId: run.runId, attemptId: attempt.attemptId, exit: null });
+    coordinator.beginAttemptReconciliation({ attemptId: attempt.attemptId });
+    coordinator.resolveAttemptReconciliation({
+      attemptId: attempt.attemptId,
+      to: "terminal",
+      basis: "no dispatch evidence; cleanup verified",
+    });
+
+    const beforeDiscard = await handleClarificationObservation(
+      observation({
+        pathname: OBSERVATION_ROUTE(run.runId),
+        coordinator,
+      }),
+    );
+    strictEqual(beforeDiscard.status, 200);
+    strictEqual(beforeDiscard.json.snapshot.run.state, "unknown");
+    // The death's operational evidence and the stream-ending lifecycle
+    // terminal are both schema-valid shapes the seam serves.
+    const kinds = beforeDiscard.json.events.map(
+      (envelope) => envelope.event.kind ?? envelope.event.type,
+    );
+    deepStrictEqual(kinds, [
+      "attempt.process-death",
+      "attempt.reconciliation.started",
+      "attempt.reconciliation.resolved",
+      "lifecycle",
+    ]);
+    const resolved = beforeDiscard.json.events[2].event;
+    strictEqual(resolved.data.basis, "no dispatch evidence; cleanup verified");
+
+    // The typed destructive discard closes the record and purges the
+    // ledger; the observation answers honestly afterwards.
+    coordinator.discardRunEvidence({ runId: run.runId, confirmation: run.runId });
+    const after = await handleClarificationObservation(
+      observation({
+        pathname: OBSERVATION_ROUTE(run.runId),
+        coordinator,
+      }),
+    );
+    strictEqual(after.status, 200);
+    strictEqual(after.json.snapshot.run.state, "terminal");
+    strictEqual(after.json.snapshot.run.discardedAt, "2026-09-18T00:00:00Z");
+    deepStrictEqual(after.json.events, []);
+    strictEqual(after.json.latestCursor, 0);
+  });
 });

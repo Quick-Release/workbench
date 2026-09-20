@@ -2239,3 +2239,219 @@ test("a start-denied attempt grounds the one coordinator retry, exactly once", a
     strictEqual(retryEvent.data.basis, "proven-non-dispatch");
   });
 });
+
+// --- Recovery, reconciliation and quarantine (spec #221, ticket #236, ADR
+// --- 0020): the coordinator's recovery commands — every one durable-first
+// --- in the store, then announced to the live streams.
+
+test("recording process death announces the uncertainty to live viewers", async () => {
+  await withCoordinator(async ({ coordinator, store }) => {
+    const { run, attempt } = attemptRun(store, "r-death");
+    coordinator.publish({ runId: run.runId, event: lifecycle("active", attempt.attemptId) });
+
+    const { stream } = coordinator.streamEvents({
+      runId: run.runId,
+      attemptId: attempt.attemptId,
+      afterCursor: 1,
+    });
+    const pending = stream.next();
+
+    // The kill is observed with an exit status: the runtime's own death is
+    // proven, its descendants' fate is not — nothing at this tier observes
+    // them.
+    coordinator.recordProcessDeath({ runId: run.runId, attemptId: attempt.attemptId, exit: 143 });
+
+    const frame = await pending;
+    deepStrictEqual(frame.value.event, {
+      type: "operational",
+      kind: "attempt.process-death",
+      data: {
+        attemptId: attempt.attemptId,
+        runId: run.runId,
+        exit: 143,
+        proof: { runtimeExit: 143 },
+        uncertainty: ["descendant-termination"],
+      },
+      at: "2026-09-18T00:00:00Z",
+    });
+    // Uncertainty is not terminal: the stream keeps serving after it.
+    const stillOpen = stream.next();
+    coordinator.publish({ runId: run.runId, event: conversation(attempt.attemptId) });
+    const next = await stillOpen;
+    strictEqual(next.value.event.type, "conversation");
+    stream.return();
+
+    // The record carries the states and the evidence: proof and uncertainty
+    // on the attempt, unknown on the run.
+    strictEqual(store.getAttempt(attempt.attemptId).state, "unknown");
+    deepStrictEqual(store.getAttempt(attempt.attemptId).result, {
+      kind: "termination",
+      at: "2026-09-18T00:00:00Z",
+      proof: { runtimeExit: 143 },
+      uncertainty: ["descendant-termination"],
+    });
+    strictEqual(
+      coordinator.observe({ runId: run.runId, afterCursor: 0 }).snapshot.run.state,
+      "unknown",
+    );
+  });
+});
+
+test("reconciliation to a cited terminal classification ends the watched attempt's stream", async () => {
+  await withCoordinator(async ({ coordinator, store }) => {
+    const { run, attempt } = attemptRun(store, "r-reconcile-stream");
+    coordinator.recordProcessDeath({ runId: run.runId, attemptId: attempt.attemptId, exit: null });
+
+    const { stream } = coordinator.streamEvents({
+      runId: run.runId,
+      attemptId: attempt.attemptId,
+      afterCursor: 0,
+    });
+    // The replay first serves the death's operational event.
+    const death = await stream.next();
+    strictEqual(death.value.event.kind, "attempt.process-death");
+
+    // Uncertainty is not terminal: reconciling keeps the stream open, and
+    // only the resolution to terminal — citing its basis — ends it.
+    const pending = stream.next();
+    coordinator.beginAttemptReconciliation({ attemptId: attempt.attemptId });
+    const whileReconciling = await pending;
+    strictEqual(whileReconciling.value.event.kind, "attempt.reconciliation.started");
+
+    const ending = stream.next();
+    coordinator.resolveAttemptReconciliation({
+      attemptId: attempt.attemptId,
+      to: "terminal",
+      basis: "exit unobserved but session file shows no provider traffic",
+    });
+    // The resolution's operational event lands first, then the lifecycle
+    // terminal the streams watch — committed in that order, served in it.
+    const resolvedOp = await ending;
+    strictEqual(resolvedOp.value.event.kind, "attempt.reconciliation.resolved");
+    const terminal = await stream.next();
+    strictEqual(terminal.value.event.type, "lifecycle");
+    strictEqual(terminal.value.event.state, "terminal");
+    const drained = await stream.next();
+    strictEqual(drained.done, true);
+
+    // The resolution event carries the cited basis.
+    const observed = coordinator.observe({ runId: run.runId, afterCursor: 0 });
+    const resolution = observed.events
+      .map((envelope) => envelope.event)
+      .find(
+        (event) => event.type === "operational" && event.kind === "attempt.reconciliation.resolved",
+      );
+    deepStrictEqual(resolution.data, {
+      attemptId: attempt.attemptId,
+      to: "terminal",
+      basis: "exit unobserved but session file shows no provider traffic",
+    });
+  });
+});
+
+test("recovery commands are lease-free, and the discard leaves the record honest", async () => {
+  await withCoordinator(async ({ coordinator, store }) => {
+    const { run, attempt } = attemptRun(store, "r-recovery");
+    coordinator.recordProcessDeath({ runId: run.runId, attemptId: attempt.attemptId, exit: null });
+    coordinator.beginAttemptReconciliation({ attemptId: attempt.attemptId });
+    coordinator.beginReconciliation({ runId: run.runId });
+    coordinator.resolveAttemptReconciliation({ attemptId: attempt.attemptId, to: "quarantined" });
+    coordinator.resolveReconciliation({ runId: run.runId, to: "quarantined" });
+
+    // Anything but the exact typed confirmation destroys nothing.
+    throws(
+      () => coordinator.discardRunEvidence({ runId: run.runId, confirmation: "discard" }),
+      (error) => error.code === "discard_unconfirmed",
+    );
+
+    coordinator.discardRunEvidence({ runId: run.runId, confirmation: run.runId });
+    const after = coordinator.observe({ runId: run.runId, afterCursor: 0 });
+    // The evidence is gone and named as gone: an empty ledger, no invented
+    // gap — while the record itself stays inspectable, marked discarded.
+    deepStrictEqual(after.events, []);
+    strictEqual(after.latestCursor, 0);
+    strictEqual(after.snapshot.run.state, "terminal");
+    strictEqual(after.snapshot.run.discardedAt, "2026-09-18T00:00:00Z");
+    strictEqual(after.snapshot.attempts[0].state, "quarantined");
+  });
+});
+
+test("adoption goes through the coordinator: a live lease refuses, the read model never lies", async () => {
+  await withCoordinator(async ({ coordinator, store }) => {
+    const { run } = store.createRun({ issueId: "GH-42", requestId: "r-adopt" });
+
+    const first = coordinator.acquireLease({ runId: run.runId, owner: "controller-a" });
+    throws(
+      () => coordinator.acquireLease({ runId: run.runId, owner: "controller-b" }),
+      (error) => error.code === "lease_held",
+    );
+    // The read model shows ownership and expiry arithmetic — never a
+    // token, never a claim that anyone is alive.
+    deepStrictEqual(coordinator.getLease(run.runId), {
+      owner: "controller-a",
+      generation: 1,
+      acquiredAt: "2026-09-18T00:00:00Z",
+      expiresAt: "2026-09-18T00:00:30.000Z",
+      expired: false,
+    });
+    ok(first.lease.token.startsWith("lease_"));
+  });
+});
+
+test("same-numbered issues in different repositories never collide or cross-read", async () => {
+  await withCoordinator(async ({ coordinator, store, databasePath }) => {
+    const { run, attempt } = attemptRun(store, "r-cross");
+    coordinator.recordProcessDeath({ runId: run.runId, attemptId: attempt.attemptId, exit: 143 });
+
+    // Another repo, same database file, the same issue number.
+    const foreignStore = openClarificationStore({
+      hostRepo: "other/project",
+      databasePath,
+      clock: () => "2026-09-18T00:00:00Z",
+    });
+    const foreign = createClarificationCoordinator({
+      store: foreignStore,
+      clock: () => "2026-09-18T00:00:00Z",
+      tracker: { readContext: async () => ({}) },
+      sessions: { start: async () => ({}) },
+    });
+    const { run: foreignRun } = foreignStore.createRun({ issueId: "GH-42", requestId: "r-cross" });
+    ok(foreignRun.runId !== run.runId);
+
+    // The foreign coordinator cannot see, stream, record, reconcile, adopt,
+    // or destroy the other repo's record — every path is the same typed
+    // invisibility.
+    throws(
+      () => foreign.observe({ runId: run.runId, afterCursor: 0 }),
+      (error) => error.code === "run_not_found",
+    );
+    throws(
+      () =>
+        foreign.streamEvents({ runId: run.runId, attemptId: attempt.attemptId, afterCursor: 0 }),
+      (error) => error.code === "run_not_found",
+    );
+    throws(
+      () => foreign.recordProcessDeath({ runId: run.runId, attemptId: attempt.attemptId, exit: 1 }),
+      (error) => error.code === "run_not_found",
+    );
+    throws(
+      () => foreign.beginReconciliation({ runId: run.runId }),
+      (error) => error.code === "run_not_found",
+    );
+    throws(
+      () => foreign.acquireLease({ runId: run.runId, owner: "thief" }),
+      (error) => error.code === "run_not_found",
+    );
+    throws(
+      () => foreign.discardRunEvidence({ runId: run.runId, confirmation: run.runId }),
+      (error) => error.code === "run_not_found",
+    );
+
+    // And the foreign repo's own run is untouched by all of it.
+    strictEqual(
+      foreign.observe({ runId: foreignRun.runId, afterCursor: 0 }).snapshot.run.state,
+      "active",
+    );
+    foreignStore.close();
+  });
+});

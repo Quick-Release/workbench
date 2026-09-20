@@ -873,7 +873,7 @@ test("a stale generation cannot write a late completion, cancellation, cleanup r
   });
 });
 
-test("reconciliation resolves uncertainty and never concludes an outcome", async () => {
+test("reconciliation resolves uncertainty; terminal only with a cited basis", async () => {
   await withStore(async ({ databasePath }) => {
     const { store, tick } = openTimed({ databasePath });
     const { run, lease } = leasedRun(store, "r-uncertain");
@@ -891,26 +891,28 @@ test("reconciliation resolves uncertainty and never concludes an outcome", async
     tick(DEFAULT_LEASE_TTL_MS + 1);
 
     // The attempt is stuck in unknown with a dead lease: reconciliation is
-    // the lease-free way out — and it cannot declare a terminal outcome. A
-    // live lease closes outcomes; reconciliation resolves uncertainty.
+    // the lease-free way out. Terminal is a classification of inspected
+    // uncertainty, so a bare conclusion is refused (ticket #236) — the
+    // basis has to travel with it. A live lease closes outcomes with
+    // results; reconciliation classifies with evidence.
     strictEqual(
       store.beginAttemptReconciliation({ attemptId: attempt.attemptId }).state,
       "reconciling",
     );
     throws(
       () => store.resolveAttemptReconciliation({ attemptId: attempt.attemptId, to: "terminal" }),
-      (error) => error.code === "illegal_transition",
+      (error) => error.code === "basis_required",
     );
     strictEqual(
       store.resolveAttemptReconciliation({ attemptId: attempt.attemptId, to: "quarantined" }).state,
       "quarantined",
     );
 
-    // The run-level arc: reconcile, refuse the outcome, park for a human.
+    // The run-level arc: reconcile, refuse the bare conclusion, park for a human.
     store.beginReconciliation({ runId: run.runId });
     throws(
       () => store.resolveReconciliation({ runId: run.runId, to: "terminal" }),
-      (error) => error.code === "illegal_transition",
+      (error) => error.code === "basis_required",
     );
     strictEqual(
       store.resolveReconciliation({ runId: run.runId, to: "awaiting-human" }).state,
@@ -930,6 +932,31 @@ test("reconciliation resolves uncertainty and never concludes an outcome", async
     strictEqual(retry.created, true);
     ok(retry.attempt.attemptId !== attempt.attemptId);
     strictEqual(store.listAttempts(run.runId).length, 2);
+
+    // With the basis cited, an attempt's uncertainty resolves to terminal —
+    // and the stream-ending lifecycle event commits in the same
+    // transaction, so no viewer is served an end that is not yet durable.
+    store.updateAttemptState({
+      attemptId: retry.attempt.attemptId,
+      to: "unknown",
+      leaseToken: next.token,
+    });
+    store.beginAttemptReconciliation({ attemptId: retry.attempt.attemptId });
+    const resolved = store.resolveAttemptReconciliation({
+      attemptId: retry.attempt.attemptId,
+      to: "terminal",
+      basis: "session file shows no provider traffic; cleanup verified",
+    });
+    strictEqual(resolved.state, "terminal");
+    const events = store.readEvents({ runId: run.runId, afterCursor: 0 }).events;
+    const last = events[events.length - 1].event;
+    deepStrictEqual(last, {
+      type: "lifecycle",
+      scope: "attempt",
+      id: retry.attempt.attemptId,
+      state: "terminal",
+      at: "2026-09-18T00:00:30.001Z",
+    });
     store.close();
   });
 });
@@ -1157,7 +1184,7 @@ CREATE TABLE IF NOT EXISTS events (
 
 test("a version-1 file upgrades in place and everything written before reads back", async () => {
   await withStore(async ({ databasePath }) => {
-    strictEqual(SCHEMA_VERSION, "4");
+    strictEqual(SCHEMA_VERSION, "5");
 
     // A file exactly as the previous schema wrote it — version stamp, one
     // run, one attempt — then abandoned mid-pilot.
@@ -1215,7 +1242,7 @@ test("a version-1 file upgrades in place and everything written before reads bac
     const raw = new DatabaseSync(databasePath);
     strictEqual(
       raw.prepare("SELECT value FROM store_meta WHERE key = 'schema_version'").get().value,
-      "4",
+      "5",
     );
     raw.close();
 
@@ -1482,7 +1509,7 @@ ALTER TABLE attempts ADD COLUMN result TEXT;`);
     const raw = new DatabaseSync(databasePath);
     strictEqual(
       raw.prepare("SELECT value FROM store_meta WHERE key = 'schema_version'").get().value,
-      "4",
+      "5",
     );
     raw.close();
   });
@@ -1521,7 +1548,7 @@ CREATE TABLE IF NOT EXISTS drafts (
 );
 `;
 
-test("a version-3 file upgrades to version 4 and gains the failure policy's durables", async () => {
+test("a version-3 file upgrades through to the current schema and gains the failure policy's durables", async () => {
   await withStore(async ({ databasePath }) => {
     // A file exactly as schema version 3 wrote it — everything through the
     // drafts table, with a real attempt row — then abandoned mid-pilot.
@@ -1557,7 +1584,7 @@ test("a version-3 file upgrades to version 4 and gains the failure policy's dura
     const raw = new DatabaseSync(databasePath);
     strictEqual(
       raw.prepare("SELECT value FROM store_meta WHERE key = 'schema_version'").get().value,
-      "4",
+      "5",
     );
     raw.close();
   });
@@ -1975,5 +2002,352 @@ test("usage budget lines are durable, ordered, and host-repo-scoped", async () =
       (error) => error.code === "run_not_found",
     );
     foreign.close();
+  });
+});
+
+// --- Recovery, reconciliation and quarantine (spec #221, ticket #236, ADR
+// --- 0020): process death ends in Unknown, reconciliation classifies it,
+// quarantine holds, and the one destructive path is typed-confirmed.
+
+test("process death ends the attempt and the run in Unknown, with proof or uncertainty recorded", async () => {
+  await withStore(async ({ databasePath }) => {
+    const { store } = openTimed({ databasePath });
+    const { run, lease } = leasedRun(store, "r-death");
+    const { attempt } = store.createAttempt({
+      runId: run.runId,
+      requestId: "req-1",
+      intent,
+      leaseToken: lease.token,
+    });
+
+    // The managed runtime died mid-attempt. The exit status was observed:
+    // the runtime's own termination is proof, the fate of its descendant
+    // processes is not — nothing at this tier observes them.
+    store.recordProcessDeath({ runId: run.runId, attemptId: attempt.attemptId, exit: 143 });
+    strictEqual(store.getAttempt(attempt.attemptId).state, "unknown");
+    strictEqual(store.getRun(run.runId).state, "unknown");
+    deepStrictEqual(store.getAttempt(attempt.attemptId).result, {
+      kind: "termination",
+      at: "2026-09-18T00:00:00.000Z",
+      proof: { runtimeExit: 143 },
+      uncertainty: ["descendant-termination"],
+    });
+    // The same evidence travels to viewers as the death's operational
+    // event, committed in the same transaction as the moves.
+    const events = store.readEvents({ runId: run.runId, afterCursor: 0 }).events;
+    strictEqual(events.length, 1);
+    deepStrictEqual(events[0].event, {
+      type: "operational",
+      kind: "attempt.process-death",
+      data: {
+        attemptId: attempt.attemptId,
+        runId: run.runId,
+        exit: 143,
+        proof: { runtimeExit: 143 },
+        uncertainty: ["descendant-termination"],
+      },
+      at: "2026-09-18T00:00:00.000Z",
+    });
+
+    // An unobserved exit is recorded as uncertainty about the runtime's own
+    // death too — the record never upgrades missing evidence into proof.
+    const other = leasedRun(store, "r-death-unseen");
+    const unseen = store.createAttempt({
+      runId: other.run.runId,
+      requestId: "req-1",
+      intent,
+      leaseToken: other.lease.token,
+    });
+    store.recordProcessDeath({
+      runId: other.run.runId,
+      attemptId: unseen.attempt.attemptId,
+      exit: null,
+    });
+    deepStrictEqual(store.getAttempt(unseen.attempt.attemptId).result, {
+      kind: "termination",
+      at: "2026-09-18T00:00:00.000Z",
+      proof: {},
+      uncertainty: ["runtime-exit", "descendant-termination"],
+    });
+    store.close();
+
+    // Both moves are durable: a fresh handle on the same file reads them.
+    const again = open({ databasePath });
+    strictEqual(again.getAttempt(attempt.attemptId).state, "unknown");
+    strictEqual(again.getRun(run.runId).state, "unknown");
+    again.close();
+  });
+});
+
+test("process death is never silently repeatable, reusable, or retryable", async () => {
+  await withStore(async ({ databasePath }) => {
+    const store = open({ databasePath });
+    const { run, lease } = leasedRun(store, "r-death-fence");
+    const { attempt } = store.createAttempt({
+      runId: run.runId,
+      requestId: "req-1",
+      intent,
+      leaseToken: lease.token,
+    });
+    store.recordProcessDeath({ runId: run.runId, attemptId: attempt.attemptId, exit: 1 });
+
+    // A second death report writes nothing: the unknown is already the
+    // record's answer, and re-recording it would rewrite evidence.
+    throws(
+      () => store.recordProcessDeath({ runId: run.runId, attemptId: attempt.attemptId, exit: 1 }),
+      (error) => error.code === "illegal_transition",
+    );
+
+    // An unknown run starts no new attempt — the silent retry the ticket
+    // forbids goes through the run gate, not around it.
+    throws(
+      () =>
+        store.createAttempt({
+          runId: run.runId,
+          requestId: "req-silent-retry",
+          intent,
+          leaseToken: lease.token,
+        }),
+      (error) => error.code === "run_not_active",
+    );
+
+    // A death report for an attempt that never existed is typed, not a
+    // write somewhere else.
+    throws(
+      () => store.recordProcessDeath({ runId: run.runId, attemptId: "attempt_missing", exit: 1 }),
+      (error) => error.code === "attempt_not_found",
+    );
+
+    // An attempt of another run is a mismatch, not a death to record.
+    const stranger = leasedRun(store, "r-death-stranger");
+    const strangersAttempt = store.createAttempt({
+      runId: stranger.run.runId,
+      requestId: "req-1",
+      intent,
+      leaseToken: stranger.lease.token,
+    });
+    throws(
+      () =>
+        store.recordProcessDeath({
+          runId: run.runId,
+          attemptId: strangersAttempt.attempt.attemptId,
+          exit: 1,
+        }),
+      (error) => error.code === "attempt_not_found",
+    );
+    store.close();
+  });
+});
+
+test("an awaiting-human run whose process dies lands in Unknown, not back to work", async () => {
+  await withStore(async ({ databasePath }) => {
+    const store = open({ databasePath });
+    const { run, lease } = leasedRun(store, "r-death-parked");
+    const { attempt } = store.createAttempt({
+      runId: run.runId,
+      requestId: "req-1",
+      intent,
+      leaseToken: lease.token,
+    });
+    store.updateRunState({ runId: run.runId, to: "awaiting-human", leaseToken: lease.token });
+
+    // A provider failure parked the run for the human; then the process
+    // died. The recorded state is the uncertainty, not a silent resume.
+    store.recordProcessDeath({ runId: run.runId, attemptId: attempt.attemptId, exit: null });
+    strictEqual(store.getRun(run.runId).state, "unknown");
+    strictEqual(store.getAttempt(attempt.attemptId).state, "unknown");
+    store.close();
+  });
+});
+
+test("a recorded result is write-once: outcome evidence is never rewritten", async () => {
+  await withStore(async ({ databasePath }) => {
+    const store = open({ databasePath });
+    const { run, lease } = leasedRun(store, "r-write-once");
+    const { attempt } = store.createAttempt({
+      runId: run.runId,
+      requestId: "req-1",
+      intent,
+      leaseToken: lease.token,
+    });
+
+    // The controller records a requested-termination result while the
+    // attempt lives — with the descendant proof it genuinely has, this is
+    // the proof half of "descendant-termination attempts record proof or
+    // uncertainty".
+    store.recordAttemptResult({
+      attemptId: attempt.attemptId,
+      result: {
+        kind: "termination",
+        at: "2026-09-18T00:00:00Z",
+        proof: { runtimeExit: 0, descendantProcessesExited: true },
+        uncertainty: [],
+      },
+      leaseToken: lease.token,
+    });
+
+    // Then the process dies anyway. The unknown still lands — the death is
+    // real — but the recorded result survives untouched, and the ledger
+    // carries the uncertainty for reconciliation.
+    store.recordProcessDeath({ runId: run.runId, attemptId: attempt.attemptId, exit: 143 });
+    const recorded = store.getAttempt(attempt.attemptId);
+    strictEqual(recorded.state, "unknown");
+    deepStrictEqual(recorded.result.proof, { runtimeExit: 0, descendantProcessesExited: true });
+
+    // A live lease cannot write a "completion" over the recorded evidence:
+    // the false completion this ticket forbids has no path in.
+    throws(
+      () =>
+        store.recordAttemptResult({
+          attemptId: attempt.attemptId,
+          result: { kind: "completion" },
+          leaseToken: lease.token,
+        }),
+      (error) => error.code === "result_recorded",
+    );
+    strictEqual(store.getAttempt(attempt.attemptId).result.kind, "termination");
+    store.close();
+  });
+});
+
+test("a quarantined record is stuck for nobody: reconcile or discard both reach it", async () => {
+  await withStore(async ({ databasePath }) => {
+    const store = open({ databasePath });
+    const { run, lease } = leasedRun(store, "r-unstuck");
+    const { attempt } = store.createAttempt({
+      runId: run.runId,
+      requestId: "req-1",
+      intent,
+      leaseToken: lease.token,
+    });
+    store.recordProcessDeath({ runId: run.runId, attemptId: attempt.attemptId, exit: null });
+    store.beginAttemptReconciliation({ attemptId: attempt.attemptId });
+    store.resolveAttemptReconciliation({ attemptId: attempt.attemptId, to: "quarantined" });
+    store.beginReconciliation({ runId: run.runId });
+    store.resolveReconciliation({ runId: run.runId, to: "quarantined" });
+
+    // The human-resolution exit: quarantine yields to awaiting-human under
+    // the adopted lease, and from there reconciliation can even find the
+    // run resolvable — reuse restored by explicit decisions, never by
+    // default.
+    store.updateRunState({ runId: run.runId, to: "awaiting-human", leaseToken: lease.token });
+    store.beginReconciliation({ runId: run.runId });
+    store.resolveReconciliation({ runId: run.runId, to: "active" });
+    const revived = store.createAttempt({
+      runId: run.runId,
+      requestId: "req-after-quarantine",
+      intent,
+      leaseToken: lease.token,
+    });
+    strictEqual(revived.created, true);
+
+    // The discard exit is tested below: quarantined is one of its states.
+    // Here the point is the record never has no way out.
+    store.close();
+  });
+});
+
+test("retained evidence is discarded only through the typed destructive confirmation", async () => {
+  await withStore(async ({ databasePath }) => {
+    const store = open({ databasePath });
+    const { run, lease } = leasedRun(store, "r-discard");
+    const { attempt } = store.createAttempt({
+      runId: run.runId,
+      requestId: "req-1",
+      intent,
+      leaseToken: lease.token,
+    });
+    store.appendEvent({ runId: run.runId, kind: "note", data: { n: 1 }, leaseToken: lease.token });
+    store.appendEvent({ runId: run.runId, kind: "note", data: { n: 2 }, leaseToken: lease.token });
+    store.recordProcessDeath({ runId: run.runId, attemptId: attempt.attemptId, exit: null });
+    store.beginReconciliation({ runId: run.runId });
+    store.resolveReconciliation({ runId: run.runId, to: "quarantined" });
+
+    // Anything but the exact typed confirmation destroys nothing.
+    throws(
+      () => store.discardRunEvidence({ runId: run.runId, confirmation: "yes" }),
+      (error) => error.code === "discard_unconfirmed",
+    );
+    throws(
+      () => store.discardRunEvidence({ runId: run.runId }),
+      (error) => error.code === "discard_unconfirmed",
+    );
+    strictEqual(store.readEvents({ runId: run.runId, afterCursor: 0 }).events.length, 5);
+
+    // A live record is not a discard target: the run must first be a
+    // recovery state (unknown, awaiting-human, quarantined).
+    const live = leasedRun(store, "r-discard-live");
+    throws(
+      () => store.discardRunEvidence({ runId: live.run.runId, confirmation: live.run.runId }),
+      (error) => error.code === "illegal_transition",
+    );
+
+    // The typed confirmation names what it destroys; the discard lands in
+    // one commit: the run closes terminal with the discard stamped on it,
+    // and the retained evidence is gone — read-only forever was the
+    // alternative, never deletion by a generic button.
+    store.discardRunEvidence({ runId: run.runId, confirmation: run.runId });
+    const discarded = store.getRun(run.runId);
+    strictEqual(discarded.state, "terminal");
+    strictEqual(discarded.discardedAt, "2026-09-18T00:00:00Z");
+    const ledger = store.readEvents({ runId: run.runId, afterCursor: 0 });
+    deepStrictEqual(ledger.events, []);
+    strictEqual(ledger.latestCursor, 0);
+
+    // The attempt rows survive as records (what happened, with their
+    // results) even though the retained event evidence is gone.
+    strictEqual(store.getAttempt(attempt.attemptId).state, "unknown");
+
+    // A discard is once: terminal is absorbing.
+    throws(
+      () => store.discardRunEvidence({ runId: run.runId, confirmation: run.runId }),
+      (error) => error.code === "illegal_transition",
+    );
+
+    // Another repo's confirmation is not this repo's authority.
+    const own = open({ databasePath, hostRepo: "example/project" });
+    const foreignRun = own.createRun({ issueId: "GH-42", requestId: "r-discard-fresh" }).run;
+    own.close();
+    const foreign = open({ databasePath, hostRepo: "other/project" });
+    throws(
+      () => foreign.discardRunEvidence({ runId: foreignRun.runId, confirmation: foreignRun.runId }),
+      (error) => error.code === "run_not_found",
+    );
+    foreign.close();
+    store.close();
+  });
+});
+
+test("a version-4 file upgrades to version 5 and gains the discard stamp", async () => {
+  await withStore(async ({ databasePath }) => {
+    // A current file, then rolled back to exactly what version 4 wrote:
+    // the discard column dropped, the stamp moved back — the v4 delta is
+    // only the column, so this is a genuine v4 file.
+    const seed = open({ databasePath });
+    const { run } = seed.createRun({ issueId: "GH-42", requestId: "approve-v4" });
+    seed.close();
+    const raw = new DatabaseSync(databasePath);
+    raw.exec("ALTER TABLE runs DROP COLUMN discarded_at;");
+    raw.prepare("UPDATE store_meta SET value = '4' WHERE key = 'schema_version'").run();
+    raw.close();
+
+    const store = open({ databasePath });
+    // The old row reads back with the new projection field honestly null.
+    strictEqual(store.getRun(run.runId).discardedAt, null);
+    // The migrated file takes the new write: the run moves to a recovery
+    // state first, then the typed discard lands the new column's stamp.
+    const { lease } = store.acquireLease({ runId: run.runId, owner: "coordinator" });
+    store.updateRunState({ runId: run.runId, to: "awaiting-human", leaseToken: lease.token });
+    store.discardRunEvidence({ runId: run.runId, confirmation: run.runId });
+    strictEqual(store.getRun(run.runId).state, "terminal");
+    strictEqual(store.getRun(run.runId).discardedAt, "2026-09-18T00:00:00Z");
+    store.close();
+
+    const check = new DatabaseSync(databasePath);
+    strictEqual(
+      check.prepare("SELECT value FROM store_meta WHERE key = 'schema_version'").get().value,
+      "5",
+    );
+    check.close();
   });
 });
