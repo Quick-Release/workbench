@@ -554,6 +554,13 @@ export type OverviewData = {
 // schema import is type-only — no runtime cycle, no schema code in the bundle.
 import type { Schema } from "effect";
 import type {
+  ClarificationConversationCommandResultSchema,
+  ClarificationConversationStateSchema,
+  ClarificationDraftDocumentSchema,
+  ClarificationDraftViewSchema,
+  ClarificationManifestResultSchema,
+  ClarificationRunResultSchema,
+  ClarificationStartResultSchema,
   ClarificationStatusResultSchema,
   ReviewCommentRequestSchema,
   ReviewCommentResultSchema,
@@ -613,6 +620,70 @@ export const clarificationLifecycleStates = [
 
 export type ClarificationLifecycleState = (typeof clarificationLifecycleStates)[number];
 
+// The Clarification draft's task profiles (spec #221, ticket #233, ADR
+// 0017): the four classifications a draft's brief completeness is gated
+// by. `unknown` is its own profile — the Developer classifies the work,
+// and it is never silently a feature.
+export const clarificationTaskProfiles = ["bug", "refactor", "feature-request", "unknown"] as const;
+
+export type ClarificationTaskProfile = (typeof clarificationTaskProfiles)[number];
+
+// Every claim in a Clarification draft shows its provenance kind (ADR 0017):
+// tracker (read from the issue and its planning records), research
+// (approved documentation evidence), model (the runtime's proposal, never
+// authority), or developer (the Developer's own input). The four are
+// distinct on purpose — a model proposal must never be able to masquerade
+// as something the Developer said.
+export const clarificationDraftProvenanceKinds = [
+  "tracker",
+  "research",
+  "model",
+  "developer",
+] as const;
+
+export type ClarificationDraftProvenanceKind = (typeof clarificationDraftProvenanceKinds)[number];
+
+// The Workbench-owned failure classifications (ADR 0023, ticket #235): what
+// an observed attempt outcome IS, keeping known failure, unsupported,
+// policy denial, cancellation and Unknown outcome distinct. The failure
+// policy module owns the words and the classification rules; this mirror is
+// what the seam validates against and the drift fences pin.
+export const clarificationFailureClassifications = [
+  "known-failure",
+  "unsupported",
+  "policy-denial",
+  "cancellation",
+  "unknown",
+] as const;
+
+export type ClarificationFailureClassification =
+  (typeof clarificationFailureClassifications)[number];
+
+// The bounded permitted next actions a failure classification maps to:
+// after dispatch, every retry is the Developer's manual fresh attempt; the
+// one evidence-gated coordinator retry is not an outcome's next action but
+// a separate gated decision.
+export const clarificationNextActions = ["await-human", "manual-retry", "reconcile"] as const;
+
+export type ClarificationNextAction = (typeof clarificationNextActions)[number];
+
+// The usage budget's line kinds (ADR 0023): provider-reported usage,
+// estimates, and unknown availability stay distinct forever — a total sums
+// its own kind only, and an unknown line carries no number.
+export const clarificationUsageLineKinds = ["reported", "estimated", "unknown"] as const;
+
+export type ClarificationUsageLineKind = (typeof clarificationUsageLineKinds)[number];
+
+// Who created an attempt: the Developer's manual acts, or the one
+// coordinator-created retry that durable non-dispatch evidence permits.
+// The durable store owns the vocabulary; this mirror validates the wire.
+export const clarificationAttemptOrigins = ["manual", "coordinator-retry"] as const;
+
+export type ClarificationAttemptOrigin = (typeof clarificationAttemptOrigins)[number];
+
+// The versioned envelope a persisted Clarification draft travels in.
+export const clarificationDraftVersion = "clarification-draft/v1";
+
 // One operational event names its subject: the run, or one attempt on it.
 export const clarificationEventScopes = ["run", "attempt"] as const;
 
@@ -622,3 +693,38 @@ export const clarificationEventScopes = ["run", "attempt"] as const;
 export const clarificationEventEnvelopeVersion = "clarification-events/v1";
 
 export type ClarificationStatusResult = Schema.Schema.Type<typeof ClarificationStatusResultSchema>;
+
+// The pre-start manifest's fixed closing line (spec #221, ticket #230, ADR
+// 0014): every manifest of what a clarification start grants ends with this
+// exact sentence — starting a clarification conversation is never
+// authorizing a write. Pinned as the schema's literal so the display
+// contract cannot drift.
+export const noPublishingLine = "Publishing is NOT granted by this approval";
+
+// The draft surface's fixed line (spec #221, ticket #233, CONTEXT.md's
+// "Clarification draft"): every render of a draft's save affordance carries
+// this exact sentence — saving a draft is never publication approval.
+// Pinned as the schema's literal so the display contract cannot drift.
+export const noApprovalLine = "Saving a draft is not publication approval";
+
+export type ClarificationManifestResult = Schema.Schema.Type<
+  typeof ClarificationManifestResultSchema
+>;
+
+export type ClarificationStartResult = Schema.Schema.Type<typeof ClarificationStartResultSchema>;
+
+export type ClarificationRunResult = Schema.Schema.Type<typeof ClarificationRunResultSchema>;
+
+export type ClarificationConversationCommandResult = Schema.Schema.Type<
+  typeof ClarificationConversationCommandResultSchema
+>;
+
+export type ClarificationConversationState = Schema.Schema.Type<
+  typeof ClarificationConversationStateSchema
+>;
+
+export type ClarificationDraftDocument = Schema.Schema.Type<
+  typeof ClarificationDraftDocumentSchema
+>;
+
+export type ClarificationDraftView = Schema.Schema.Type<typeof ClarificationDraftViewSchema>;

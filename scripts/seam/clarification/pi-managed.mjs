@@ -78,8 +78,9 @@ export const SESSION_STATES = ["ready", "waiting-for-input", "awaiting-human", "
 const DIALOG_KINDS = ["select", "confirm", "input", "editor"];
 
 // The named provider failure kinds; anything else an error frame carries
-// is a provider failure all the same.
-const PROVIDER_FAILURE_KINDS = ["auth_required", "quota"];
+// is a provider failure all the same. Exported so the failure policy's
+// closed reason list can be fenced against this one (ticket #235).
+export const PROVIDER_FAILURE_KINDS = ["auth_required", "quota"];
 
 const adapterError = (code, message) => Object.assign(new Error(message), { code });
 
