@@ -151,6 +151,7 @@ const fakeCoordinator = (overrides = {}) => {
             requestId: "req-1",
             dispatchIntent: { kind: "clarification-start" },
             state: "terminal",
+            origin: "manual",
             createdAt: "2026-09-18T10:00:03.000Z",
             updatedAt: "2026-09-18T10:00:04.000Z",
           },
@@ -752,6 +753,7 @@ test("a snapshot read round-trips the schema: snapshot, events, gap", async () =
           requestId: "approve-1-attempt",
           dispatchIntent: { adapter: "pi-managed/v1", contextDigest: "sha-256:abc" },
           state: "awaiting-human",
+          origin: "manual",
           createdAt: "2026-09-18T00:00:01Z",
           updatedAt: "2026-09-18T00:00:05Z",
         },
@@ -795,6 +797,111 @@ test("a snapshot read round-trips the schema: snapshot, events, gap", async () =
   deepStrictEqual(handled.json, parseClarificationObservationResult(result));
   // The gap divider survives the round-trip.
   strictEqual(handled.json.gap.after, 0);
+});
+
+test("the failure policy's evidence round-trips the schema", async () => {
+  // The attempt snapshot carries its origin and dispatch mark; the policy's
+  // outcome and escalation travel as operational events (spec #221, ticket
+  // #235, ADR 0023).
+  const result = {
+    snapshot: {
+      run: {
+        runId: "run_one",
+        hostRepo: "example/project",
+        issueId: "GH-42",
+        requestId: "approve-1",
+        state: "awaiting-human",
+        createdAt: "2026-09-18T00:00:00Z",
+        updatedAt: "2026-09-18T00:00:06Z",
+      },
+      attempts: [
+        {
+          attemptId: "attempt_one",
+          runId: "run_one",
+          hostRepo: "example/project",
+          requestId: "approve-1-attempt",
+          dispatchIntent: { adapter: "pi-managed/v1" },
+          state: "awaiting-human",
+          origin: "manual",
+          dispatchedAt: "2026-09-18T00:00:02Z",
+          createdAt: "2026-09-18T00:00:01Z",
+          updatedAt: "2026-09-18T00:00:05Z",
+        },
+        {
+          attemptId: "attempt_two",
+          runId: "run_one",
+          hostRepo: "example/project",
+          requestId: "retry-req-1",
+          dispatchIntent: { adapter: "pi-managed/v1" },
+          state: "active",
+          origin: "coordinator-retry",
+          createdAt: "2026-09-18T00:00:06Z",
+          updatedAt: "2026-09-18T00:00:06Z",
+        },
+      ],
+    },
+    latestCursor: 2,
+    events: [
+      {
+        cursor: 1,
+        envelope: "clarification-events/v1",
+        event: {
+          type: "operational",
+          kind: "attempt.outcome",
+          data: {
+            attemptId: "attempt_one",
+            kind: "provider-failure",
+            classification: "known-failure",
+            nextAction: "await-human",
+            reason: "quota",
+            signature: "9f2a1c",
+            usage: { total: 12 },
+          },
+          at: "2026-09-18T00:00:05Z",
+        },
+      },
+      {
+        cursor: 2,
+        envelope: "clarification-events/v1",
+        event: {
+          type: "operational",
+          kind: "run.halted",
+          data: {
+            attemptId: "attempt_one",
+            signature: "9f2a1c",
+            repeats: 2,
+            classification: "known-failure",
+            kind: "provider-failure",
+            reason: "quota",
+            remainingAuthority: ["manual-retry"],
+            decision: "decide whether to start a fresh manual attempt or abandon this run",
+          },
+          at: "2026-09-18T00:00:05Z",
+        },
+      },
+      {
+        cursor: 3,
+        envelope: "clarification-events/v1",
+        event: {
+          type: "operational",
+          kind: "attempt.coordinator-retried",
+          data: {
+            fromAttemptId: "attempt_one",
+            attemptId: "attempt_two",
+            basis: "proven-non-dispatch",
+          },
+          at: "2026-09-18T00:00:06Z",
+        },
+      },
+    ],
+  };
+  const handled = await handleClarificationObservation(
+    observation({ coordinator: { observe: () => result } }),
+  );
+  strictEqual(handled.status, 200);
+  deepStrictEqual(handled.json, parseClarificationObservationResult(result));
+  // Every event frame also parses as a stream frame — the SSE contract.
+  for (const envelope of result.events) parseClarificationStreamFrame(envelope);
 });
 
 const lifecycleFrame = (cursor, state) => ({

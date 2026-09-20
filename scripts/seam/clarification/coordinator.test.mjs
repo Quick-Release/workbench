@@ -1779,3 +1779,463 @@ test("a draft on an unknown run, or an attempt of another run, is a typed not-fo
     { tracker: fakeTracker(issueRead), sessions: liveSessions() },
   );
 });
+
+// --- Ticket #235: the failure policy (ADR 0023). Fake-port tests order the
+// coordinator's policy mutations and rejections; the store-backed tests
+// prove the durable behavior end to end. ---
+
+// The policy port surface layered on the fake store: the outcome command's
+// durable neighbors, each recording its call like the base fake does. The
+// signature counter is real enough to cross the halt bound, and the run
+// state is overridable so the retry gate's refusals can be exercised.
+const policyStore = (
+  { signatureCount = 1, runState = null, attempts = [], runs = [], overrides = {} } = {},
+  log = [],
+) => {
+  // The policy commands act on an existing attempt; a test that does not
+  // name one gets the record a settled start would have left.
+  const knownAttempts =
+    attempts.length > 0
+      ? attempts
+      : [
+          {
+            attemptId: "attempt_1",
+            runId: "run_1",
+            requestId: "start-req-1",
+            state: "active",
+            result: null,
+          },
+        ];
+  const knownRuns =
+    runs.length > 0
+      ? runs
+      : [
+          {
+            runId: "run_1",
+            hostRepo: "Quick-Release/workbench",
+            issueId: "230",
+            requestId: "start-req-1",
+            state: "active",
+          },
+        ];
+  const base = fakeStore({ attempts: knownAttempts, runs: knownRuns }, log);
+  const budgetLines = [];
+  const store = {
+    ...base,
+    // The base fake answers reads by list only; the policy commands look an
+    // attempt up by id.
+    getAttempt: (attemptId) => knownAttempts.find((a) => a.attemptId === attemptId) ?? null,
+    // The base fake's log narrows to the start's fields; the policy needs
+    // the origin it passed.
+    createAttempt: (args) => {
+      log.push(["createAttempt", args]);
+      const replayed = knownAttempts.find(
+        (a) => a.runId === args.runId && a.requestId === args.requestId,
+      );
+      if (replayed) return { attempt: replayed, created: false };
+      const attempt = {
+        attemptId: `attempt_${knownAttempts.length + 1}`,
+        runId: args.runId,
+        hostRepo: "Quick-Release/workbench",
+        requestId: args.requestId,
+        dispatchIntent: args.intent,
+        state: "active",
+        origin: args.origin,
+        result: null,
+      };
+      knownAttempts.push(attempt);
+      return { attempt, created: true };
+    },
+    renewLease: (args) => {
+      log.push(["renewLease", args]);
+    },
+    recordAttemptOutcome: (args) => {
+      log.push(["recordAttemptOutcome", args]);
+      return store.getAttempt(args.attemptId);
+    },
+    markAttemptDispatched: (args) => {
+      log.push(["markAttemptDispatched", args]);
+      return store.getAttempt(args.attemptId);
+    },
+    recordFailureSignature: ({ runId, signature, attemptId }) => {
+      log.push(["recordFailureSignature", { runId, signature, attemptId }]);
+      return { count: signatureCount };
+    },
+    haltRun: (args) => {
+      log.push(["haltRun", args]);
+      return { record: args.record, moved: true };
+    },
+    appendUsageLines: (args) => {
+      log.push(["appendUsageLines", args]);
+      const stored = args.lines.map((line, index) => ({
+        lineId: `usage_${budgetLines.length + index + 1}`,
+        ...line,
+      }));
+      budgetLines.push(...stored);
+      return stored;
+    },
+    usageBudgetFor: (runId) => {
+      log.push(["usageBudgetFor", { runId }]);
+      return { runId, lines: [...budgetLines] };
+    },
+  };
+  if (runState !== null)
+    store.getRun = (runId) => {
+      const run = base.getRun(runId);
+      return run === null ? null : { ...run, state: runState };
+    };
+  // A test's explicit store overrides win, applied last.
+  return { ...store, ...overrides };
+};
+
+test("a quota outcome parks the attempt awaiting-human and folds its usage", () => {
+  const log = [];
+  const store = policyStore({}, log);
+  coordinator({ store }).recordOutcome({
+    runId: "run_1",
+    attemptId: "attempt_1",
+    outcome: { kind: "provider-failure", reason: "quota", usage: { total: 12 } },
+  });
+
+  const outcomeCall = log.find(([kind]) => kind === "recordAttemptOutcome")[1];
+  strictEqual(outcomeCall.to, "awaiting-human");
+  strictEqual(outcomeCall.result.kind, "provider-failure");
+  strictEqual(outcomeCall.result.classification, "known-failure");
+  strictEqual(outcomeCall.result.nextAction, "await-human");
+  strictEqual(outcomeCall.event.kind, "attempt.outcome");
+  deepStrictEqual(outcomeCall.event.data.usage, { total: 12 });
+  ok(typeof outcomeCall.leaseToken === "string");
+
+  const usage = log.find(([kind]) => kind === "appendUsageLines")[1];
+  deepStrictEqual(usage.lines, [
+    { kind: "reported", unit: "provider", detail: { total: 12 }, attemptId: "attempt_1" },
+  ]);
+
+  // One identical signature is recorded; nothing halts yet.
+  const signatureCall = log.find(([kind]) => kind === "recordFailureSignature")[1];
+  ok(signatureCall.signature.length > 0);
+  strictEqual(
+    log.some(([kind]) => kind === "haltRun"),
+    false,
+  );
+});
+
+test("a second identical failure signature halts the run with an escalation record", () => {
+  const log = [];
+  const store = policyStore({ signatureCount: 2 }, log);
+  const verdict = coordinator({ store }).recordOutcome({
+    runId: "run_1",
+    attemptId: "attempt_1",
+    outcome: { kind: "provider-failure", reason: "quota" },
+  });
+  strictEqual(verdict.halted, true);
+  strictEqual(verdict.nextAction, "await-human");
+
+  const halt = log.find(([kind]) => kind === "haltRun")[1];
+  strictEqual(halt.record.repeats, 2);
+  strictEqual(halt.record.reason, "quota");
+  deepStrictEqual(halt.record.remainingAuthority, ["manual-retry"]);
+  ok(halt.record.decision.length > 0);
+  ok(halt.record.signature.length > 0);
+});
+
+test("a reason-less failure escalates without a null reason", () => {
+  const log = [];
+  const store = policyStore({ signatureCount: 2 }, log);
+  coordinator({ store }).recordOutcome({
+    runId: "run_1",
+    attemptId: "attempt_1",
+    outcome: { kind: "rejected", evidence: { error: "bad prompt" } },
+  });
+  const halt = log.find(([kind]) => kind === "haltRun")[1];
+  strictEqual("reason" in halt.record, false);
+  strictEqual(halt.record.classification, "known-failure");
+});
+
+test("an already-escalated signature stands: the halt is idempotent", () => {
+  const log = [];
+  const store = policyStore(
+    {
+      signatureCount: 2,
+      overrides: {
+        haltRun: () => {
+          log.push(["haltRun", {}]);
+          throw Object.assign(new Error("already escalated"), { code: "already_halted" });
+        },
+      },
+    },
+    log,
+  );
+  const verdict = coordinator({ store }).recordOutcome({
+    runId: "run_1",
+    attemptId: "attempt_1",
+    outcome: { kind: "provider-failure", reason: "quota" },
+  });
+  strictEqual(verdict.halted, false);
+  strictEqual(log.filter(([kind]) => kind === "haltRun").length, 1);
+});
+
+test("an outcome the policy cannot classify is a typed rejection that writes nothing", () => {
+  const log = [];
+  const store = policyStore({}, log);
+  throws(
+    () =>
+      coordinator({ store }).recordOutcome({
+        runId: "run_1",
+        attemptId: "attempt_1",
+        outcome: { kind: "vibes" },
+      }),
+    (error) => error.code === "invalid_outcome",
+  );
+  strictEqual(
+    log.some(([kind]) => kind === "recordAttemptOutcome"),
+    false,
+  );
+  strictEqual(
+    log.some(([kind]) => kind === "appendUsageLines"),
+    false,
+  );
+});
+
+test("the coordinator retry fires once on a start denial, with its decision as evidence", () => {
+  const log = [];
+  const failed = {
+    attemptId: "attempt_1",
+    runId: "run_1",
+    requestId: "start-req-1",
+    state: "terminal",
+    result: { kind: "start-denied", code: "runtime_ended", deniedAt: clock() },
+  };
+  const store = policyStore({ attempts: [failed] }, log);
+  const { attempt, created } = coordinator({ store }).requestCoordinatorRetry({
+    runId: "run_1",
+    fromAttemptId: "attempt_1",
+    requestId: "retry-req-1",
+    intent: { kind: "clarification-retry" },
+  });
+  strictEqual(created, true);
+  // The fresh attempt is a new identity, never the failed one's.
+  ok(attempt.attemptId !== "attempt_1");
+
+  const createdCall = log.find(([kind]) => kind === "createAttempt")[1];
+  strictEqual(createdCall.origin, "coordinator-retry");
+  deepStrictEqual(createdCall.intent, { kind: "clarification-retry" });
+
+  const event = log.find(([kind]) => kind === "appendEvent")[1];
+  strictEqual(event.kind, "attempt.coordinator-retried");
+  strictEqual(event.data.fromAttemptId, "attempt_1");
+  strictEqual(event.data.basis, "proven-non-dispatch");
+});
+
+test("the coordinator retry refuses every outcome that does not prove non-dispatch", () => {
+  const refusals = [
+    { result: null, why: "no recorded outcome" },
+    { result: { kind: "outcome", classification: "known-failure" }, why: "recorded outcome" },
+    { result: { kind: "provider-failure", reason: "quota" }, why: "provider failure" },
+    { result: { kind: "cancelled" }, why: "cancellation" },
+  ];
+  for (const refusal of refusals) {
+    const log = [];
+    const store = policyStore(
+      {
+        attempts: [
+          {
+            attemptId: "attempt_1",
+            runId: "run_1",
+            requestId: "start-req-1",
+            state: "terminal",
+            result: refusal.result,
+          },
+        ],
+      },
+      log,
+    );
+    throws(
+      () =>
+        coordinator({ store }).requestCoordinatorRetry({
+          runId: "run_1",
+          fromAttemptId: "attempt_1",
+          requestId: "retry-req-1",
+          intent: {},
+        }),
+      (error) => error.code === "retry_not_eligible",
+      refusal.why,
+    );
+    strictEqual(
+      log.some(([kind]) => kind === "createAttempt"),
+      false,
+      refusal.why,
+    );
+  }
+
+  // The lying-reporter fence: an attempt marked dispatched can never ground
+  // a non-dispatch retry, whatever its outcome claims.
+  const log = [];
+  const store = policyStore(
+    {
+      attempts: [
+        {
+          attemptId: "attempt_1",
+          runId: "run_1",
+          requestId: "start-req-1",
+          state: "terminal",
+          result: { kind: "start-denied", code: "runtime_ended" },
+          dispatchedAt: clock(),
+        },
+      ],
+    },
+    log,
+  );
+  throws(
+    () =>
+      coordinator({ store }).requestCoordinatorRetry({
+        runId: "run_1",
+        fromAttemptId: "attempt_1",
+        requestId: "retry-req-1",
+        intent: {},
+      }),
+    (error) => error.code === "retry_not_eligible",
+  );
+  strictEqual(
+    log.some(([kind]) => kind === "createAttempt"),
+    false,
+  );
+
+  // A halted run dispatches nothing, coordinator retry included.
+  const halted = policyStore({ runState: "awaiting-human" });
+  throws(
+    () =>
+      coordinator({ store: halted }).requestCoordinatorRetry({
+        runId: "run_1",
+        fromAttemptId: "attempt_1",
+        requestId: "retry-req-1",
+        intent: {},
+      }),
+    (error) => error.code === "run_not_active",
+  );
+});
+
+test("usage lines through the coordinator keep their kinds distinct forever", () => {
+  const log = [];
+  const store = policyStore({}, log);
+  coordinator({ store }).recordUsage({
+    runId: "run_1",
+    line: { kind: "reported", unit: "usd", value: 0.25 },
+  });
+  coordinator({ store }).recordUsage({
+    runId: "run_1",
+    line: { kind: "estimated", unit: "usd", value: 10 },
+  });
+  coordinator({ store }).recordUsage({ runId: "run_1", line: { kind: "unknown", unit: "usd" } });
+
+  throws(
+    () =>
+      coordinator({ store }).recordUsage({
+        runId: "run_1",
+        line: { kind: "unknown", unit: "usd", value: 5 },
+      }),
+    (error) => error.code === "invalid_usage_line",
+  );
+  throws(
+    () =>
+      coordinator({ store }).recordUsage({
+        runId: "run_1",
+        line: { kind: "guessed", unit: "usd", value: 1 },
+      }),
+    (error) => error.code === "invalid_usage_line",
+  );
+
+  const budget = coordinator({ store }).usageBudget({ runId: "run_1" });
+  deepStrictEqual(budget.totals, {
+    reported: { usd: 0.25 },
+    estimated: { usd: 10 },
+    unknownLines: 1,
+  });
+});
+
+// --- Store-backed policy tests: the durable behavior, end to end. ---
+
+test("a quota outcome parks awaiting-human, folds its usage, and the record surfaces it", async () => {
+  await withLiveConversation(async ({ coordinator, store, run, attempt }) => {
+    coordinator.recordUsage({
+      runId: run.runId,
+      attemptId: attempt.attemptId,
+      line: { kind: "estimated", unit: "tokens", value: 500 },
+    });
+
+    const verdict = coordinator.recordOutcome({
+      runId: run.runId,
+      attemptId: attempt.attemptId,
+      outcome: { kind: "provider-failure", reason: "quota", usage: { total: 12 } },
+    });
+    strictEqual(verdict.classification, "known-failure");
+    strictEqual(verdict.nextAction, "await-human");
+    strictEqual(verdict.halted, false);
+    strictEqual(store.getAttempt(attempt.attemptId).state, "awaiting-human");
+    // Nothing automatic happened beyond the park: the run stays active.
+    strictEqual(store.getRun(run.runId).state, "active");
+
+    // The outcome's operational event is on the ledger; the budget carries
+    // the pre-park estimate and the provider-reported usage verbatim.
+    const events = store.readEvents({ runId: run.runId, afterCursor: 0 }).events;
+    const outcomeEvent = events
+      .map((envelope) => envelope.event)
+      .find((event) => event.kind === "attempt.outcome");
+    strictEqual(outcomeEvent.data.reason, "quota");
+    deepStrictEqual(outcomeEvent.data.usage, { total: 12 });
+    const budget = coordinator.usageBudget({ runId: run.runId });
+    deepStrictEqual(budget.totals, { reported: {}, estimated: { tokens: 500 }, unknownLines: 0 });
+
+    // The run section's read surfaces the origin and the outcome evidence —
+    // the display vocabulary the panel renders from, schema-validated.
+    const section = await coordinator.runSection({ runId: run.runId });
+    strictEqual(section.attempts[0].origin, "manual");
+    ok(section.events.some((envelope) => envelope.event.kind === "attempt.outcome"));
+  });
+});
+
+test("a start-denied attempt grounds the one coordinator retry, exactly once", async () => {
+  await withLiveConversation(async ({ coordinator, store, run, attempt }) => {
+    // A runtime the port denies before it could start: the known-failure
+    // evidence of a start denial.
+    coordinator.recordOutcome({
+      runId: run.runId,
+      attemptId: attempt.attemptId,
+      outcome: { kind: "start-denied", code: "runtime_ended" },
+    });
+    strictEqual(store.getAttempt(attempt.attemptId).state, "terminal");
+    const outcome = store.getAttempt(attempt.attemptId).result;
+    strictEqual(outcome.kind, "start-denied");
+    strictEqual(outcome.classification, "known-failure");
+
+    const { attempt: retry, created } = coordinator.requestCoordinatorRetry({
+      runId: run.runId,
+      fromAttemptId: attempt.attemptId,
+      requestId: "retry-req-1",
+      intent: { kind: "clarification-retry" },
+    });
+    strictEqual(created, true);
+    ok(retry.attemptId !== attempt.attemptId);
+
+    // Exactly once: a second coordinator retry on this run is the schema's
+    // typed refusal, not a second attempt.
+    throws(
+      () =>
+        coordinator.requestCoordinatorRetry({
+          runId: run.runId,
+          fromAttemptId: attempt.attemptId,
+          requestId: "retry-req-2",
+          intent: {},
+        }),
+      (error) => error.code === "coordinator_retry_spent",
+    );
+    strictEqual(store.listAttempts(run.runId).length, 2);
+
+    // The retry decision is evidence on the ledger.
+    const events = store.readEvents({ runId: run.runId, afterCursor: 0 }).events;
+    const retryEvent = events
+      .map((envelope) => envelope.event)
+      .find((event) => event.kind === "attempt.coordinator-retried");
+    strictEqual(retryEvent.data.basis, "proven-non-dispatch");
+  });
+});

@@ -33,6 +33,20 @@
 // the visible issue-body diff rendered from exactly the bytes publication
 // would write; and an explicit save that is fenced like every write and
 // moves no lifecycle state — saving a draft is never publication approval.
+//
+// The failure policy (ticket #235, ADR 0023) completes the discipline: an
+// observed outcome is classified into the Workbench-owned taxonomy, and the
+// classification — never the raw error — decides what happens next. Quota
+// and authentication failures park the attempt awaiting-human with the
+// usage budget preserved; nothing retries, falls back, or overruns. After
+// dispatch, every retry is the Developer's manual fresh attempt; the ONE
+// coordinator retry exists behind durable evidence that no provider or tool
+// dispatch occurred — no dispatch mark, and a recorded outcome that is one
+// of the pre-dispatch start denials. Repeated identical failure signatures
+// halt the run awaiting-human with an escalation record, the bounded
+// handoff that names the next human decision. The outcome result, the
+// lifecycle move it drives, and its operational event commit as one store
+// transaction, so evidence and record cannot disagree.
 
 import { noApprovalLine, noPublishingLine } from "../../../src/types.ts";
 import {
@@ -43,6 +57,15 @@ import {
 } from "./draft.mjs";
 import { NO_DRAFT_GAP } from "./context-packet.mjs";
 import { EVENT_ENVELOPE_VERSION } from "./store.mjs";
+import {
+  FAILURE_SIGNATURE_HALT,
+  NON_DISPATCH_OUTCOME_KINDS,
+  classifyOutcome,
+  escalationFor,
+  failureSignature,
+  summarizeUsageBudget,
+  usageLine,
+} from "./failures.mjs";
 
 // The manifest's fixed lines (ADR 0016's read/research-only posture, ADR
 // 0023's honest accounting): capability summary, egress statement, budget
@@ -205,6 +228,14 @@ export const createClarificationCoordinator = ({
     return envelope;
   };
 
+  // The same viewer contract for the policy's atomic store commands: their
+  // operational events commit inside the store call, so the wake comes
+  // after — no stream is told anything that is not already durable.
+  const wakeAfterStore = (runId) => {
+    changeCounter += 1;
+    wakeRun(runId);
+  };
+
   // The live managed sessions this process started: attemptId → the session
   // handle and the lease token the start held. Runtime state is in-memory —
   // the durable record is the ledger — so a dev-server restart finds the
@@ -335,15 +366,17 @@ export const createClarificationCoordinator = ({
       }
     });
 
-  // The draft save's lease: a draft write claims no effect on the world —
-  // it records the proposal itself — but it lands on the run's record, so
-  // it travels under the live controller lease like every write. This
-  // process is the lease's legitimate owner: it renews the token a live
-  // session holds, and re-arms a fresh generation when the old one expired
-  // (a dev-server restart leaves the record fenced but not orphaned). A
-  // lease another writer genuinely holds fences the save typed — never a
-  // silent adoption, never a queue.
-  const ensureDraftLease = ({ runId, attemptId }) => {
+  // The controller lease for a fenced write on this install (the draft
+  // save's original shape, now shared with the failure policy's writes):
+  // a draft write claims no effect on the world — it records the proposal
+  // itself — but it lands on the run's record, so it travels under the live
+  // controller lease like every write. This process is the lease's
+  // legitimate owner: it renews the token a live session holds, and re-arms
+  // a fresh generation when the old one expired (a dev-server restart
+  // leaves the record fenced but not orphaned). A lease another writer
+  // genuinely holds fences the write typed — never a silent adoption, never
+  // a queue.
+  const ensureLease = ({ runId, attemptId }) => {
     const held = liveSessions.get(attemptId)?.leaseToken;
     if (held !== undefined) {
       try {
@@ -365,7 +398,7 @@ export const createClarificationCoordinator = ({
       if (error?.code === "lease_held")
         throw clarificationError(
           "busy",
-          `the controller lease for run "${runId}" is held elsewhere — saving the draft is fenced until it moves`,
+          `the controller lease for run "${runId}" is held elsewhere — the write is fenced until it moves`,
         );
       throw error;
     }
@@ -475,7 +508,7 @@ export const createClarificationCoordinator = ({
         "attempt_not_found",
         `no attempt "${attemptId}" is visible on run "${runId}" in this host repo`,
       );
-    const leaseToken = ensureDraftLease({ runId, attemptId });
+    const leaseToken = ensureLease({ runId, attemptId });
     store.saveDraft({ attemptId, draft: validated, leaseToken });
     const { gaps } = briefCompletenessFor(validated);
     // The save's evidence shares the publication contract: durable first,
@@ -763,6 +796,210 @@ export const createClarificationCoordinator = ({
     // an explicit save that is never an approval.
     draftView,
     saveDraft,
+
+    // The failure policy's entry point (ticket #235, ADR 0023): one
+    // observed outcome in, the full classified policy applied. The outcome
+    // result, the lifecycle move it drives, and its operational event
+    // commit as one store transaction under the controller lease; the
+    // provider-reported usage folds into the durable budget verbatim as a
+    // `reported` line; the failure's bounded signature is counted, and the
+    // second identical one halts the run awaiting-human with an escalation
+    // record. The outcome shape is closed: anything the policy cannot
+    // classify is a typed rejection that writes nothing.
+    recordOutcome({ runId, attemptId, outcome }) {
+      const verdict = classifyOutcome(outcome);
+      const attempt = store.getAttempt(attemptId);
+      if (attempt === null || attempt.runId !== runId)
+        throw clarificationError(
+          "attempt_not_found",
+          `no attempt "${attemptId}" is visible on run "${runId}" in this host repo`,
+        );
+      const at = clock();
+      const signature = failureSignature(verdict);
+      const leaseToken = ensureLease({ runId, attemptId });
+      // One commit: the result, the state move, the event.
+      const updated = store.recordAttemptOutcome({
+        attemptId,
+        to: verdict.attemptState,
+        // The result's kind IS the outcome kind — the same shape the
+        // start-denial evidence leaves, so one reading of the record serves
+        // both the display and the retry gate.
+        result: {
+          kind: verdict.kind,
+          classification: verdict.classification,
+          nextAction: verdict.nextAction,
+          ...(verdict.reason !== null ? { reason: verdict.reason } : {}),
+          ...(signature !== undefined ? { signature } : {}),
+          outcomeAt: at,
+        },
+        event: {
+          kind: "attempt.outcome",
+          data: {
+            attemptId,
+            kind: verdict.kind,
+            classification: verdict.classification,
+            nextAction: verdict.nextAction,
+            ...(verdict.reason !== null ? { reason: verdict.reason } : {}),
+            ...(signature !== undefined ? { signature } : {}),
+            ...(verdict.usage !== null ? { usage: verdict.usage } : {}),
+          },
+        },
+        leaseToken,
+      });
+      wakeAfterStore(runId);
+
+      // The budget folds AFTER its evidence committed: usage is never
+      // recorded for an outcome the record refused.
+      if (verdict.usage !== null) {
+        store.appendUsageLines({
+          runId,
+          lines: [{ kind: "reported", unit: "provider", detail: verdict.usage, attemptId }],
+          leaseToken,
+        });
+        wakeAfterStore(runId);
+      }
+
+      // The no-progress detector: failures carry a bounded signature; the
+      // second identical one is a loop, and the run halts awaiting-human
+      // with the escalation record — the bounded handoff naming the next
+      // human decision.
+      let halted = false;
+      if (signature !== undefined) {
+        const { count } = store.recordFailureSignature({
+          runId,
+          signature,
+          attemptId,
+          leaseToken,
+        });
+        if (count >= FAILURE_SIGNATURE_HALT) {
+          try {
+            store.haltRun({
+              runId,
+              record: escalationFor({
+                runId,
+                attemptId,
+                verdict,
+                signature,
+                repeats: count,
+                at: clock(),
+              }),
+              leaseToken,
+            });
+            halted = true;
+          } catch (error) {
+            // This signature already escalated: the halt stands, nothing
+            // new is recorded.
+            if (error?.code !== "already_halted") throw error;
+          }
+          wakeAfterStore(runId);
+        }
+      }
+      return {
+        classification: verdict.classification,
+        nextAction: verdict.nextAction,
+        attemptState: updated.state,
+        halted,
+      };
+    },
+
+    // The dispatch mark: durable evidence that the managed runtime became
+    // ready and the dispatch window opened on this attempt. From here on,
+    // "no dispatch occurred" can never be proven again — the one coordinator
+    // retry is gone for this attempt, whatever its outcome claims.
+    markDispatched({ runId, attemptId, evidence }) {
+      const attempt = store.getAttempt(attemptId);
+      if (attempt === null || attempt.runId !== runId)
+        throw clarificationError(
+          "attempt_not_found",
+          `no attempt "${attemptId}" is visible on run "${runId}" in this host repo`,
+        );
+      const marked = store.markAttemptDispatched({
+        attemptId,
+        evidence: evidence ?? null,
+        leaseToken: ensureLease({ runId, attemptId }),
+      });
+      wakeAfterStore(runId);
+      return marked;
+    },
+
+    // The ONE coordinator retry (ADR 0023): fired only when durable
+    // evidence proves no provider or tool dispatch occurred — the failed
+    // attempt carries no dispatch mark, and its recorded outcome is one of
+    // the pre-dispatch start denials. The store's partial unique index
+    // makes the second coordinator-created attempt on a run a typed refusal,
+    // so "at most once" is the schema's law, not a promise. Every other
+    // retry is the Developer's manual fresh attempt on a re-rendered
+    // manifest. A replayed request id deduplicates to the same attempt.
+    requestCoordinatorRetry({ runId, fromAttemptId, requestId, intent }) {
+      const run = store.getRun(runId);
+      if (!run)
+        throw clarificationError(
+          "run_not_found",
+          `no clarification run "${runId}" is visible to this host repo`,
+        );
+      if (run.state !== "active")
+        throw clarificationError(
+          "run_not_active",
+          `run "${runId}" is ${run.state} — a halted run dispatches nothing until the human decides`,
+        );
+      const from = store.getAttempt(fromAttemptId);
+      if (from === null || from.runId !== runId)
+        throw clarificationError(
+          "attempt_not_found",
+          `no attempt "${fromAttemptId}" is visible on run "${runId}" in this host repo`,
+        );
+      const retryNotEligible = (why) =>
+        clarificationError(
+          "retry_not_eligible",
+          `the coordinator retry fires only on durable evidence that no provider or tool dispatch occurred: ${why}`,
+        );
+      const outcome = from.result;
+      if (outcome === null || outcome === undefined)
+        throw retryNotEligible(`attempt "${fromAttemptId}" has no recorded outcome`);
+      if (!NON_DISPATCH_OUTCOME_KINDS.includes(outcome.kind))
+        throw retryNotEligible(
+          `the recorded outcome "${outcome.kind}" does not prove non-dispatch`,
+        );
+      if (from.dispatchedAt !== undefined)
+        throw retryNotEligible(`attempt "${fromAttemptId}" carries a dispatch mark`);
+      const leaseToken = ensureLease({ runId, attemptId: fromAttemptId });
+      const { attempt, created } = store.createAttempt({
+        runId,
+        requestId,
+        intent,
+        origin: "coordinator-retry",
+        leaseToken,
+      });
+      if (created) {
+        recordEvent(runId, {
+          kind: "attempt.coordinator-retried",
+          data: { fromAttemptId, attemptId: attempt.attemptId, basis: "proven-non-dispatch" },
+          leaseToken,
+        });
+      }
+      return { attempt: projectAttempt(attempt), created };
+    },
+
+    // One line into the durable usage budget. The kind — reported,
+    // estimated, unknown — travels with the line forever; the policy module
+    // validates the shape, and an unknown line refuses a value outright.
+    recordUsage({ runId, attemptId, line }) {
+      const validated = usageLine(line);
+      const [stored] = store.appendUsageLines({
+        runId,
+        lines: [validated],
+        leaseToken: ensureLease({ runId, attemptId }),
+      });
+      return stored;
+    },
+
+    // The run's budget: every line with its kind, plus the honest totals —
+    // sums within one kind and unit, never across; unknown lines are
+    // counted, never summed. An open read, like every read.
+    usageBudget({ runId }) {
+      const { lines } = store.usageBudgetFor(runId);
+      return { runId, lines, totals: summarizeUsageBudget(lines) };
+    },
 
     // The Developer's explicit prompt: durable evidence first, the runtime
     // dispatch second, acceptance and settlement staying the runtime's own

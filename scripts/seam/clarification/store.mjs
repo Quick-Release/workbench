@@ -44,6 +44,15 @@ import { DatabaseSync } from "node:sqlite";
 // world, but it lands on the run's record, so it is fenced like every
 // write. The read is open, like every read.
 //
+// The failure policy's durables (ticket #235, ADR 0023): attempts record who
+// created them (the Developer, or the one coordinator retry the partial
+// unique index permits per run) and the dispatch mark — durable evidence
+// that the dispatch window opened, after which "no dispatch occurred" can
+// never be proven again. The no-progress detector counts bounded failure
+// signatures per run; the halt's escalation records are a bounded handoff;
+// the usage budget's lines keep reported, estimated, and unknown distinct.
+// Every policy mutation is fenced like every write; the reads are open.
+//
 // Host-repo scoping: the store is opened for exactly one host repo and every
 // row carries its own host_repo; all reads and writes filter on it. Another
 // repo's records — even in the very same file — are invisible,
@@ -54,7 +63,7 @@ import { DatabaseSync } from "node:sqlite";
 // read-compatible steps, so data written before a disable or upgrade stays
 // interpretable.
 
-export const SCHEMA_VERSION = "3";
+export const SCHEMA_VERSION = "4";
 
 // The operational event ledger's own envelope version (ADR 0020): the
 // run-level observation stream carries this, never the managed adapter's
@@ -123,6 +132,49 @@ CREATE TABLE IF NOT EXISTS drafts (
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );`;
+const FAILURE_SIGNATURES_TABLE = `
+CREATE TABLE IF NOT EXISTS failure_signatures (
+  host_repo TEXT NOT NULL,
+  run_id TEXT NOT NULL REFERENCES runs(run_id),
+  signature TEXT NOT NULL,
+  count INTEGER NOT NULL,
+  last_attempt_id TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (host_repo, run_id, signature)
+);`;
+const ESCALATIONS_TABLE = `
+CREATE TABLE IF NOT EXISTS escalations (
+  host_repo TEXT NOT NULL,
+  run_id TEXT NOT NULL REFERENCES runs(run_id),
+  signature TEXT NOT NULL,
+  record TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (host_repo, run_id, signature)
+);`;
+const USAGE_LINES_TABLE = `
+CREATE TABLE IF NOT EXISTS usage_lines (
+  host_repo TEXT NOT NULL,
+  run_id TEXT NOT NULL REFERENCES runs(run_id),
+  line_id TEXT NOT NULL,
+  attempt_id TEXT,
+  kind TEXT NOT NULL,
+  unit TEXT NOT NULL,
+  value REAL,
+  detail TEXT,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (host_repo, run_id, line_id)
+);`;
+
+// The attempt origins: the Developer's manual acts, and the one
+// coordinator-created retry that durable non-dispatch evidence permits.
+export const ATTEMPT_ORIGINS = ["manual", "coordinator-retry"];
+
+// The one coordinator retry per run, enforced by the schema itself — the
+// partial unique index makes a second coordinator-created attempt on one
+// run a constraint failure, not a judgment call.
+const RETRY_INDEX = `
+CREATE UNIQUE INDEX IF NOT EXISTS attempts_one_coordinator_retry
+  ON attempts (run_id) WHERE origin = 'coordinator-retry';`;
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS store_meta (
@@ -149,11 +201,16 @@ CREATE TABLE IF NOT EXISTS attempts (
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   result TEXT,
+  origin TEXT NOT NULL DEFAULT 'manual',
+  dispatched TEXT,
   UNIQUE (run_id, request_id)
 );
 ${LEASES_TABLE}
 ${RUN_SNAPSHOTS_TABLE}
 ${DRAFTS_TABLE}
+${FAILURE_SIGNATURES_TABLE}
+${ESCALATIONS_TABLE}
+${USAGE_LINES_TABLE}
 CREATE TABLE IF NOT EXISTS events (
   host_repo TEXT NOT NULL,
   run_id TEXT NOT NULL REFERENCES runs(run_id),
@@ -171,6 +228,12 @@ CREATE TABLE IF NOT EXISTS events (
 // v2 → v3: the drafts table is new (ticket #233) — the attempt's
 // Clarification draft as one mutable document per attempt. Everything a v2
 // file holds keeps reading back untouched.
+//
+// v3 → v4: the failure policy's durables (ticket #235) — attempts gain
+// their origin and dispatch mark, the signature counters, escalation
+// records, and usage budget lines arrive as new tables, and the one
+// coordinator retry becomes the schema's own law. Everything a v3 file
+// holds keeps reading back untouched.
 const MIGRATIONS = {
   1: (database) => {
     database.exec(`${LEASES_TABLE}
@@ -179,6 +242,14 @@ ALTER TABLE attempts ADD COLUMN result TEXT;`);
   },
   2: (database) => {
     database.exec(DRAFTS_TABLE);
+  },
+  3: (database) => {
+    database.exec(`${FAILURE_SIGNATURES_TABLE}
+${ESCALATIONS_TABLE}
+${USAGE_LINES_TABLE}
+ALTER TABLE attempts ADD COLUMN origin TEXT NOT NULL DEFAULT 'manual';
+ALTER TABLE attempts ADD COLUMN dispatched TEXT;
+${RETRY_INDEX}`);
   },
 };
 
@@ -250,11 +321,16 @@ export const openClarificationStore = ({
       });
   }
 
+  // The one-coordinator-retry index references the origin column, so it can
+  // only exist once that column does — after the migrations, on every open.
+  // Idempotent, like the schema above it.
+  database.exec(RETRY_INDEX);
+
   const insertRun = database.prepare(
     "INSERT INTO runs (run_id, host_repo, issue_id, request_id, state, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
   );
   const insertAttempt = database.prepare(
-    "INSERT INTO attempts (attempt_id, run_id, host_repo, request_id, dispatch_intent, state, created_at, updated_at, result) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)",
+    "INSERT INTO attempts (attempt_id, run_id, host_repo, request_id, dispatch_intent, state, created_at, updated_at, result, origin) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)",
   );
 
   const runRow = (row) =>
@@ -270,20 +346,24 @@ export const openClarificationStore = ({
           updatedAt: row.updated_at,
         };
 
-  const attemptRow = (row) =>
-    row === undefined
-      ? null
-      : {
-          attemptId: row.attempt_id,
-          runId: row.run_id,
-          hostRepo: row.host_repo,
-          requestId: row.request_id,
-          dispatchIntent: JSON.parse(row.dispatch_intent),
-          state: row.state,
-          createdAt: row.created_at,
-          updatedAt: row.updated_at,
-          result: row.result === null || row.result === undefined ? null : JSON.parse(row.result),
-        };
+  const attemptRow = (row) => {
+    if (row === undefined) return null;
+    const dispatched =
+      row.dispatched === null || row.dispatched === undefined ? null : JSON.parse(row.dispatched);
+    return {
+      attemptId: row.attempt_id,
+      runId: row.run_id,
+      hostRepo: row.host_repo,
+      requestId: row.request_id,
+      dispatchIntent: JSON.parse(row.dispatch_intent),
+      state: row.state,
+      result: row.result === null || row.result === undefined ? null : JSON.parse(row.result),
+      origin: row.origin ?? "manual",
+      ...(dispatched === null ? {} : { dispatchedAt: dispatched.at }),
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    };
+  };
 
   const draftRow = (row) =>
     row === undefined
@@ -689,11 +769,13 @@ export const openClarificationStore = ({
     // attempt with created: false — a read, not a mutation, so it needs no
     // lease; a genuine retry decision carries a new request id, travels
     // under the live controller lease, and gets a fresh attempt identity.
-    createAttempt({ runId, requestId, intent: dispatchIntent, leaseToken }) {
+    createAttempt({ runId, requestId, intent: dispatchIntent, leaseToken, origin = "manual" }) {
       if (requestId === undefined || typeof requestId !== "string" || requestId.trim() === "")
         throw storeError("invalid_request", "an attempt needs a non-empty request id");
       if (!isPlainObject(dispatchIntent))
         throw storeError("invalid_request", "an attempt carries a dispatch intent object");
+      if (!ATTEMPT_ORIGINS.includes(origin))
+        throw storeError("invalid_request", `"${String(origin)}" is not an attempt origin`);
       return tx(() => {
         const row = ownRun(runId);
         if (row === undefined)
@@ -721,6 +803,7 @@ export const openClarificationStore = ({
           requestId,
           dispatchIntent,
           state: "active",
+          origin,
           createdAt: now,
           updatedAt: now,
         };
@@ -734,22 +817,22 @@ export const openClarificationStore = ({
             attempt.state,
             attempt.createdAt,
             attempt.updatedAt,
+            attempt.origin,
           );
         } catch (error) {
-          // A concurrent opener won the (run_id, request_id) race between the
-          // replay check and the insert: the constraint is the dedup, and the
-          // winner's attempt is the answer.
+          // A UNIQUE failure is either the (run_id, request_id) dedup — in
+          // which case the replayed attempt is the answer — or the one-
+          // coordinator-retry index, whose spent refusal is typed. Which one
+          // it was is read off reality, not off a constraint-name string.
           if (!/UNIQUE constraint failed/.test(String(error?.message))) throw error;
-          return {
-            attempt: attemptRow(
-              database
-                .prepare(
-                  "SELECT * FROM attempts WHERE run_id = ? AND request_id = ? AND host_repo = ?",
-                )
-                .get(runId, requestId, hostRepo),
-            ),
-            created: false,
-          };
+          const winner = database
+            .prepare("SELECT * FROM attempts WHERE run_id = ? AND request_id = ? AND host_repo = ?")
+            .get(runId, requestId, hostRepo);
+          if (winner !== undefined) return { attempt: attemptRow(winner), created: false };
+          throw storeError(
+            "coordinator_retry_spent",
+            `run "${runId}" has already used its one coordinator retry`,
+          );
         }
         return { attempt, created: true };
       });
@@ -832,6 +915,277 @@ export const openClarificationStore = ({
           );
         return attemptRow(ownAttempt(attemptId));
       });
+    },
+
+    // The failure policy's one atomic write (ticket #235, ADR 0023): the
+    // outcome result, the lifecycle move it drives, and the operational
+    // event that carries it to viewers commit as one transaction — evidence
+    // and record can never disagree, and an illegal transition writes
+    // nothing at all. Fenced like every mutation.
+    recordAttemptOutcome({ attemptId, to, result, event, leaseToken }) {
+      if (!isPlainObject(result) || typeof result.kind !== "string" || result.kind.trim() === "")
+        throw storeError("invalid_request", "an attempt outcome carries a non-empty kind");
+      if (!isPlainObject(event) || typeof event.kind !== "string" || event.kind.trim() === "")
+        throw storeError("invalid_request", "an attempt outcome carries an operational event");
+      if (!isPlainObject(event.data))
+        throw storeError("invalid_request", "an operational event carries a data object");
+      return tx(() => {
+        const row = ownAttempt(attemptId);
+        if (row === undefined)
+          throw storeError(
+            "attempt_not_found",
+            `no attempt "${attemptId}" is visible to this host repo`,
+          );
+        requireLiveLease(row.run_id, leaseToken);
+        applyTransition({ current: row.state, to, what: "attempt" });
+        const now = clock();
+        const updated = database
+          .prepare(
+            "UPDATE attempts SET result = ?, state = ?, updated_at = ? WHERE attempt_id = ? AND host_repo = ? AND state = ?",
+          )
+          .run(JSON.stringify(result), to, now, attemptId, hostRepo, row.state);
+        if (updated.changes === 0) {
+          const reality = ownAttempt(attemptId);
+          throw storeError(
+            "illegal_transition",
+            `an attempt in state "${reality?.state ?? "???"}" cannot move to "${to}" — another writer moved it first`,
+          );
+        }
+        appendEventInTx({ runId: row.run_id, kind: event.kind, data: event.data, at: now });
+        return attemptRow(ownAttempt(attemptId));
+      });
+    },
+
+    // The dispatch mark: durable evidence that the managed runtime became
+    // ready and the dispatch window opened on this attempt. It lands once,
+    // on an active attempt, in the same commit as its operational event —
+    // after this, "no dispatch occurred" can never be proven again.
+    markAttemptDispatched({ attemptId, evidence, leaseToken } = {}) {
+      if (evidence !== undefined && evidence !== null && !isPlainObject(evidence))
+        throw storeError("invalid_request", "dispatch evidence travels verbatim as an object");
+      return tx(() => {
+        const row = ownAttempt(attemptId);
+        if (row === undefined)
+          throw storeError(
+            "attempt_not_found",
+            `no attempt "${attemptId}" is visible to this host repo`,
+          );
+        requireLiveLease(row.run_id, leaseToken);
+        if (row.state !== "active")
+          throw storeError(
+            "dispatch_not_markable",
+            `attempt "${attemptId}" is ${row.state} — a dispatch mark records a live attempt's evidence`,
+          );
+        if (row.dispatched !== null && row.dispatched !== undefined)
+          throw storeError(
+            "dispatch_marked",
+            `attempt "${attemptId}" already carries a dispatch mark`,
+          );
+        const now = clock();
+        database
+          .prepare(
+            "UPDATE attempts SET dispatched = ?, updated_at = ? WHERE attempt_id = ? AND host_repo = ? AND dispatched IS NULL",
+          )
+          .run(JSON.stringify({ at: now, evidence: evidence ?? null }), now, attemptId, hostRepo);
+        appendEventInTx({
+          runId: row.run_id,
+          kind: "attempt.dispatched",
+          data: { attemptId },
+          at: now,
+        });
+        return attemptRow(ownAttempt(attemptId));
+      });
+    },
+
+    // The no-progress detector's durable counter: one row per (run,
+    // signature), counting the attempts that failed identically. Reads back
+    // across restarts, so a loop cannot hide by spanning them. The counted
+    // attempt must belong to THIS run — another run's attempt must never
+    // inflate this run's loop counter.
+    recordFailureSignature({ runId, signature, attemptId, leaseToken }) {
+      if (typeof signature !== "string" || signature === "")
+        throw storeError("invalid_request", "a failure signature is a non-empty string");
+      return tx(() => {
+        if (ownRun(runId) === undefined)
+          throw storeError("run_not_found", `no run "${runId}" is visible to this host repo`);
+        requireLiveLease(runId, leaseToken);
+        if (ownAttempt(attemptId)?.run_id !== runId)
+          throw storeError(
+            "attempt_not_found",
+            `no attempt "${attemptId}" is visible on run "${runId}" in this host repo`,
+          );
+        const row = database
+          .prepare(
+            `INSERT INTO failure_signatures (host_repo, run_id, signature, count, last_attempt_id, updated_at)
+             VALUES (?, ?, ?, 1, ?, ?)
+             ON CONFLICT (host_repo, run_id, signature)
+             DO UPDATE SET count = count + 1, last_attempt_id = excluded.last_attempt_id, updated_at = excluded.updated_at
+             RETURNING count`,
+          )
+          .get(hostRepo, runId, signature, attemptId, clock());
+        return { count: row.count };
+      });
+    },
+
+    // The no-progress halt, atomic and fenced: the escalation record inserts
+    // (its (run, signature) key is unique, so one signature escalates once —
+    // a repeat is a typed already_halted), the escalation event lands in the
+    // ledger, and an active run moves to awaiting-human. A run already
+    // parked or beyond that still records the handoff — the park is
+    // idempotent, the record is not lost.
+    haltRun({ runId, record, leaseToken }) {
+      if (!isPlainObject(record))
+        throw storeError("invalid_request", "an escalation record is an object");
+      for (const field of ["signature", "attemptId", "at"])
+        if (typeof record[field] !== "string" || record[field] === "")
+          throw storeError("invalid_request", `an escalation record needs a ${field}`);
+      if ("type" in record || "scope" in record || "id" in record)
+        throw storeError(
+          "invalid_request",
+          "an escalation record carries its identity from the run — no type, scope, or id fields",
+        );
+      return tx(() => {
+        if (ownRun(runId) === undefined)
+          throw storeError("run_not_found", `no run "${runId}" is visible to this host repo`);
+        requireLiveLease(runId, leaseToken);
+        try {
+          database
+            .prepare(
+              "INSERT INTO escalations (host_repo, run_id, signature, record, created_at) VALUES (?, ?, ?, ?, ?)",
+            )
+            .run(hostRepo, runId, record.signature, JSON.stringify(record), clock());
+        } catch (error) {
+          if (/UNIQUE constraint failed/.test(String(error?.message)))
+            throw storeError(
+              "already_halted",
+              `run "${runId}" already escalated signature "${record.signature}"`,
+            );
+          throw error;
+        }
+        // The event carries the record's fields; the run's identity rides
+        // the operational kind and the ledger's run scope, so it is not
+        // duplicated inside.
+        const { runId: _recordRunId, ...recordFields } = record;
+        appendEventInTx({ runId, kind: "run.halted", data: recordFields, at: clock() });
+        // Only an active run is parked; the compare-and-set keeps the write
+        // on the legal transition alone.
+        const moved =
+          database
+            .prepare(
+              "UPDATE runs SET state = 'awaiting-human', updated_at = ? WHERE run_id = ? AND host_repo = ? AND state = 'active'",
+            )
+            .run(clock(), runId, hostRepo).changes === 1;
+        return { record, moved };
+      });
+    },
+
+    // The durable usage budget: lines appended to the run's envelope, each
+    // carrying its own kind — reported, estimated, unknown — and never
+    // converted. Shapes are checked here so bad data never lands; the
+    // closed kind vocabulary is the policy layer's to enforce.
+    appendUsageLines({ runId, lines, leaseToken }) {
+      if (!Array.isArray(lines) || lines.length === 0)
+        throw storeError("invalid_request", "a usage append carries at least one line");
+      const prepared = lines.map((line) => {
+        if (line === null || typeof line !== "object" || Array.isArray(line))
+          throw storeError("invalid_request", "a usage line is an object");
+        if (typeof line.kind !== "string" || line.kind === "")
+          throw storeError("invalid_request", "a usage line names its kind");
+        if (typeof line.unit !== "string" || line.unit.trim() !== line.unit || line.unit === "")
+          throw storeError("invalid_request", "a usage line names its unit");
+        if (
+          line.value !== undefined &&
+          line.value !== null &&
+          (typeof line.value !== "number" || !Number.isFinite(line.value) || line.value < 0)
+        )
+          throw storeError(
+            "invalid_request",
+            "a usage line's value is a finite non-negative number",
+          );
+        if (
+          line.detail !== undefined &&
+          line.detail !== null &&
+          (typeof line.detail !== "object" || Array.isArray(line.detail))
+        )
+          throw storeError("invalid_request", "a usage line's detail is an object");
+        return { ...line };
+      });
+      return tx(() => {
+        if (ownRun(runId) === undefined)
+          throw storeError("run_not_found", `no run "${runId}" is visible to this host repo`);
+        requireLiveLease(runId, leaseToken);
+        const now = clock();
+        return prepared.map((line) => {
+          if (
+            line.attemptId !== undefined &&
+            line.attemptId !== null &&
+            ownAttempt(line.attemptId)?.run_id !== runId
+          )
+            throw storeError(
+              "attempt_not_found",
+              `no attempt "${line.attemptId}" is visible on run "${runId}" in this host repo`,
+            );
+          const lineId = `usage_${randomUUID()}`;
+          const value = typeof line.value === "number" ? line.value : null;
+          database
+            .prepare(
+              "INSERT INTO usage_lines (host_repo, run_id, line_id, attempt_id, kind, unit, value, detail, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            )
+            .run(
+              hostRepo,
+              runId,
+              lineId,
+              line.attemptId ?? null,
+              line.kind,
+              line.unit,
+              value,
+              line.detail === undefined || line.detail === null
+                ? null
+                : JSON.stringify(line.detail),
+              now,
+            );
+          return {
+            lineId,
+            ...(line.attemptId === undefined || line.attemptId === null
+              ? {}
+              : { attemptId: line.attemptId }),
+            kind: line.kind,
+            unit: line.unit,
+            value,
+            ...(line.detail === undefined || line.detail === null ? {} : { detail: line.detail }),
+            createdAt: now,
+          };
+        });
+      });
+    },
+
+    usageBudgetFor(runId) {
+      if (ownRun(runId) === undefined)
+        throw storeError("run_not_found", `no run "${runId}" is visible to this host repo`);
+      const lines = database
+        .prepare("SELECT * FROM usage_lines WHERE run_id = ? AND host_repo = ? ORDER BY rowid ASC")
+        .all(runId, hostRepo)
+        .map((row) => ({
+          lineId: row.line_id,
+          ...(row.attempt_id === null ? {} : { attemptId: row.attempt_id }),
+          kind: row.kind,
+          unit: row.unit,
+          value: row.value,
+          ...(row.detail === null ? {} : { detail: JSON.parse(row.detail) }),
+          createdAt: row.created_at,
+        }));
+      return { runId, lines };
+    },
+
+    listEscalations(runId) {
+      if (ownRun(runId) === undefined)
+        throw storeError("run_not_found", `no run "${runId}" is visible to this host repo`);
+      return database
+        .prepare(
+          "SELECT record FROM escalations WHERE run_id = ? AND host_repo = ? ORDER BY created_at ASC, signature ASC",
+        )
+        .all(runId, hostRepo)
+        .map((row) => JSON.parse(row.record));
     },
 
     // Reconciliation, run level: lease-free by design (see the module head).

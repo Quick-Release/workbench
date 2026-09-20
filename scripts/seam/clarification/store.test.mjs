@@ -6,6 +6,7 @@ import { join } from "node:path";
 import test from "node:test";
 
 import {
+  ATTEMPT_ORIGINS,
   DEFAULT_LEASE_TTL_MS,
   EVENT_ENVELOPE_VERSION,
   LIFECYCLE_STATES,
@@ -13,6 +14,7 @@ import {
   openClarificationStore,
 } from "./store.mjs";
 import {
+  clarificationAttemptOrigins,
   clarificationEventEnvelopeVersion,
   clarificationLifecycleStates,
 } from "../../../src/types.ts";
@@ -1155,7 +1157,7 @@ CREATE TABLE IF NOT EXISTS events (
 
 test("a version-1 file upgrades in place and everything written before reads back", async () => {
   await withStore(async ({ databasePath }) => {
-    strictEqual(SCHEMA_VERSION, "3");
+    strictEqual(SCHEMA_VERSION, "4");
 
     // A file exactly as the previous schema wrote it — version stamp, one
     // run, one attempt — then abandoned mid-pilot.
@@ -1213,7 +1215,7 @@ test("a version-1 file upgrades in place and everything written before reads bac
     const raw = new DatabaseSync(databasePath);
     strictEqual(
       raw.prepare("SELECT value FROM store_meta WHERE key = 'schema_version'").get().value,
-      "3",
+      "4",
     );
     raw.close();
 
@@ -1412,7 +1414,7 @@ test("a draft is scoped to its host repo, even in the very same file", async () 
   });
 });
 
-test("a version-2 file upgrades to version 3 and gains the drafts table", async () => {
+test("a version-2 file upgrades through to the current schema and gains the drafts table", async () => {
   await withStore(async ({ databasePath }) => {
     // A file exactly as schema version 2 wrote it — the v1 tables plus the
     // lease and snapshot tables and the attempts result column — then
@@ -1480,8 +1482,498 @@ ALTER TABLE attempts ADD COLUMN result TEXT;`);
     const raw = new DatabaseSync(databasePath);
     strictEqual(
       raw.prepare("SELECT value FROM store_meta WHERE key = 'schema_version'").get().value,
-      "3",
+      "4",
     );
     raw.close();
+  });
+});
+
+// --- Ticket #235: the failure policy's durables (ADR 0023). ---
+
+test("the store's attempt origins never drift from the seam's mirrored words", () => {
+  deepStrictEqual([...ATTEMPT_ORIGINS], [...clarificationAttemptOrigins]);
+});
+
+const V3_SCHEMA = `${V1_SCHEMA}
+ALTER TABLE attempts ADD COLUMN result TEXT;
+CREATE TABLE IF NOT EXISTS leases (
+  run_id TEXT PRIMARY KEY,
+  host_repo TEXT NOT NULL,
+  token TEXT NOT NULL,
+  generation INTEGER NOT NULL,
+  owner TEXT NOT NULL,
+  acquired_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS run_snapshots (
+  run_id TEXT PRIMARY KEY,
+  host_repo TEXT NOT NULL,
+  snapshot TEXT NOT NULL,
+  saved_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS drafts (
+  attempt_id TEXT PRIMARY KEY REFERENCES attempts(attempt_id),
+  run_id TEXT NOT NULL REFERENCES runs(run_id),
+  host_repo TEXT NOT NULL,
+  draft TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+`;
+
+test("a version-3 file upgrades to version 4 and gains the failure policy's durables", async () => {
+  await withStore(async ({ databasePath }) => {
+    // A file exactly as schema version 3 wrote it — everything through the
+    // drafts table, with a real attempt row — then abandoned mid-pilot.
+    const v3 = new DatabaseSync(databasePath);
+    v3.exec(V3_SCHEMA);
+    v3.prepare("INSERT INTO store_meta (key, value) VALUES ('schema_version', '3')").run();
+    v3.prepare(
+      "INSERT INTO runs (run_id, host_repo, issue_id, request_id, state, created_at, updated_at) VALUES ('run_pilot', 'example/project', 'GH-7', 'approve-1', 'active', '2026-09-18T00:00:00Z', '2026-09-18T00:00:00Z')",
+    ).run();
+    v3.prepare(
+      "INSERT INTO attempts (attempt_id, run_id, host_repo, request_id, dispatch_intent, state, created_at, updated_at, result) VALUES ('attempt_pilot', 'run_pilot', 'example/project', 'req-1', '{}', 'active', '2026-09-18T00:00:00Z', '2026-09-18T00:00:00Z', NULL)",
+    ).run();
+    v3.close();
+
+    const store = open({ databasePath });
+    // The old row reads back with the new projection fields honestly empty.
+    const pilot = store.getAttempt("attempt_pilot");
+    strictEqual(pilot.attemptId, "attempt_pilot");
+    strictEqual(pilot.origin, "manual");
+    strictEqual(pilot.dispatchedAt, undefined);
+
+    // The migrated file takes new writes.
+    const { lease } = store.acquireLease({ runId: "run_pilot", owner: "coordinator" });
+    const { attempt } = store.createAttempt({
+      runId: "run_pilot",
+      requestId: "req-2",
+      intent,
+      leaseToken: lease.token,
+    });
+    strictEqual(attempt.origin, "manual");
+    store.close();
+
+    const raw = new DatabaseSync(databasePath);
+    strictEqual(
+      raw.prepare("SELECT value FROM store_meta WHERE key = 'schema_version'").get().value,
+      "4",
+    );
+    raw.close();
+  });
+});
+
+test("the coordinator retry is durably limited to one attempt per run", async () => {
+  await withStore(async ({ databasePath }) => {
+    const store = open({ databasePath });
+    const { run, lease } = leasedRun(store, "r-retry");
+    const token = lease.token;
+
+    const manual = store.createAttempt({
+      runId: run.runId,
+      requestId: "req-1",
+      intent,
+      leaseToken: token,
+    });
+    strictEqual(manual.attempt.origin, "manual");
+
+    const retry = store.createAttempt({
+      runId: run.runId,
+      requestId: "req-2",
+      intent,
+      leaseToken: token,
+      origin: "coordinator-retry",
+    });
+    strictEqual(retry.attempt.origin, "coordinator-retry");
+
+    // The one coordinator retry is spent: a second is a typed refusal, even
+    // under a different request id.
+    throws(
+      () =>
+        store.createAttempt({
+          runId: run.runId,
+          requestId: "req-3",
+          intent,
+          leaseToken: token,
+          origin: "coordinator-retry",
+        }),
+      (error) => error.code === "coordinator_retry_spent",
+    );
+
+    // The Developer's manual attempts are not limited.
+    store.createAttempt({ runId: run.runId, requestId: "req-4", intent, leaseToken: token });
+    strictEqual(store.listAttempts(run.runId).length, 3);
+
+    throws(
+      () =>
+        store.createAttempt({
+          runId: run.runId,
+          requestId: "req-5",
+          intent,
+          leaseToken: token,
+          origin: "sneaky",
+        }),
+      (error) => error.code === "invalid_request",
+    );
+    store.close();
+
+    // The spent retry stays spent across a restart — the lease token is a
+    // durable capability on the record, so the reopened store honours it.
+    const again = open({ databasePath });
+    throws(
+      () =>
+        again.createAttempt({
+          runId: run.runId,
+          requestId: "req-6",
+          intent,
+          leaseToken: token,
+          origin: "coordinator-retry",
+        }),
+      (error) => error.code === "coordinator_retry_spent",
+    );
+    again.close();
+  });
+});
+
+const outcomeVerdict = (attemptId) => ({
+  attemptId,
+  kind: "provider-failure",
+  classification: "known-failure",
+  nextAction: "await-human",
+  reason: "quota",
+  outcomeAt: "2026-09-18T00:00:00Z",
+});
+
+test("an outcome writes the result, the state move, and its event atomically", async () => {
+  await withStore(async ({ databasePath }) => {
+    const store = open({ databasePath });
+    const { run, lease } = leasedRun(store, "r-outcome");
+    const token = lease.token;
+    const { attempt } = store.createAttempt({
+      runId: run.runId,
+      requestId: "req-1",
+      intent,
+      leaseToken: token,
+    });
+
+    const updated = store.recordAttemptOutcome({
+      attemptId: attempt.attemptId,
+      to: "awaiting-human",
+      result: outcomeVerdict(attempt.attemptId),
+      event: {
+        kind: "attempt.outcome",
+        data: {
+          attemptId: attempt.attemptId,
+          kind: "provider-failure",
+          classification: "known-failure",
+          nextAction: "await-human",
+          reason: "quota",
+        },
+      },
+      leaseToken: token,
+    });
+    strictEqual(updated.state, "awaiting-human");
+    deepStrictEqual(updated.result, outcomeVerdict(attempt.attemptId));
+
+    // The event landed in the same commit as the state move and the result.
+    const events = store.readEvents({ runId: run.runId, afterCursor: 0 }).events;
+    deepStrictEqual(
+      events.map((envelope) => envelope.event.kind),
+      ["attempt.outcome"],
+    );
+    store.close();
+
+    // Durable across a reopen.
+    const again = open({ databasePath });
+    deepStrictEqual(again.getAttempt(attempt.attemptId).result, outcomeVerdict(attempt.attemptId));
+    strictEqual(again.getAttempt(attempt.attemptId).state, "awaiting-human");
+    again.close();
+  });
+});
+
+test("an illegal outcome transition writes nothing, not even its event", async () => {
+  await withStore(async ({ databasePath }) => {
+    const store = open({ databasePath });
+    const { run, lease } = leasedRun(store, "r-illegal");
+    const token = lease.token;
+    const { attempt } = store.createAttempt({
+      runId: run.runId,
+      requestId: "req-1",
+      intent,
+      leaseToken: token,
+    });
+    store.updateAttemptState({ attemptId: attempt.attemptId, to: "terminal", leaseToken: token });
+
+    throws(
+      () =>
+        store.recordAttemptOutcome({
+          attemptId: attempt.attemptId,
+          to: "awaiting-human",
+          result: outcomeVerdict(attempt.attemptId),
+          event: { kind: "attempt.outcome", data: { attemptId: attempt.attemptId } },
+          leaseToken: token,
+        }),
+      (error) => error.code === "illegal_transition",
+    );
+    strictEqual(store.readEvents({ runId: run.runId, afterCursor: 0 }).events.length, 0);
+    strictEqual(store.getAttempt(attempt.attemptId).result, null);
+  });
+});
+
+test("a dispatch mark is durable evidence, recorded once, on an active attempt", async () => {
+  await withStore(async ({ databasePath }) => {
+    const store = open({ databasePath });
+    const { run, lease } = leasedRun(store, "r-dispatch");
+    const token = lease.token;
+    const { attempt } = store.createAttempt({
+      runId: run.runId,
+      requestId: "req-1",
+      intent,
+      leaseToken: token,
+    });
+
+    const marked = store.markAttemptDispatched({
+      attemptId: attempt.attemptId,
+      evidence: { argv: ["pi", "--mode", "rpc"] },
+      leaseToken: token,
+    });
+    strictEqual(marked.dispatchedAt, "2026-09-18T00:00:00Z");
+
+    const events = store.readEvents({ runId: run.runId, afterCursor: 0 }).events;
+    deepStrictEqual(
+      events.map((envelope) => envelope.event.kind),
+      ["attempt.dispatched"],
+    );
+
+    // A second mark is contradictory evidence — the first is the record.
+    throws(
+      () => store.markAttemptDispatched({ attemptId: attempt.attemptId, leaseToken: token }),
+      (error) => error.code === "dispatch_marked",
+    );
+
+    // A mark after the attempt ended would corrupt the retry gate's proof.
+    store.updateAttemptState({ attemptId: attempt.attemptId, to: "terminal", leaseToken: token });
+    throws(
+      () => store.markAttemptDispatched({ attemptId: attempt.attemptId, leaseToken: token }),
+      (error) => error.code === "dispatch_not_markable",
+    );
+    store.close();
+
+    const again = open({ databasePath });
+    strictEqual(again.getAttempt(attempt.attemptId).dispatchedAt, "2026-09-18T00:00:00Z");
+    again.close();
+  });
+});
+
+test("failure signature counts accumulate durably per run", async () => {
+  await withStore(async ({ databasePath }) => {
+    const store = open({ databasePath });
+    const { run, lease } = leasedRun(store, "r-signature");
+    const token = lease.token;
+    const { attempt } = store.createAttempt({
+      runId: run.runId,
+      requestId: "req-1",
+      intent,
+      leaseToken: token,
+    });
+
+    strictEqual(
+      store.recordFailureSignature({
+        runId: run.runId,
+        signature: "sig-a",
+        attemptId: attempt.attemptId,
+        leaseToken: token,
+      }).count,
+      1,
+    );
+    strictEqual(
+      store.recordFailureSignature({
+        runId: run.runId,
+        signature: "sig-a",
+        attemptId: attempt.attemptId,
+        leaseToken: token,
+      }).count,
+      2,
+    );
+    strictEqual(
+      store.recordFailureSignature({
+        runId: run.runId,
+        signature: "sig-b",
+        attemptId: attempt.attemptId,
+        leaseToken: token,
+      }).count,
+      1,
+    );
+
+    // Another run's attempt must never inflate this run's loop counter.
+    const { run: otherRun, lease: otherLease } = leasedRun(store, "r-signature-other");
+    const { attempt: foreignAttempt } = store.createAttempt({
+      runId: otherRun.runId,
+      requestId: "req-1",
+      intent,
+      leaseToken: otherLease.token,
+    });
+    throws(
+      () =>
+        store.recordFailureSignature({
+          runId: run.runId,
+          signature: "sig-x",
+          attemptId: foreignAttempt.attemptId,
+          leaseToken: token,
+        }),
+      (error) => error.code === "attempt_not_found",
+    );
+    store.close();
+
+    const again = open({ databasePath });
+    strictEqual(
+      again.recordFailureSignature({
+        runId: run.runId,
+        signature: "sig-a",
+        attemptId: attempt.attemptId,
+        leaseToken: token,
+      }).count,
+      3,
+    );
+    again.close();
+  });
+});
+
+test("halting a run records the escalation, parks the run, and happens once per signature", async () => {
+  await withStore(async ({ databasePath }) => {
+    const store = open({ databasePath });
+    const { run, lease } = leasedRun(store, "r-halt");
+    const token = lease.token;
+    const { attempt } = store.createAttempt({
+      runId: run.runId,
+      requestId: "req-1",
+      intent,
+      leaseToken: token,
+    });
+
+    const record = {
+      runId: run.runId,
+      attemptId: attempt.attemptId,
+      signature: "sig-loop",
+      repeats: 2,
+      classification: "known-failure",
+      kind: "provider-failure",
+      reason: "quota",
+      remainingAuthority: ["manual-retry"],
+      decision: "decide whether to start a fresh manual attempt or abandon this run",
+      at: "2026-09-18T00:00:00Z",
+    };
+    const halt = store.haltRun({ runId: run.runId, record, leaseToken: token });
+    strictEqual(halt.moved, true);
+    strictEqual(store.getRun(run.runId).state, "awaiting-human");
+
+    const events = store.readEvents({ runId: run.runId, afterCursor: 0 }).events;
+    deepStrictEqual(
+      events.map((envelope) => envelope.event.kind),
+      ["run.halted"],
+    );
+    strictEqual(events[0].event.data.signature, "sig-loop");
+    deepStrictEqual(store.listEscalations(run.runId), [record]);
+
+    // The same signature cannot escalate twice.
+    throws(
+      () => store.haltRun({ runId: run.runId, record, leaseToken: token }),
+      (error) => error.code === "already_halted",
+    );
+
+    // A second, different signature still records while the run is already
+    // halted — the park is idempotent, the handoff is not lost.
+    const second = store.haltRun({
+      runId: run.runId,
+      record: { ...record, signature: "sig-other" },
+      leaseToken: token,
+    });
+    strictEqual(second.moved, false);
+    strictEqual(store.listEscalations(run.runId).length, 2);
+    store.close();
+
+    const again = open({ databasePath });
+    strictEqual(again.getRun(run.runId).state, "awaiting-human");
+    strictEqual(again.listEscalations(run.runId).length, 2);
+    again.close();
+  });
+});
+
+test("usage budget lines are durable, ordered, and host-repo-scoped", async () => {
+  await withStore(async ({ databasePath }) => {
+    const store = open({ databasePath });
+    const { run, lease } = leasedRun(store, "r-usage");
+    const token = lease.token;
+    const { attempt } = store.createAttempt({
+      runId: run.runId,
+      requestId: "req-1",
+      intent,
+      leaseToken: token,
+    });
+
+    const lines = store.appendUsageLines({
+      runId: run.runId,
+      lines: [
+        { kind: "reported", unit: "provider", detail: { total: 12 }, attemptId: attempt.attemptId },
+        { kind: "estimated", unit: "tokens", value: 500 },
+      ],
+      leaseToken: token,
+    });
+    strictEqual(lines.length, 2);
+    ok(lines[0].lineId.startsWith("usage_"));
+    strictEqual(lines[0].attemptId, attempt.attemptId);
+    strictEqual(lines[1].attemptId, undefined);
+
+    throws(
+      () =>
+        store.appendUsageLines({
+          runId: run.runId,
+          lines: [{ kind: "reported", unit: "provider", value: "many" }],
+          leaseToken: token,
+        }),
+      (error) => error.code === "invalid_request",
+    );
+
+    // A line may only attribute itself to an attempt of ITS OWN run —
+    // another run's attempt would misattribute the usage.
+    const { run: otherRun, lease: otherLease } = leasedRun(store, "r-usage-other");
+    const { attempt: foreignAttempt } = store.createAttempt({
+      runId: otherRun.runId,
+      requestId: "req-1",
+      intent,
+      leaseToken: otherLease.token,
+    });
+    throws(
+      () =>
+        store.appendUsageLines({
+          runId: run.runId,
+          lines: [{ kind: "reported", unit: "provider", attemptId: foreignAttempt.attemptId }],
+          leaseToken: token,
+        }),
+      (error) => error.code === "attempt_not_found",
+    );
+    store.close();
+
+    // The budget spans attempts and restarts: a fresh handle on the same
+    // file reads every line back in order.
+    const again = open({ databasePath });
+    const budget = again.usageBudgetFor(run.runId);
+    deepStrictEqual(
+      budget.lines.map((line) => [line.kind, line.unit, line.value]),
+      [
+        ["reported", "provider", null],
+        ["estimated", "tokens", 500],
+      ],
+    );
+    deepStrictEqual(budget.lines[0].detail, { total: 12 });
+    again.close();
+
+    // Another repo's budget is invisible here.
+    const foreign = open({ databasePath, hostRepo: "other/project" });
+    throws(
+      () => foreign.usageBudgetFor(run.runId),
+      (error) => error.code === "run_not_found",
+    );
+    foreign.close();
   });
 });

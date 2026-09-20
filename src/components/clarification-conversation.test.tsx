@@ -51,6 +51,7 @@ const runSection = (events: unknown[]) => ({
         dataDestination: "https://api.openai.com",
       },
       state: "active",
+      origin: "manual",
       createdAt: "2026-09-18T10:00:03.000Z",
       updatedAt: "2026-09-18T10:00:03.000Z",
     },

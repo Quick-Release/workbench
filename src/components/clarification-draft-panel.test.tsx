@@ -32,6 +32,7 @@ const runSection = {
       requestId: "start-req-1",
       dispatchIntent: { kind: "clarification-start" },
       state: "active",
+      origin: "manual",
       createdAt: "2026-09-18T10:00:03.000Z",
       updatedAt: "2026-09-18T10:00:03.000Z",
     },
@@ -288,11 +289,13 @@ describe("the clarification draft surface", () => {
           ...runSection.attempts[0],
           attemptId: "attempt_1",
           state: "unknown",
+          origin: "manual",
         },
         {
           ...runSection.attempts[0],
           attemptId: "attempt_2",
           state: "active",
+          origin: "manual",
         },
       ],
     };

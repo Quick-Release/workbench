@@ -16,6 +16,7 @@ import type {
 import {
   artifactKinds,
   blockerEdgeSources,
+  clarificationAttemptOrigins,
   clarificationDraftProvenanceKinds,
   clarificationDraftVersion,
   clarificationEventEnvelopeVersion,
@@ -980,6 +981,13 @@ export const ClarificationAttemptSnapshotSchema = Schema.Struct({
   // travels verbatim.
   dispatchIntent: Schema.Unknown,
   state: Schema.Literals(clarificationLifecycleStates),
+  // Who created the attempt (ticket #235) — the Developer, or the one
+  // coordinator retry. The outcome verdict itself is lifecycle evidence the
+  // ledger's operational events carry in their own time, like the result.
+  origin: Schema.Literals(clarificationAttemptOrigins),
+  // Present once the dispatch window opened — the evidence the one
+  // coordinator retry gate leans on.
+  dispatchedAt: Schema.optional(Schema.String),
   createdAt: Schema.String,
   updatedAt: Schema.String,
 });

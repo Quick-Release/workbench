@@ -643,6 +643,44 @@ export const clarificationDraftProvenanceKinds = [
 
 export type ClarificationDraftProvenanceKind = (typeof clarificationDraftProvenanceKinds)[number];
 
+// The Workbench-owned failure classifications (ADR 0023, ticket #235): what
+// an observed attempt outcome IS, keeping known failure, unsupported,
+// policy denial, cancellation and Unknown outcome distinct. The failure
+// policy module owns the words and the classification rules; this mirror is
+// what the seam validates against and the drift fences pin.
+export const clarificationFailureClassifications = [
+  "known-failure",
+  "unsupported",
+  "policy-denial",
+  "cancellation",
+  "unknown",
+] as const;
+
+export type ClarificationFailureClassification =
+  (typeof clarificationFailureClassifications)[number];
+
+// The bounded permitted next actions a failure classification maps to:
+// after dispatch, every retry is the Developer's manual fresh attempt; the
+// one evidence-gated coordinator retry is not an outcome's next action but
+// a separate gated decision.
+export const clarificationNextActions = ["await-human", "manual-retry", "reconcile"] as const;
+
+export type ClarificationNextAction = (typeof clarificationNextActions)[number];
+
+// The usage budget's line kinds (ADR 0023): provider-reported usage,
+// estimates, and unknown availability stay distinct forever — a total sums
+// its own kind only, and an unknown line carries no number.
+export const clarificationUsageLineKinds = ["reported", "estimated", "unknown"] as const;
+
+export type ClarificationUsageLineKind = (typeof clarificationUsageLineKinds)[number];
+
+// Who created an attempt: the Developer's manual acts, or the one
+// coordinator-created retry that durable non-dispatch evidence permits.
+// The durable store owns the vocabulary; this mirror validates the wire.
+export const clarificationAttemptOrigins = ["manual", "coordinator-retry"] as const;
+
+export type ClarificationAttemptOrigin = (typeof clarificationAttemptOrigins)[number];
+
 // The versioned envelope a persisted Clarification draft travels in.
 export const clarificationDraftVersion = "clarification-draft/v1";
 
