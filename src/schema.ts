@@ -17,18 +17,21 @@ import {
   artifactKinds,
   blockerEdgeSources,
   clarificationAttemptOrigins,
+  clarificationDraftProvenanceKinds,
+  clarificationDraftVersion,
   clarificationEventEnvelopeVersion,
   clarificationEventScopes,
-  clarificationFailureClassifications,
   clarificationLifecycleStates,
-  clarificationNextActions,
   clarificationPostures,
+  clarificationTaskProfiles,
   clientTicketKinds,
   decisionTicketKinds,
   startDenialReasons,
   decisionSources,
   decisionStatuses,
   engines,
+  noApprovalLine,
+  noPublishingLine,
   reviewEngines,
   serviceStatuses,
   skillFlowEdgeKinds,
@@ -829,33 +832,75 @@ export type ClarificationStatusResult = Schema.Schema.Type<typeof ClarificationS
 export const parseClarificationStatusResult: (input: unknown) => ClarificationStatusResult =
   Schema.decodeUnknownSync(ClarificationStatusResultSchema, { onExcessProperty: "error" });
 
-// The clarification start request (spec #221): the first slice takes no
-// fields — the target issue, context packet, and approval manifest arrive
-// with the clarification coordinator (ticket 09 of the clarification
-// build). Until then the route exists so its denials are real, not
-// hypothetical.
-export const ClarificationStartRequestSchema = Schema.Struct({});
+// The pinned issue revision, as the pre-start manifest renders it and the
+// start presents it back: the tracker's own last-update stamp plus the
+// body hash — together, what "unchanged since the manifest" means.
+const ClarificationRevisionSchema = Schema.Struct({
+  updatedAt: Schema.String,
+  bodyHash: Schema.String,
+});
+
+// The clarification pre-start manifest (spec #221, ticket #230): the fixed
+// display contract an enabled install's issue panel renders before any
+// start — the pinned issue revision, the declared provider and data
+// destination, the read/research capability summary, the egress statement,
+// and the honest budget line. The no-publishing line is a schema literal:
+// the manifest can never be answerable without it, nor with a rewording of
+// it.
+export const ClarificationManifestResultSchema = Schema.Struct({
+  issue: Schema.Struct({
+    number: Schema.Number,
+    title: Schema.String,
+    revision: ClarificationRevisionSchema,
+  }),
+  provider: Schema.String,
+  dataDestination: Schema.String,
+  capabilitySummary: Schema.Array(Schema.String),
+  egressStatement: Schema.String,
+  budgetLine: Schema.String,
+  noPublishingLine: Schema.Literals([noPublishingLine]),
+});
+
+export type ClarificationManifestResult = Schema.Schema.Type<
+  typeof ClarificationManifestResultSchema
+>;
+
+export const parseClarificationManifestResult: (input: unknown) => ClarificationManifestResult =
+  Schema.decodeUnknownSync(ClarificationManifestResultSchema, { onExcessProperty: "error" });
+
+// The clarification start request (spec #221, ticket #230): the explicit
+// act on the visible manifest — the issue, the client request id that
+// deduplicates across reconnects, and the manifest's pinned revision the
+// Developer saw. A revision the tracker no longer reports is a typed
+// stale rejection and a re-rendered manifest. The seam's own invariants
+// hold at the seam: a positive integer issue and a non-empty request id
+// are named 400s here, not failures the coordinator discovers later.
+const PositiveInt = Schema.Int.pipe(
+  Schema.refine((n): n is number => n > 0, { message: "expected a positive integer" }),
+);
+
+export const ClarificationStartRequestSchema = Schema.Struct({
+  issue: PositiveInt,
+  requestId: Schema.NonEmptyString,
+  revision: ClarificationRevisionSchema,
+});
 
 export type ClarificationStartRequest = Schema.Schema.Type<typeof ClarificationStartRequestSchema>;
 
 export const parseClarificationStartRequest: (input: unknown) => ClarificationStartRequest =
   Schema.decodeUnknownSync(ClarificationStartRequestSchema, { onExcessProperty: "error" });
 
-// Live observation of an attempt (spec #221, ticket #231, ADR 0020): the
-// typed events the operational event ledger serves and the SSE stream
+// Live observation of an attempt (spec #221, tickets #230 + #231, ADR 0020):
+// the typed events the operational event ledger serves and the SSE stream
 // carries. A lifecycle event names a run- or attempt-level state move; a
 // conversation event carries one managed-session envelope verbatim — the
 // session's frames are evidence, preserved exactly as the adapter observed
-// them. A gap frame is the stream's explicit divider: the viewer's cursor
-// predates the ledger's retention, and the frame says which cursors are
-// gone instead of letting the viewer believe its history complete.
-//
-// The failure policy's evidence (ticket #235, ADR 0023) rides the same
-// ledger: an outcome event records an attempt's classification and its one
-// permitted next action; an escalation event is the bounded no-progress
-// handoff; a dispatch event marks the durable evidence that the dispatch
-// window opened; a retry event is the one coordinator retry's decision
-// record, grounded in proven non-dispatch.
+// them; an operational event is one fenced controller annotation (a start,
+// a recorded attempt, a reconciliation) kept verbatim as the timeline's
+// plain-language layer. A gap frame is the stream's explicit divider: the
+// viewer's cursor predates the ledger's retention, and the frame says which
+// cursors are gone instead of letting the viewer believe its history
+// complete.
 export const ClarificationEventSchema = Schema.Union([
   Schema.Struct({
     type: Schema.Literal("lifecycle"),
@@ -874,44 +919,9 @@ export const ClarificationEventSchema = Schema.Union([
     }),
   }),
   Schema.Struct({
-    type: Schema.Literal("outcome"),
-    scope: Schema.Literal("attempt"),
-    id: Schema.String,
+    type: Schema.Literal("operational"),
     kind: Schema.String,
-    classification: Schema.Literals(clarificationFailureClassifications),
-    nextAction: Schema.Literals(clarificationNextActions),
-    reason: Schema.optional(Schema.String),
-    signature: Schema.optional(Schema.String),
-    usage: Schema.optional(Schema.Unknown),
-    at: Schema.String,
-  }),
-  Schema.Struct({
-    type: Schema.Literal("escalation"),
-    scope: Schema.Literal("run"),
-    id: Schema.String,
-    attemptId: Schema.String,
-    signature: Schema.String,
-    repeats: Schema.Number,
-    classification: Schema.Literals(clarificationFailureClassifications),
-    kind: Schema.String,
-    reason: Schema.optional(Schema.String),
-    remainingAuthority: Schema.Array(Schema.Literals(clarificationNextActions)),
-    decision: Schema.String,
-    at: Schema.String,
-  }),
-  Schema.Struct({
-    type: Schema.Literal("dispatch"),
-    scope: Schema.Literal("attempt"),
-    id: Schema.String,
-    at: Schema.String,
-  }),
-  Schema.Struct({
-    type: Schema.Literal("retry"),
-    scope: Schema.Literal("run"),
-    id: Schema.String,
-    fromAttemptId: Schema.String,
-    attemptId: Schema.String,
-    basis: Schema.Literal("proven-non-dispatch"),
+    data: Schema.Unknown,
     at: Schema.String,
   }),
 ]);
@@ -971,19 +981,10 @@ export const ClarificationAttemptSnapshotSchema = Schema.Struct({
   // travels verbatim.
   dispatchIntent: Schema.Unknown,
   state: Schema.Literals(clarificationLifecycleStates),
-  // Who created the attempt — the Developer, or the one coordinator retry.
+  // Who created the attempt (ticket #235) — the Developer, or the one
+  // coordinator retry. The outcome verdict itself is lifecycle evidence the
+  // ledger's operational events carry in their own time, like the result.
   origin: Schema.Literals(clarificationAttemptOrigins),
-  // The attempt's recorded outcome verdict, present once an outcome landed.
-  outcome: Schema.optional(
-    Schema.Struct({
-      kind: Schema.String,
-      classification: Schema.Literals(clarificationFailureClassifications),
-      nextAction: Schema.Literals(clarificationNextActions),
-      reason: Schema.optional(Schema.String),
-      signature: Schema.optional(Schema.String),
-      at: Schema.String,
-    }),
-  ),
   // Present once the dispatch window opened — the evidence the one
   // coordinator retry gate leans on.
   dispatchedAt: Schema.optional(Schema.String),
@@ -1013,6 +1014,250 @@ export const parseClarificationObservationResult: (
   ClarificationObservationResultSchema,
   { onExcessProperty: "error" },
 );
+
+// The start's answer: whether this request created the attempt or was
+// answered from the durable record (a reconnect replay), over the run and
+// attempt identities. The display projection only — the dispatch intent,
+// the lease token, and the host-repo scoping stay behind the seam.
+const ClarificationRunViewSchema = Schema.Struct({
+  runId: Schema.String,
+  issueId: Schema.String,
+  state: Schema.String,
+  createdAt: Schema.String,
+  updatedAt: Schema.String,
+});
+
+const ClarificationAttemptViewSchema = Schema.Struct({
+  attemptId: Schema.String,
+  state: Schema.String,
+  createdAt: Schema.String,
+  updatedAt: Schema.String,
+});
+
+export const ClarificationStartResultSchema = Schema.Struct({
+  started: Schema.Boolean,
+  run: ClarificationRunViewSchema,
+  attempt: ClarificationAttemptViewSchema,
+});
+
+export type ClarificationStartResult = Schema.Schema.Type<typeof ClarificationStartResultSchema>;
+
+export const parseClarificationStartResult: (input: unknown) => ClarificationStartResult =
+  Schema.decodeUnknownSync(ClarificationStartResultSchema, { onExcessProperty: "error" });
+
+// The run section's read (spec #221, tickets #230 + #231): the run's
+// lifecycle, its attempts, the reconnect snapshot baseline with its saved-at
+// stamp, and the operational event ledger after the viewer's cursor — the
+// same envelope vocabulary the live stream carries, so the run section and
+// the stream are one history, never two. An expired cursor's explicit gap
+// rides through, never a silently complete history.
+export const ClarificationRunResultSchema = Schema.Struct({
+  run: ClarificationRunSnapshotSchema,
+  attempts: Schema.Array(ClarificationAttemptSnapshotSchema),
+  snapshot: Schema.optional(Schema.Unknown),
+  snapshotSavedAt: Schema.optional(Schema.String),
+  latestCursor: Schema.Number,
+  events: Schema.Array(ClarificationEventEnvelopeSchema),
+  gap: Schema.optional(ClarificationEventGapSchema),
+});
+
+export type ClarificationRunResult = Schema.Schema.Type<typeof ClarificationRunResultSchema>;
+
+export const parseClarificationRunResult: (input: unknown) => ClarificationRunResult =
+  Schema.decodeUnknownSync(ClarificationRunResultSchema, { onExcessProperty: "error" });
+
+// The conversation commands (spec #221, ticket #232): the Developer's
+// explicit acts on one live attempt, a kind-discriminated union. Steer and
+// queue are distinct kinds with distinct evidence — the command request can
+// never blur "correct the live turn" into "hold work for later".
+export const ClarificationConversationCommandSchema = Schema.Union([
+  Schema.Struct({ kind: Schema.Literal("prompt"), text: Schema.String }),
+  Schema.Struct({ kind: Schema.Literal("steer"), text: Schema.String }),
+  Schema.Struct({ kind: Schema.Literal("queue"), text: Schema.String }),
+  Schema.Struct({ kind: Schema.Literal("clear-queue") }),
+  Schema.Struct({ kind: Schema.Literal("stop-turn") }),
+  Schema.Struct({
+    kind: Schema.Literal("answer-dialog"),
+    dialogId: Schema.String,
+    value: Schema.Unknown,
+  }),
+  Schema.Struct({ kind: Schema.Literal("cancel-dialog"), dialogId: Schema.String }),
+]);
+
+export type ClarificationConversationCommand = Schema.Schema.Type<
+  typeof ClarificationConversationCommandSchema
+>;
+
+export const ClarificationConversationCommandRequestSchema = Schema.Struct({
+  requestId: Schema.String,
+  command: ClarificationConversationCommandSchema,
+});
+
+export type ClarificationConversationCommandRequest = Schema.Schema.Type<
+  typeof ClarificationConversationCommandRequestSchema
+>;
+
+export const parseClarificationConversationCommandRequest: (
+  input: unknown,
+) => ClarificationConversationCommandRequest = Schema.decodeUnknownSync(
+  ClarificationConversationCommandRequestSchema,
+  { onExcessProperty: "error" },
+);
+
+// A command's answer: whether this request dispatched (a replayed request id
+// answers `sent: false` from the durable record — the runtime never sees it
+// twice) and, for the queue-clearing acts, exactly which held work died.
+export const ClarificationConversationCommandResultSchema = Schema.Struct({
+  sent: Schema.Boolean,
+  requestId: Schema.String,
+  cleared: Schema.optional(
+    Schema.Array(Schema.Struct({ requestId: Schema.String, text: Schema.String })),
+  ),
+});
+
+export type ClarificationConversationCommandResult = Schema.Schema.Type<
+  typeof ClarificationConversationCommandResultSchema
+>;
+
+export const parseClarificationConversationCommandResult: (
+  input: unknown,
+) => ClarificationConversationCommandResult = Schema.decodeUnknownSync(
+  ClarificationConversationCommandResultSchema,
+  { onExcessProperty: "error" },
+);
+
+// The conversation's live state read: the session's own word for where it
+// stands, its typed pending questions, and the unsupported capabilities it
+// surfaced — the capability list is evidence, never a silent drop.
+export const ClarificationConversationStateSchema = Schema.Struct({
+  available: Schema.Boolean,
+  sessionState: Schema.optional(Schema.String),
+  pendingDialogs: Schema.optional(
+    Schema.Array(
+      Schema.Struct({
+        dialogId: Schema.String,
+        kind: Schema.String,
+        request: Schema.Unknown,
+      }),
+    ),
+  ),
+  unsupportedCapabilities: Schema.optional(
+    Schema.Array(
+      Schema.Struct({
+        capability: Schema.String,
+        count: Schema.Number,
+        frame: Schema.Unknown,
+      }),
+    ),
+  ),
+});
+
+export type ClarificationConversationState = Schema.Schema.Type<
+  typeof ClarificationConversationStateSchema
+>;
+
+export const parseClarificationConversationState: (
+  input: unknown,
+) => ClarificationConversationState = Schema.decodeUnknownSync(
+  ClarificationConversationStateSchema,
+  { onExcessProperty: "error" },
+);
+
+// The Clarification draft (spec #221, ticket #233, ADR 0017): the attempt's
+// proposal as one typed document — behavior, scope, exclusions, acceptance
+// criteria, labeled assumptions, evidence — every claim carrying its
+// provenance kind. Saving is never approval: the draft document's schema
+// has no approval field to set.
+export const ClarificationDraftProvenanceSchema = Schema.Struct({
+  kind: Schema.Literals(clarificationDraftProvenanceKinds),
+  source: Schema.String,
+  locator: Schema.String,
+});
+
+export type ClarificationDraftProvenance = Schema.Schema.Type<
+  typeof ClarificationDraftProvenanceSchema
+>;
+
+export const ClarificationDraftAssumptionSchema = Schema.Struct({
+  label: Schema.String,
+  text: Schema.String,
+  material: Schema.Boolean,
+  provenance: ClarificationDraftProvenanceSchema,
+});
+
+export const ClarificationDraftEvidenceSchema = Schema.Struct({
+  claim: Schema.String,
+  provenance: ClarificationDraftProvenanceSchema,
+});
+
+export const ClarificationDraftDocumentSchema = Schema.Struct({
+  version: Schema.Literal(clarificationDraftVersion),
+  profile: Schema.Literals(clarificationTaskProfiles),
+  behavior: Schema.String,
+  observation: Schema.String,
+  reproduction: Schema.String,
+  boundary: Schema.String,
+  scope: Schema.String,
+  exclusions: Schema.Array(Schema.String),
+  acceptance: Schema.Array(Schema.String),
+  dependencies: Schema.String,
+  performanceClaim: Schema.String,
+  performanceEvidence: Schema.String,
+  assumptions: Schema.Array(ClarificationDraftAssumptionSchema),
+  evidence: Schema.Array(ClarificationDraftEvidenceSchema),
+});
+
+export type ClarificationDraftDocument = Schema.Schema.Type<
+  typeof ClarificationDraftDocumentSchema
+>;
+
+export const parseClarificationDraftDocument: (input: unknown) => ClarificationDraftDocument =
+  Schema.decodeUnknownSync(ClarificationDraftDocumentSchema, { onExcessProperty: "error" });
+
+// The visible issue-body diff: ordered lines over the current body against
+// the bytes publication would write — the display and the publication are
+// the same serialization, so they cannot disagree.
+export const ClarificationDraftDiffLineSchema = Schema.Struct({
+  kind: Schema.Literals(["context", "added", "removed"]),
+  text: Schema.String,
+});
+
+export const ClarificationDraftDiffSchema = Schema.Struct({
+  unchanged: Schema.Boolean,
+  added: Schema.Number,
+  removed: Schema.Number,
+  lines: Schema.Array(ClarificationDraftDiffLineSchema),
+});
+
+export type ClarificationDraftDiff = Schema.Schema.Type<typeof ClarificationDraftDiffSchema>;
+
+// The draft route's read: the saved document or its honest null, the brief
+// completeness arithmetic in the readiness vocabulary's own words, the
+// diff base's pinned issue revision, the diff itself, and the fixed
+// saving-is-not-approval line.
+export const ClarificationDraftViewSchema = Schema.Struct({
+  runId: Schema.String,
+  attemptId: Schema.String,
+  draft: Schema.NullOr(ClarificationDraftDocumentSchema),
+  gaps: Schema.Array(Schema.String),
+  briefCompleteness: Schema.Literals(["ready", "needs-information"]),
+  issue: Schema.NullOr(
+    Schema.Struct({
+      number: Schema.Number,
+      revision: ClarificationRevisionSchema,
+      body: Schema.String,
+    }),
+  ),
+  diff: Schema.NullOr(ClarificationDraftDiffSchema),
+  warnings: Schema.Array(Schema.String),
+  savingIsNotApproval: Schema.Literal(noApprovalLine),
+  savedAt: Schema.optional(Schema.String),
+});
+
+export type ClarificationDraftView = Schema.Schema.Type<typeof ClarificationDraftViewSchema>;
+
+export const parseClarificationDraftView: (input: unknown) => ClarificationDraftView =
+  Schema.decodeUnknownSync(ClarificationDraftViewSchema, { onExcessProperty: "error" });
 
 // The run's event stream (epic #20, ticket #26; issue #40): the runner's
 // typed events as the UI consumes them — a started echo of the request (the

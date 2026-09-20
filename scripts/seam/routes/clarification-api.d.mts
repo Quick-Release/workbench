@@ -40,6 +40,15 @@ export declare const handleClarificationStatus: (input: {
   origin: string | undefined;
   posture: ClarificationPosture;
 }) => ApiResponse;
+export declare const handleClarificationManifest: (input: {
+  method: string | undefined;
+  pathname: string;
+  host: string | undefined;
+  origin: string | undefined;
+  query: URLSearchParams | undefined;
+  posture: ClarificationPosture;
+  coordinator: unknown;
+}) => Promise<ApiResponse>;
 export declare const handleClarificationStart: (input: {
   method: string | undefined;
   pathname: string;
@@ -47,7 +56,38 @@ export declare const handleClarificationStart: (input: {
   origin: string | undefined;
   body: string | undefined;
   posture: ClarificationPosture;
-}) => ApiResponse;
+  coordinator: unknown;
+}) => Promise<ApiResponse>;
+export declare const handleClarificationRun: (input: {
+  method: string | undefined;
+  pathname: string;
+  host: string | undefined;
+  origin: string | undefined;
+  query: URLSearchParams | undefined;
+  posture: ClarificationPosture;
+  coordinator: unknown;
+}) => Promise<ApiResponse>;
+export declare const handleClarificationConversationCommand: (input: {
+  method: string | undefined;
+  pathname: string;
+  host: string | undefined;
+  origin: string | undefined;
+  body: string | undefined;
+  posture: ClarificationPosture;
+  coordinator: unknown;
+}) => Promise<ApiResponse>;
+export declare const handleClarificationConversationState: (
+  input: ObservationRequest,
+) => ApiResponse;
+export declare const handleClarificationDraft: (input: {
+  method: string | undefined;
+  pathname: string;
+  host: string | undefined;
+  origin: string | undefined;
+  body: string | undefined;
+  posture: ClarificationPosture;
+  coordinator: unknown;
+}) => Promise<ApiResponse>;
 export declare const handleClarificationObservation: (input: ObservationRequest) => HandlerResponse;
 export declare const handleClarificationEvents: (input: ObservationRequest) => HandlerResponse;
 export declare const handleClarificationApi: (input: {

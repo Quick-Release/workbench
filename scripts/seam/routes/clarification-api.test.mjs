@@ -1,4 +1,4 @@
-import { deepStrictEqual, match, strictEqual, throws } from "node:assert";
+import { deepStrictEqual, match, strictEqual } from "node:assert";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -9,6 +9,10 @@ import {
   handleClarificationApi,
   isClarificationApiRoute,
 } from "./clarification-api.mjs";
+import { parseClarificationConversationCommandResult } from "../../../src/schema.ts";
+import { parseClarificationConversationState } from "../../../src/schema.ts";
+import { parseClarificationDraftView } from "../../../src/schema.ts";
+import { noApprovalLine, noPublishingLine } from "../../../src/types.ts";
 
 const loopback = { host: "localhost:4051", origin: "http://localhost:4051" };
 const disabled = { posture: "disabled", available: false };
@@ -23,6 +27,17 @@ const status = (overrides = {}) => ({
   method: "GET",
   pathname: "/api/clarification",
   posture: disabled,
+  coordinator: null,
+  ...loopback,
+  ...overrides,
+});
+
+const manifest = (overrides = {}) => ({
+  method: "GET",
+  pathname: "/api/clarification/manifest",
+  query: new URLSearchParams("issue=230"),
+  posture: disabled,
+  coordinator: null,
   ...loopback,
   ...overrides,
 });
@@ -30,40 +45,233 @@ const status = (overrides = {}) => ({
 const start = (overrides = {}) => ({
   method: "POST",
   pathname: "/api/clarification/start",
-  body: "{}",
+  body: JSON.stringify({
+    issue: 230,
+    requestId: "req-1",
+    revision: { updatedAt: "2026-09-18T10:00:00.000Z", bodyHash: "sha-256:abc" },
+  }),
   posture: disabled,
+  coordinator: null,
   ...loopback,
   ...overrides,
 });
 
+const run = (overrides = {}) => ({
+  method: "GET",
+  pathname: "/api/clarification/run",
+  query: new URLSearchParams("run=run_1"),
+  posture: disabled,
+  coordinator: null,
+  ...loopback,
+  ...overrides,
+});
+
+const command = (overrides = {}) => ({
+  method: "POST",
+  pathname: "/api/clarification/runs/run_1/attempts/attempt_1/commands",
+  body: JSON.stringify({
+    requestId: "client-cmd-1",
+    command: { kind: "prompt", text: "next question" },
+  }),
+  posture: disabled,
+  coordinator: null,
+  ...loopback,
+  ...overrides,
+});
+
+const conversation = (overrides = {}) => ({
+  method: "GET",
+  pathname: "/api/clarification/runs/run_1/attempts/attempt_1/conversation",
+  posture: disabled,
+  coordinator: null,
+  ...loopback,
+  ...overrides,
+});
+
+// The fake coordinator the handler tests run against: its answers are
+// fixed typed results, its calls are recorded, and an unreachable command
+// throws — so a test that expects a policy denial proves the denial came
+// before the coordinator.
+const fakeCoordinator = (overrides = {}) => {
+  const calls = [];
+  return {
+    calls,
+    manifest: async ({ issueNumber }) => {
+      calls.push(["manifest", { issueNumber }]);
+      return {
+        issue: {
+          number: issueNumber,
+          title: "Clarification 09",
+          revision: { updatedAt: "2026-09-18T10:00:00.000Z", bodyHash: "sha-256:abc" },
+        },
+        provider: "openai-codex-oauth",
+        dataDestination: "https://api.openai.com",
+        capabilitySummary: ["reads the pinned issue"],
+        egressStatement: "private content never enters public queries",
+        budgetLine: "provider-reported usage is recorded verbatim",
+        noPublishingLine,
+      };
+    },
+    start: async (args) => {
+      calls.push(["start", args]);
+      return {
+        started: true,
+        run: {
+          runId: "run_1",
+          issueId: "230",
+          state: "active",
+          createdAt: "2026-09-18T10:00:01.000Z",
+          updatedAt: "2026-09-18T10:00:01.000Z",
+        },
+        attempt: {
+          attemptId: "attempt_1",
+          state: "active",
+          createdAt: "2026-09-18T10:00:03.000Z",
+          updatedAt: "2026-09-18T10:00:03.000Z",
+        },
+      };
+    },
+    runSection: async (args) => {
+      calls.push(["runSection", args]);
+      return {
+        run: {
+          runId: "run_1",
+          hostRepo: "example/project",
+          issueId: "230",
+          requestId: "req-1",
+          state: "awaiting-human",
+          createdAt: "2026-09-18T10:00:01.000Z",
+          updatedAt: "2026-09-18T10:00:09.000Z",
+        },
+        attempts: [
+          {
+            attemptId: "attempt_1",
+            runId: "run_1",
+            hostRepo: "example/project",
+            requestId: "req-1",
+            dispatchIntent: { kind: "clarification-start" },
+            state: "terminal",
+            origin: "manual",
+            createdAt: "2026-09-18T10:00:03.000Z",
+            updatedAt: "2026-09-18T10:00:04.000Z",
+          },
+        ],
+        snapshot: { lifecycle: "awaiting-human" },
+        snapshotSavedAt: "2026-09-18T10:00:09.000Z",
+        latestCursor: 1,
+        events: [
+          {
+            cursor: 1,
+            envelope: "clarification-events/v1",
+            event: {
+              type: "operational",
+              kind: "run.started",
+              data: {},
+              at: "2026-09-18T10:00:01.000Z",
+            },
+          },
+        ],
+      };
+    },
+    // The conversation commands record like every other coordinator call;
+    // the answers are the typed results the seam validates.
+    sendPrompt: async (args) => {
+      calls.push(["sendPrompt", args]);
+      return { sent: true, requestId: args.requestId };
+    },
+    steer: async (args) => {
+      calls.push(["steer", args]);
+      return { sent: true, requestId: args.requestId };
+    },
+    queueFollowUp: async (args) => {
+      calls.push(["queueFollowUp", args]);
+      return { sent: true, requestId: args.requestId };
+    },
+    clearQueue: async (args) => {
+      calls.push(["clearQueue", args]);
+      return { sent: true, requestId: args.requestId, cleared: [] };
+    },
+    stopTurn: async (args) => {
+      calls.push(["stopTurn", args]);
+      return {
+        sent: true,
+        requestId: args.requestId,
+        cleared: [{ requestId: "req_queue_1", text: "queued one" }],
+      };
+    },
+    answerDialog: async (args) => {
+      calls.push(["answerDialog", args]);
+      return { sent: true, requestId: args.requestId };
+    },
+    cancelDialog: async (args) => {
+      calls.push(["cancelDialog", args]);
+      return { sent: true, requestId: args.requestId };
+    },
+    conversationState: (args) => {
+      calls.push(["conversationState", args]);
+      return {
+        available: true,
+        sessionState: "ready",
+        pendingDialogs: [
+          {
+            dialogId: "dialog_1",
+            kind: "select",
+            request: { type: "select", options: ["a", "b"] },
+          },
+        ],
+        unsupportedCapabilities: [],
+      };
+    },
+    runForIssue: async (args) => {
+      calls.push(["runForIssue", args]);
+      return {
+        runId: "run_1",
+        hostRepo: "example/project",
+        issueId: String(args.issueNumber),
+        requestId: "req-1",
+        state: "active",
+        createdAt: "2026-09-18T10:00:01.000Z",
+        updatedAt: "2026-09-18T10:00:01.000Z",
+      };
+    },
+    ...overrides,
+  };
+};
+
 test("recognizes only the clarification routes", () => {
   strictEqual(isClarificationApiRoute("/api/clarification"), true);
   strictEqual(isClarificationApiRoute("/api/clarification/"), true);
+  strictEqual(isClarificationApiRoute("/api/clarification/manifest"), true);
   strictEqual(isClarificationApiRoute("/api/clarification/start"), true);
+  strictEqual(isClarificationApiRoute("/api/clarification/run"), true);
   strictEqual(isClarificationApiRoute("/api/clarification/other"), false);
   strictEqual(isClarificationApiRoute("/api/review"), false);
 });
 
-test("rejects a foreign host before answering either route", async () => {
-  const statusHandled = await handleClarificationApi(status({ host: "host-repo.example:4051" }));
-  strictEqual(statusHandled.status, 403);
-  strictEqual(statusHandled.json.error, "forbidden_host");
-
-  const startHandled = await handleClarificationApi(start({ host: "host-repo.example:4051" }));
-  strictEqual(startHandled.status, 403);
-  strictEqual(startHandled.json.error, "forbidden_host");
+test("rejects a foreign host before answering any route", async () => {
+  for (const request of [
+    status({ host: "host-repo.example:4051" }),
+    manifest({ host: "host-repo.example:4051" }),
+    start({ host: "host-repo.example:4051" }),
+    run({ host: "host-repo.example:4051" }),
+  ]) {
+    const handled = await handleClarificationApi(request);
+    strictEqual(handled.status, 403);
+    strictEqual(handled.json.error, "forbidden_host");
+  }
 });
 
-test("rejects a cross-origin request before answering either route", async () => {
-  const statusHandled = await handleClarificationApi(
+test("rejects a cross-origin request before answering any route", async () => {
+  for (const request of [
     status({ origin: "http://evil.example:4051" }),
-  );
-  strictEqual(statusHandled.status, 403);
-  strictEqual(statusHandled.json.error, "cross_origin");
-
-  const startHandled = await handleClarificationApi(start({ origin: "http://evil.example:4051" }));
-  strictEqual(startHandled.status, 403);
-  strictEqual(startHandled.json.error, "cross_origin");
+    manifest({ origin: "http://evil.example:4051" }),
+    start({ origin: "http://evil.example:4051" }),
+    run({ origin: "http://evil.example:4051" }),
+  ]) {
+    const handled = await handleClarificationApi(request);
+    strictEqual(handled.status, 403);
+    strictEqual(handled.json.error, "cross_origin");
+  }
 });
 
 test("answers nothing for routes it does not own", async () => {
@@ -93,7 +301,7 @@ test("the status route reports enabled as honestly unavailable", async () => {
   strictEqual(handled.status, 200);
   strictEqual(handled.json.posture, "enabled");
   strictEqual(handled.json.available, false);
-  match(handled.json.message, /runtime is not part of this build/);
+  match(handled.json.message, /managed conversation runtime is not wired/);
 });
 
 test("the status route answers GET only", async () => {
@@ -102,48 +310,201 @@ test("the status route answers GET only", async () => {
   strictEqual(handled.json.error, "method_not_allowed");
 });
 
-test("start denies a disabled posture with a typed policy denial", async () => {
-  const handled = await handleClarificationApi(start());
+test("the manifest route answers the fixed display contract on an enabled install", async () => {
+  const coordinator = fakeCoordinator();
+  const handled = await handleClarificationApi(manifest({ posture: enabled, coordinator }));
+  strictEqual(handled.status, 200);
+  // The success result crossed the Effect Schema — the display contract
+  // holds, no-publishing line included, with no excess fields.
+  strictEqual(handled.json.issue.number, 230);
+  strictEqual(handled.json.noPublishingLine, "Publishing is NOT granted by this approval");
+  deepStrictEqual(coordinator.calls, [["manifest", { issueNumber: 230 }]]);
+});
+
+test("the manifest route denies a disabled and an invalid posture before the coordinator", async () => {
+  const coordinator = fakeCoordinator();
+  const dormant = await handleClarificationApi(manifest({ posture: disabled, coordinator }));
+  strictEqual(dormant.status, 403);
+  strictEqual(dormant.json.error, "clarification_disabled");
+
+  const misconfigured = await handleClarificationApi(manifest({ posture: invalid, coordinator }));
+  strictEqual(misconfigured.status, 403);
+  strictEqual(misconfigured.json.error, "clarification_posture_invalid");
+  deepStrictEqual(misconfigured.json.reasons, invalid.reasons);
+  deepStrictEqual(coordinator.calls, []);
+});
+
+test("the manifest route validates its issue query parameter", async () => {
+  for (const query of ["", "issue=abc", "issue=0", "issue=-3", "issue=1.5"]) {
+    const handled = await handleClarificationApi(
+      manifest({
+        posture: enabled,
+        coordinator: fakeCoordinator(),
+        query: new URLSearchParams(query),
+      }),
+    );
+    strictEqual(handled.status, 400, `query "${query}" must be refused`);
+    strictEqual(handled.json.error, "invalid_request");
+  }
+});
+
+test("the manifest route answers GET only", async () => {
+  const handled = await handleClarificationApi(
+    manifest({ method: "POST", posture: enabled, coordinator: fakeCoordinator() }),
+  );
+  strictEqual(handled.status, 405);
+  strictEqual(handled.json.error, "method_not_allowed");
+});
+
+test("start crosses schema validation and reaches the coordinator", async () => {
+  const coordinator = fakeCoordinator();
+  const handled = await handleClarificationApi(start({ posture: enabled, coordinator }));
+  strictEqual(handled.status, 200);
+  strictEqual(handled.json.started, true);
+  strictEqual(handled.json.run.runId, "run_1");
+  strictEqual(handled.json.attempt.attemptId, "attempt_1");
+  deepStrictEqual(coordinator.calls, [
+    [
+      "start",
+      {
+        issueNumber: 230,
+        requestId: "req-1",
+        revision: { updatedAt: "2026-09-18T10:00:00.000Z", bodyHash: "sha-256:abc" },
+      },
+    ],
+  ]);
+});
+
+test("start denies a disabled posture with a typed policy denial before reading the body", async () => {
+  const coordinator = fakeCoordinator();
+  const handled = await handleClarificationApi(start({ body: "not json", coordinator }));
   strictEqual(handled.status, 403);
   strictEqual(handled.json.error, "clarification_disabled");
-  match(handled.json.message, /not enabled/);
+  deepStrictEqual(coordinator.calls, []);
 });
 
 test("start denies an invalid posture naming the offending elements", async () => {
-  const handled = await handleClarificationApi(start({ posture: invalid }));
+  const coordinator = fakeCoordinator();
+  const handled = await handleClarificationApi(start({ posture: invalid, coordinator }));
   strictEqual(handled.status, 403);
   strictEqual(handled.json.error, "clarification_posture_invalid");
   deepStrictEqual(handled.json.reasons, invalid.reasons);
-  match(handled.json.message, /clarification\.provider is required/);
+  deepStrictEqual(coordinator.calls, []);
 });
 
-test("start answers an enabled posture with typed unavailability", async () => {
-  const handled = await handleClarificationApi(start({ posture: enabled }));
-  strictEqual(handled.status, 501);
-  strictEqual(handled.json.error, "clarification_unavailable");
-  match(handled.json.message, /runtime is not part of this build/);
+test("start answers a malformed or non-conforming body with typed invalid requests", async () => {
+  const coordinator = fakeCoordinator();
+  const cases = [
+    "not json",
+    "{}",
+    JSON.stringify({ issue: 230 }),
+    JSON.stringify({ issue: 230, requestId: "req-1" }),
+    JSON.stringify({ issue: 230, requestId: "req-1", revision: {}, extra: true }),
+    JSON.stringify({
+      issue: "230",
+      requestId: "req-1",
+      revision: { updatedAt: "u", bodyHash: "h" },
+    }),
+  ];
+  for (const body of cases) {
+    const handled = await handleClarificationApi(start({ posture: enabled, body, coordinator }));
+    strictEqual(handled.status, 400, `body ${body} must be refused`);
+    strictEqual(handled.json.error, "invalid_request");
+  }
+  deepStrictEqual(coordinator.calls, []);
 });
 
-test("start takes no fields", async () => {
-  const extra = await handleClarificationApi(start({ posture: enabled, body: '{"issue":"GH-1"}' }));
-  strictEqual(extra.status, 400);
-  match(extra.json.message, /takes no fields/);
-
-  const malformed = await handleClarificationApi(start({ posture: enabled, body: "not json" }));
-  strictEqual(malformed.status, 400);
-  match(malformed.json.message, /not valid JSON/);
+test("duplicate, stale, reused, and unavailable starts are typed rejections with their own statuses", async () => {
+  const cases = [
+    ["busy", 409],
+    ["manifest_stale", 409],
+    ["request_reused", 409],
+    ["context_unavailable", 503],
+  ];
+  for (const [code, expected] of cases) {
+    const coordinator = fakeCoordinator({
+      start: async () => {
+        throw Object.assign(new Error(`typed ${code}`), { code });
+      },
+    });
+    const handled = await handleClarificationApi(start({ posture: enabled, coordinator }));
+    strictEqual(handled.status, expected, `${code} must answer ${expected}`);
+    strictEqual(handled.json.error, code);
+  }
 });
 
-test("a dormant install answers nothing but its typed denial, whatever the body", async () => {
-  // The policy denial precedes request validation: a malformed body on a
-  // disabled install must not leak a generic 400 past the posture gate.
-  const malformed = await handleClarificationApi(start({ body: "not json" }));
-  strictEqual(malformed.status, 403);
-  strictEqual(malformed.json.error, "clarification_disabled");
+test("a denied start is a typed rejection carrying the durable identity", async () => {
+  const coordinator = fakeCoordinator({
+    start: async () => {
+      throw Object.assign(new Error("the managed session was denied"), {
+        code: "start_denied",
+        runId: "run_1",
+        attemptId: "attempt_1",
+      });
+    },
+  });
+  const handled = await handleClarificationApi(start({ posture: enabled, coordinator }));
+  strictEqual(handled.status, 502);
+  strictEqual(handled.json.error, "start_denied");
+  strictEqual(handled.json.runId, "run_1");
+  strictEqual(handled.json.attemptId, "attempt_1");
+});
 
-  const extra = await handleClarificationApi(start({ posture: invalid, body: '{"x":1}' }));
-  strictEqual(extra.status, 403);
-  strictEqual(extra.json.error, "clarification_posture_invalid");
+test("the run route reads lifecycle from snapshot reads", async () => {
+  const coordinator = fakeCoordinator();
+  const handled = await handleClarificationApi(run({ posture: enabled, coordinator }));
+  strictEqual(handled.status, 200);
+  strictEqual(handled.json.run.state, "awaiting-human");
+  strictEqual(handled.json.attempts[0].attemptId, "attempt_1");
+  strictEqual(handled.json.snapshotSavedAt, "2026-09-18T10:00:09.000Z");
+  strictEqual(handled.json.events[0].event.kind, "run.started");
+  deepStrictEqual(coordinator.calls, [["runSection", { runId: "run_1", afterCursor: 0 }]]);
+});
+
+test("the run route carries the after cursor and refuses an unknown run", async () => {
+  const coordinator = fakeCoordinator();
+  const withCursor = await handleClarificationApi(
+    run({ posture: enabled, coordinator, query: new URLSearchParams("run=run_1&after=7") }),
+  );
+  strictEqual(withCursor.status, 200);
+  deepStrictEqual(coordinator.calls.at(-1), ["runSection", { runId: "run_1", afterCursor: 7 }]);
+
+  const unknown = fakeCoordinator({
+    runSection: async () => {
+      throw Object.assign(new Error("no such run"), { code: "run_not_found" });
+    },
+  });
+  const missing = await handleClarificationApi(run({ posture: enabled, coordinator: unknown }));
+  strictEqual(missing.status, 404);
+  strictEqual(missing.json.error, "run_not_found");
+
+  const badCursor = await handleClarificationApi(
+    run({
+      posture: enabled,
+      coordinator: fakeCoordinator(),
+      query: new URLSearchParams("run=run_1&after=x"),
+    }),
+  );
+  strictEqual(badCursor.status, 400);
+
+  const noRun = await handleClarificationApi(
+    run({ posture: enabled, coordinator: fakeCoordinator(), query: new URLSearchParams("") }),
+  );
+  strictEqual(noRun.status, 400);
+});
+
+test("the run route denies a dormant install and answers GET only", async () => {
+  const coordinator = fakeCoordinator();
+  const dormant = await handleClarificationApi(run({ coordinator }));
+  strictEqual(dormant.status, 403);
+  strictEqual(dormant.json.error, "clarification_disabled");
+
+  const wrongMethod = await handleClarificationApi(
+    run({ method: "POST", posture: enabled, coordinator }),
+  );
+  strictEqual(wrongMethod.status, 405);
+  strictEqual(wrongMethod.json.error, "method_not_allowed");
+  deepStrictEqual(coordinator.calls, []);
 });
 
 test("the posture loader names an unreadable config as its own invalid posture", async () => {
@@ -439,9 +800,9 @@ test("a snapshot read round-trips the schema: snapshot, events, gap", async () =
 });
 
 test("the failure policy's evidence round-trips the schema", async () => {
-  // The attempt snapshot carries its origin, its recorded outcome verdict,
-  // and the dispatch mark; the ledger carries the outcome, escalation,
-  // dispatch, and retry events (spec #221, ticket #235, ADR 0023).
+  // The attempt snapshot carries its origin and dispatch mark; the policy's
+  // outcome and escalation travel as operational events (spec #221, ticket
+  // #235, ADR 0023).
   const result = {
     snapshot: {
       run: {
@@ -462,14 +823,6 @@ test("the failure policy's evidence round-trips the schema", async () => {
           dispatchIntent: { adapter: "pi-managed/v1" },
           state: "awaiting-human",
           origin: "manual",
-          outcome: {
-            kind: "provider-failure",
-            classification: "known-failure",
-            nextAction: "await-human",
-            reason: "quota",
-            signature: "9f2a1c",
-            at: "2026-09-18T00:00:05Z",
-          },
           dispatchedAt: "2026-09-18T00:00:02Z",
           createdAt: "2026-09-18T00:00:01Z",
           updatedAt: "2026-09-18T00:00:05Z",
@@ -478,7 +831,7 @@ test("the failure policy's evidence round-trips the schema", async () => {
           attemptId: "attempt_two",
           runId: "run_one",
           hostRepo: "example/project",
-          requestId: "retry-1",
+          requestId: "retry-req-1",
           dispatchIntent: { adapter: "pi-managed/v1" },
           state: "active",
           origin: "coordinator-retry",
@@ -493,15 +846,17 @@ test("the failure policy's evidence round-trips the schema", async () => {
         cursor: 1,
         envelope: "clarification-events/v1",
         event: {
-          type: "outcome",
-          scope: "attempt",
-          id: "attempt_one",
-          kind: "provider-failure",
-          classification: "known-failure",
-          nextAction: "await-human",
-          reason: "quota",
-          signature: "9f2a1c",
-          usage: { total: 12 },
+          type: "operational",
+          kind: "attempt.outcome",
+          data: {
+            attemptId: "attempt_one",
+            kind: "provider-failure",
+            classification: "known-failure",
+            nextAction: "await-human",
+            reason: "quota",
+            signature: "9f2a1c",
+            usage: { total: 12 },
+          },
           at: "2026-09-18T00:00:05Z",
         },
       },
@@ -509,17 +864,18 @@ test("the failure policy's evidence round-trips the schema", async () => {
         cursor: 2,
         envelope: "clarification-events/v1",
         event: {
-          type: "escalation",
-          scope: "run",
-          id: "run_one",
-          attemptId: "attempt_one",
-          signature: "9f2a1c",
-          repeats: 2,
-          classification: "known-failure",
-          kind: "provider-failure",
-          reason: "quota",
-          remainingAuthority: ["manual-retry"],
-          decision: "decide whether to start a fresh manual attempt or abandon this run",
+          type: "operational",
+          kind: "run.halted",
+          data: {
+            attemptId: "attempt_one",
+            signature: "9f2a1c",
+            repeats: 2,
+            classification: "known-failure",
+            kind: "provider-failure",
+            reason: "quota",
+            remainingAuthority: ["manual-retry"],
+            decision: "decide whether to start a fresh manual attempt or abandon this run",
+          },
           at: "2026-09-18T00:00:05Z",
         },
       },
@@ -527,22 +883,13 @@ test("the failure policy's evidence round-trips the schema", async () => {
         cursor: 3,
         envelope: "clarification-events/v1",
         event: {
-          type: "dispatch",
-          scope: "attempt",
-          id: "attempt_one",
-          at: "2026-09-18T00:00:02Z",
-        },
-      },
-      {
-        cursor: 4,
-        envelope: "clarification-events/v1",
-        event: {
-          type: "retry",
-          scope: "run",
-          id: "run_one",
-          fromAttemptId: "attempt_one",
-          attemptId: "attempt_two",
-          basis: "proven-non-dispatch",
+          type: "operational",
+          kind: "attempt.coordinator-retried",
+          data: {
+            fromAttemptId: "attempt_one",
+            attemptId: "attempt_two",
+            basis: "proven-non-dispatch",
+          },
           at: "2026-09-18T00:00:06Z",
         },
       },
@@ -555,21 +902,6 @@ test("the failure policy's evidence round-trips the schema", async () => {
   deepStrictEqual(handled.json, parseClarificationObservationResult(result));
   // Every event frame also parses as a stream frame — the SSE contract.
   for (const envelope of result.events) parseClarificationStreamFrame(envelope);
-
-  // An event outside the vocabulary is rejected, never guessed.
-  throws(() =>
-    parseClarificationObservationResult({
-      ...result,
-      events: [
-        ...result.events,
-        {
-          cursor: 5,
-          envelope: "clarification-events/v1",
-          event: { type: "outcome", scope: "attempt", id: "x", classification: "doom", at: "t" },
-        },
-      ],
-    }),
-  );
 });
 
 const lifecycleFrame = (cursor, state) => ({
@@ -689,12 +1021,27 @@ test("the events endpoint parses its cursor before streaming", async () => {
 
 test("the real store and coordinator stream typed frames the schema accepts", async () => {
   await withTempStore(async ({ store }) => {
-    const coordinator = createClarificationCoordinator({ store });
+    const coordinator = createClarificationCoordinator({
+      store,
+      clock: () => "2026-09-18T00:00:00Z",
+      tracker: {
+        readContext: async () => {
+          throw new Error("the observation tier never reads the tracker");
+        },
+      },
+      sessions: {
+        start: async () => {
+          throw new Error("the observation tier never starts a session");
+        },
+      },
+    });
     const { run } = store.createRun({ issueId: "GH-42", requestId: "approve-1" });
+    const { lease } = store.acquireLease({ runId: run.runId, owner: "test-controller" });
     const { attempt } = store.createAttempt({
       runId: run.runId,
       requestId: "approve-1-attempt",
       intent: { adapter: "pi-managed/v1" },
+      leaseToken: lease.token,
     });
     coordinator.publish({
       runId: run.runId,
@@ -714,7 +1061,11 @@ test("the real store and coordinator stream typed frames the schema accepts", as
         session: { cursor: 1, envelope: "pi-managed/v1", event: { type: "hello", protocol: "1" } },
       },
     });
-    store.updateAttemptState({ attemptId: attempt.attemptId, to: "terminal" });
+    store.updateAttemptState({
+      attemptId: attempt.attemptId,
+      to: "terminal",
+      leaseToken: lease.token,
+    });
     coordinator.publish({
       runId: run.runId,
       event: {
@@ -751,4 +1102,339 @@ test("the real store and coordinator stream typed frames the schema accepts", as
     );
     for (const frame of frames) parseClarificationStreamFrame(frame);
   });
+});
+
+// --- Conversation commands (spec #221, ticket #232): the Developer's
+// explicit acts cross the seam as typed, schema-validated requests; the
+// policy gates speak first, and the coordinator's typed rejections keep
+// their own statuses.
+
+test("the command route recognizes itself and rejects foreign hosts", async () => {
+  strictEqual(
+    isClarificationApiRoute("/api/clarification/runs/run_1/attempts/attempt_1/commands"),
+    true,
+  );
+  strictEqual(
+    isClarificationApiRoute("/api/clarification/runs/run_1/attempts/attempt_1/conversation"),
+    true,
+  );
+
+  const foreign = await handleClarificationApi(command({ host: "host-repo.example:4051" }));
+  strictEqual(foreign.status, 403);
+  strictEqual(foreign.json.error, "forbidden_host");
+});
+
+test("the command route answers POST only and denies a dormant install before reading the body", async () => {
+  const coordinator = fakeCoordinator();
+  const wrongMethod = await handleClarificationApi(
+    command({ method: "GET", coordinator, posture: enabled }),
+  );
+  strictEqual(wrongMethod.status, 405);
+  strictEqual(wrongMethod.json.error, "method_not_allowed");
+
+  const dormant = await handleClarificationApi(command({ coordinator }));
+  strictEqual(dormant.status, 403);
+  strictEqual(dormant.json.error, "clarification_disabled");
+  deepStrictEqual(coordinator.calls, []);
+});
+
+test("a conversation command crosses schema validation and reaches the coordinator as its kind", async () => {
+  const cases = [
+    {
+      body: { requestId: "c1", command: { kind: "prompt", text: "next" } },
+      expected: [
+        "sendPrompt",
+        { runId: "run_1", attemptId: "attempt_1", requestId: "c1", text: "next" },
+      ],
+    },
+    {
+      body: { requestId: "c2", command: { kind: "steer", text: "focus" } },
+      expected: [
+        "steer",
+        { runId: "run_1", attemptId: "attempt_1", requestId: "c2", text: "focus" },
+      ],
+    },
+    {
+      body: { requestId: "c3", command: { kind: "queue", text: "later" } },
+      expected: [
+        "queueFollowUp",
+        { runId: "run_1", attemptId: "attempt_1", requestId: "c3", text: "later" },
+      ],
+    },
+    {
+      body: { requestId: "c4", command: { kind: "clear-queue" } },
+      expected: ["clearQueue", { runId: "run_1", attemptId: "attempt_1", requestId: "c4" }],
+    },
+    {
+      body: { requestId: "c5", command: { kind: "stop-turn" } },
+      expected: ["stopTurn", { runId: "run_1", attemptId: "attempt_1", requestId: "c5" }],
+    },
+    {
+      body: {
+        requestId: "c6",
+        command: { kind: "answer-dialog", dialogId: "dialog_1", value: "a" },
+      },
+      expected: [
+        "answerDialog",
+        {
+          runId: "run_1",
+          attemptId: "attempt_1",
+          requestId: "c6",
+          dialogId: "dialog_1",
+          value: "a",
+        },
+      ],
+    },
+    {
+      body: { requestId: "c7", command: { kind: "cancel-dialog", dialogId: "dialog_1" } },
+      expected: [
+        "cancelDialog",
+        { runId: "run_1", attemptId: "attempt_1", requestId: "c7", dialogId: "dialog_1" },
+      ],
+    },
+  ];
+  for (const { body, expected } of cases) {
+    const coordinator = fakeCoordinator();
+    const handled = await handleClarificationApi(
+      command({ posture: enabled, coordinator, body: JSON.stringify(body) }),
+    );
+    strictEqual(handled.status, 200);
+    deepStrictEqual(coordinator.calls, [expected]);
+    strictEqual(handled.json.sent, true);
+    parseClarificationConversationCommandResult(handled.json);
+  }
+});
+
+test("a malformed command body is a named 400 before the coordinator is asked", async () => {
+  const coordinator = fakeCoordinator();
+  for (const body of [
+    "not json",
+    JSON.stringify({ command: { kind: "prompt", text: "no request id" } }),
+    JSON.stringify({ requestId: "c1", command: { kind: "terminate-runtime" } }),
+    JSON.stringify({ requestId: "c1", command: { kind: "prompt" } }),
+  ]) {
+    const handled = await handleClarificationApi(command({ posture: enabled, coordinator, body }));
+    strictEqual(handled.status, 400);
+    strictEqual(handled.json.error, "invalid_request");
+  }
+  deepStrictEqual(coordinator.calls, []);
+});
+
+test("typed command rejections keep their own statuses at the seam", async () => {
+  const rejections = [
+    { code: "turn_in_flight", status: 409 },
+    { code: "turn_not_in_flight", status: 409 },
+    { code: "queue_full", status: 409 },
+    { code: "dialog_not_found", status: 409 },
+    { code: "conversation_unavailable", status: 503 },
+    { code: "lease_expired", status: 409 },
+  ];
+  for (const { code, status } of rejections) {
+    const coordinator = fakeCoordinator({
+      sendPrompt: async () => {
+        throw Object.assign(new Error(code), { code });
+      },
+    });
+    const handled = await handleClarificationApi(command({ posture: enabled, coordinator }));
+    strictEqual(handled.status, status);
+    strictEqual(handled.json.error, code);
+  }
+});
+
+test("the conversation state read answers the typed questions and capabilities", async () => {
+  const coordinator = fakeCoordinator();
+  const handled = await handleClarificationApi(conversation({ coordinator }));
+  strictEqual(handled.status, 200);
+  strictEqual(handled.json.available, true);
+  strictEqual(handled.json.sessionState, "ready");
+  strictEqual(handled.json.pendingDialogs[0].kind, "select");
+  deepStrictEqual(coordinator.calls, [
+    ["conversationState", { runId: "run_1", attemptId: "attempt_1" }],
+  ]);
+  parseClarificationConversationState(handled.json);
+
+  const missing = fakeCoordinator({
+    conversationState: () => {
+      throw Object.assign(new Error("no such attempt"), { code: "attempt_not_found" });
+    },
+  });
+  const notFound = await handleClarificationApi(conversation({ coordinator: missing }));
+  strictEqual(notFound.status, 404);
+  strictEqual(notFound.json.error, "attempt_not_found");
+
+  const wrongMethod = await handleClarificationApi(
+    conversation({ method: "POST", coordinator: fakeCoordinator() }),
+  );
+  strictEqual(wrongMethod.status, 405);
+});
+
+test("the run route finds a run by issue for the surface's reconnect-after-refresh", async () => {
+  const coordinator = fakeCoordinator();
+  const byIssue = await handleClarificationApi(
+    run({ posture: enabled, coordinator, query: new URLSearchParams("issue=230") }),
+  );
+  strictEqual(byIssue.status, 200);
+  deepStrictEqual(coordinator.calls, [
+    ["runForIssue", { issueNumber: 230 }],
+    ["runSection", { runId: "run_1", afterCursor: 0 }],
+  ]);
+
+  const unknown = fakeCoordinator({
+    runForIssue: async () => null,
+  });
+  const absent = await handleClarificationApi(
+    run({ posture: enabled, coordinator: unknown, query: new URLSearchParams("issue=231") }),
+  );
+  strictEqual(absent.status, 404);
+  strictEqual(absent.json.error, "run_not_found");
+
+  const badIssue = await handleClarificationApi(
+    run({
+      posture: enabled,
+      coordinator: fakeCoordinator(),
+      query: new URLSearchParams("issue=x"),
+    }),
+  );
+  strictEqual(badIssue.status, 400);
+});
+
+// --- The Clarification draft (spec #221, ticket #233): the attempt's
+// --- proposal as one mutable, locally persisted document behind GET/PUT.
+
+const draftDocument = {
+  version: "clarification-draft/v1",
+  profile: "bug",
+  behavior: "the sync command exits 0 on a clean tree",
+  observation: "it exits 1 with a lockfile warning",
+  reproduction: "run pnpm sync on a clean checkout",
+  boundary: "",
+  scope: "scripts/sync only",
+  exclusions: ["the pack-smoke harness"],
+  acceptance: ["sync exits 0 on a clean tree"],
+  dependencies: "",
+  performanceClaim: "",
+  performanceEvidence: "",
+  assumptions: [],
+  evidence: [],
+};
+
+const draftView = {
+  runId: "run_1",
+  attemptId: "attempt_1",
+  draft: draftDocument,
+  gaps: [],
+  briefCompleteness: "ready",
+  issue: {
+    number: 230,
+    revision: { updatedAt: "2026-09-18T10:00:00.000Z", bodyHash: "sha-256:abc" },
+    body: "old body",
+  },
+  diff: { unchanged: false, added: 12, removed: 1, lines: [{ kind: "removed", text: "old body" }] },
+  warnings: [],
+  savingIsNotApproval: noApprovalLine,
+  savedAt: "2026-09-18T10:00:09.000Z",
+};
+
+const draftGet = (overrides = {}) => ({
+  method: "GET",
+  pathname: "/api/clarification/runs/run_1/attempts/attempt_1/draft",
+  posture: disabled,
+  coordinator: null,
+  ...loopback,
+  ...overrides,
+});
+
+const draftPut = (overrides = {}) => ({
+  method: "PUT",
+  pathname: "/api/clarification/runs/run_1/attempts/attempt_1/draft",
+  body: JSON.stringify(draftDocument),
+  posture: enabled,
+  coordinator: null,
+  ...loopback,
+  ...overrides,
+});
+
+test("the draft read and save travel the parsed document and the parsed view", async () => {
+  const saveCalls = [];
+  const coordinator = fakeCoordinator({
+    draftView: async () => draftView,
+    saveDraft: async (args) => {
+      saveCalls.push(args);
+      return draftView;
+    },
+  });
+  const read = await handleClarificationApi(draftGet({ coordinator }));
+  strictEqual(read.status, 200);
+  const parsed = parseClarificationDraftView(read.json);
+  strictEqual(parsed.savingIsNotApproval, noApprovalLine);
+  strictEqual(parsed.briefCompleteness, "ready");
+
+  const saved = await handleClarificationApi(draftPut({ coordinator }));
+  strictEqual(saved.status, 200);
+  strictEqual(parseClarificationDraftView(saved.json).draft.profile, "bug");
+  deepStrictEqual(saveCalls, [{ runId: "run_1", attemptId: "attempt_1", draft: draftDocument }]);
+});
+
+test("the draft read is posture-free; the draft save is not", async () => {
+  const coordinator = fakeCoordinator({
+    draftView: async () => draftView,
+    saveDraft: async () => {
+      throw new Error("a disabled install must not reach the coordinator");
+    },
+  });
+  const read = await handleClarificationApi(draftGet({ coordinator, posture: disabled }));
+  strictEqual(read.status, 200);
+
+  const denial = await handleClarificationApi(draftPut({ coordinator, posture: disabled }));
+  strictEqual(denial.status, 403);
+  strictEqual(denial.json.error, "clarification_disabled");
+});
+
+test("the draft routes answer their typed 501 when no coordinator is wired", async () => {
+  const read = await handleClarificationApi(draftGet({ coordinator: null, posture: enabled }));
+  strictEqual(read.status, 501);
+  strictEqual(read.json.error, "clarification_unavailable");
+
+  const save = await handleClarificationApi(draftPut({ coordinator: null, posture: enabled }));
+  strictEqual(save.status, 501);
+  strictEqual(save.json.error, "clarification_unavailable");
+});
+
+test("a draft save refuses a body that is not a draft document", async () => {
+  const coordinator = fakeCoordinator();
+  const handled = await handleClarificationApi(
+    draftPut({ coordinator, body: JSON.stringify({ profile: "bug" }) }),
+  );
+  strictEqual(handled.status, 400);
+  strictEqual(handled.json.error, "invalid_request");
+});
+
+test("wrong methods on the draft route name the method that is answered", async () => {
+  const handled = await handleClarificationApi(draftGet({ method: "POST", body: "{}" }));
+  strictEqual(handled.status, 405);
+  strictEqual(handled.json.message, "this endpoint answers PUT only");
+});
+
+test("the coordinator's typed draft rejections cross the seam with their statuses", async () => {
+  const notFound = fakeCoordinator({
+    draftView: async () => {
+      const error = new Error("no run");
+      error.code = "run_not_found";
+      throw error;
+    },
+  });
+  const handled = await handleClarificationApi(draftGet({ coordinator: notFound }));
+  strictEqual(handled.status, 404);
+  strictEqual(handled.json.error, "run_not_found");
+});
+
+test("the draft route is one of the clarification routes", () => {
+  strictEqual(
+    isClarificationApiRoute("/api/clarification/runs/run_1/attempts/attempt_1/draft"),
+    true,
+  );
+  strictEqual(
+    isClarificationApiRoute("/api/clarification/runs/run_1/attempts/attempt_1/other"),
+    false,
+  );
 });
