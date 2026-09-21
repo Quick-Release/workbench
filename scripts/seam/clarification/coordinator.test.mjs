@@ -2455,3 +2455,422 @@ test("same-numbered issues in different repositories never collide or cross-read
     foreignStore.close();
   });
 });
+
+// --- Ticket #234: approving publishes the exact visible diff once ----------
+
+import { bodyDigestFor } from "./approval.mjs";
+import { publicationBodyFor } from "./draft.mjs";
+
+// The publication tests run against the REAL store on a temp directory —
+// the sequencing semantics (the nonce spent before the write, the outcome
+// durable before the answer) are the behavior under test. Only the tracker
+// read, the tracker write, and the clock are substituted. The coordinator
+// performs three tracker reads per approval — the manifest gate, the fresh
+// pre-write check, and the read-back — so a script answers them in order;
+// an exhausted script repeats its last read.
+const publicationRig = ({ script = [], onWrite, failReadBack = false, mutateAfterWrite } = {}) => {
+  const writeCalls = [];
+  let readCount = 0;
+  // A delivered write changes what the tracker serves: reads after it
+  // answer with the written body and a moved revision — the read-back's
+  // ground truth. A refused or ambiguous write changes nothing.
+  let writtenBody;
+  // The one clock the store and the coordinator share, driven by the test —
+  // expiry is arithmetic, never a sleep.
+  let now = "2026-09-18T10:00:00.000Z";
+  const clock = () => now;
+  const tracker = {
+    readContext: async ({ issueNumber }) => {
+      const result =
+        writtenBody !== undefined
+          ? failReadBack
+            ? collectedIssue({
+                failed: true,
+                warnings: ["the tracker read failed"],
+                issue: null,
+                revision: null,
+                issueProvenance: null,
+              })
+            : collectedIssue({
+                issue: {
+                  number: 230,
+                  title: "Clarification 09",
+                  body: mutateAfterWrite ?? writtenBody,
+                  state: "OPEN",
+                },
+                revision: {
+                  updatedAt: "2026-09-18T10:00:05.000Z",
+                  bodyHash: bodyDigestFor(mutateAfterWrite ?? writtenBody),
+                },
+              })
+          : script.length === 0
+            ? collectedIssue()
+            : script[Math.min(readCount, script.length - 1)];
+      readCount += 1;
+      return typeof result === "function" ? result({ issueNumber, read: readCount }) : result;
+    },
+    updateIssueBody: async (args) => {
+      writeCalls.push(args);
+      if (onWrite !== undefined) {
+        const outcome = await onWrite(args);
+        writtenBody = args.body;
+        return outcome;
+      }
+      writtenBody = args.body;
+      return { delivered: true };
+    },
+  };
+  let store;
+  const open = async () => {
+    const directory = await mkdtemp(join(tmpdir(), "workbench-clarification-publish-"));
+    store = openClarificationStore({
+      hostRepo: "Quick-Release/workbench",
+      databasePath: join(directory, "runs.sqlite"),
+      clock,
+    });
+    const coordinator = createClarificationCoordinator({
+      store,
+      tracker,
+      sessions: fakeSessions(),
+      clock,
+      provider: "openai-codex-oauth",
+      dataDestination: "https://api.openai.com",
+      hostRepo: "Quick-Release/workbench",
+    });
+    return { store, coordinator };
+  };
+  const close = () => store?.close();
+  return {
+    open,
+    close,
+    tracker,
+    writeCalls,
+    tickMs: (ms) => {
+      now = new Date(Date.parse(now) + ms).toISOString();
+    },
+  };
+};
+
+// A started run with an active attempt and a saved draft — the state an
+// approval rides on. The clock then moves past the start lease's window:
+// by approval time the prior controller's lease has expired, and the
+// coordinator re-arms a fresh generation, as it does across any real gap.
+// Returns the exact body bytes the draft serializes to and their digest,
+// so the test presents what the Developer saw.
+const startedWithDraft = async (rig, store, { requestId = "req-publish" } = {}) => {
+  const { run } = store.createRun({ issueId: "230", requestId });
+  const { lease } = store.acquireLease({ runId: run.runId, owner: "coordinator" });
+  const { attempt } = store.createAttempt({
+    runId: run.runId,
+    requestId: `${requestId}-attempt`,
+    intent: { kind: "clarification-start" },
+    leaseToken: lease.token,
+  });
+  const draft = {
+    version: "clarification-draft/v1",
+    profile: "bug",
+    behavior: "the brief's expected behavior",
+    observation: "",
+    reproduction: "",
+    boundary: "",
+    scope: "the bounded scope",
+    exclusions: [],
+    acceptance: ["one observable criterion"],
+    dependencies: "",
+    performanceClaim: "",
+    performanceEvidence: "",
+    assumptions: [],
+    evidence: [],
+  };
+  store.saveDraft({ attemptId: attempt.attemptId, draft, leaseToken: lease.token });
+  rig.tickMs(60_000);
+  const body = publicationBodyFor(draft);
+  return { run, attempt, lease, draft, body, bodyDigest: bodyDigestFor(body) };
+};
+
+const approveArgs = ({ run, attempt, bodyDigest, requestId = "approve-1" }) => ({
+  runId: run.runId,
+  attemptId: attempt.attemptId,
+  requestId,
+  revision: { updatedAt: "2026-09-18T10:00:00.000Z", bodyHash: "sha-256:abc" },
+  bodyDigest,
+});
+
+test("approving publishes the exact visible diff once, proven by read-back", async () => {
+  const rig = publicationRig();
+  const { store, coordinator } = await rig.open();
+  try {
+    const state = await startedWithDraft(rig, store);
+    const result = await coordinator.approvePublication(approveArgs(state));
+
+    strictEqual(result.published, true);
+    strictEqual(result.outcome, "published");
+    strictEqual(result.attemptState, "terminal");
+    strictEqual(result.runState, "terminal");
+    strictEqual(result.readBack.matched, true);
+    // The write carried exactly the bytes the binding pinned, and the
+    // approval came back consumed — single-use, spent by this publication.
+    deepStrictEqual(rig.writeCalls, [{ issueNumber: 230, body: publicationBodyFor(state.draft) }]);
+    strictEqual(store.getApproval(result.approval.nonce).status, "consumed");
+    // The attempt closed with the publication as its durable outcome.
+    strictEqual(store.getAttempt(state.attempt.attemptId).result.kind, "published");
+    // The ledger holds the whole story, in order.
+    const kinds = store
+      .readEvents({ runId: state.run.runId, afterCursor: 0 })
+      .events.map(({ event }) => event.kind);
+    ok(kinds.includes("publication.approved"));
+    ok(kinds.includes("publication.succeeded"));
+  } finally {
+    rig.close();
+  }
+});
+
+test("approving without a saved draft is a typed refusal — nothing is approved", async () => {
+  const rig = publicationRig();
+  const { store, coordinator } = await rig.open();
+  try {
+    const { run } = store.createRun({ issueId: "230", requestId: "req-publish" });
+    const { lease } = store.acquireLease({ runId: run.runId, owner: "coordinator" });
+    const { attempt } = store.createAttempt({
+      runId: run.runId,
+      requestId: "req-publish-attempt",
+      intent: { kind: "clarification-start" },
+      leaseToken: lease.token,
+    });
+    await rejects(
+      () =>
+        coordinator.approvePublication(approveArgs({ run, attempt, bodyDigest: "sha-256:def" })),
+      (error) => error.code === "no_draft",
+    );
+    strictEqual(rig.writeCalls.length, 0);
+  } finally {
+    rig.close();
+  }
+});
+
+test("the diff the Developer saw is the diff approval binds to", async () => {
+  const rig = publicationRig();
+  const { store, coordinator } = await rig.open();
+  try {
+    const state = await startedWithDraft(rig, store);
+    // The presented digest is the view's — the draft has moved on since.
+    await rejects(
+      () =>
+        coordinator.approvePublication(
+          approveArgs({ ...state, bodyDigest: bodyDigestFor("different bytes") }),
+        ),
+      (error) => error.code === "approval_stale",
+    );
+    strictEqual(rig.writeCalls.length, 0);
+  } finally {
+    rig.close();
+  }
+});
+
+test("an issue that moved past the rendered revision refuses before anything is recorded", async () => {
+  const rig = publicationRig({
+    script: [
+      collectedIssue({
+        revision: { updatedAt: "2026-09-18T12:00:00.000Z", bodyHash: "sha-256:moved" },
+      }),
+    ],
+  });
+  const { store, coordinator } = await rig.open();
+  try {
+    const state = await startedWithDraft(rig, store);
+    await rejects(
+      () => coordinator.approvePublication(approveArgs(state)),
+      (error) => error.code === "approval_stale",
+    );
+    strictEqual(rig.writeCalls.length, 0);
+    // No approval row exists: the refusal happened before the binding.
+    strictEqual(store.latestApproval(state.attempt.attemptId), null);
+  } finally {
+    rig.close();
+  }
+});
+
+test("a replayed approval request is answered from the record, never re-written", async () => {
+  const rig = publicationRig();
+  const { store, coordinator } = await rig.open();
+  try {
+    const state = await startedWithDraft(rig, store);
+    await coordinator.approvePublication(approveArgs(state));
+    const replay = await coordinator.approvePublication(approveArgs(state));
+    strictEqual(replay.published, false);
+    strictEqual(replay.replayed, true);
+    strictEqual(rig.writeCalls.length, 1, "the tracker write happened exactly once");
+  } finally {
+    rig.close();
+  }
+});
+
+test("a concurrent edit between binding and write makes the approval stale and blocks", async () => {
+  // Gate one sees the rendered revision; the fresh pre-write check sees a
+  // concurrent edit that landed in between.
+  const rig = publicationRig({
+    script: [
+      collectedIssue(),
+      collectedIssue({
+        revision: { updatedAt: "2026-09-18T10:00:45.000Z", bodyHash: "sha-256:theirs" },
+      }),
+    ],
+  });
+  const { store, coordinator } = await rig.open();
+  try {
+    const state = await startedWithDraft(rig, store);
+    await rejects(
+      () => coordinator.approvePublication(approveArgs(state)),
+      (error) => error.code === "approval_stale",
+    );
+    strictEqual(rig.writeCalls.length, 0, "the blocked write never happened");
+    strictEqual(store.latestApproval(state.attempt.attemptId).status, "stale");
+    const kinds = store
+      .readEvents({ runId: state.run.runId, afterCursor: 0 })
+      .events.map(({ event }) => event.kind);
+    ok(kinds.includes("publication.blocked"));
+    strictEqual(store.getAttempt(state.attempt.attemptId).state, "active");
+  } finally {
+    rig.close();
+  }
+});
+
+test("a definite tracker refusal closes the attempt terminal with its evidence", async () => {
+  const rig = publicationRig({
+    onWrite: async () => {
+      const error = new Error("the tracker refused the issue-body write (HTTP 422)");
+      error.code = "publication-write-refused";
+      throw error;
+    },
+  });
+  const { store, coordinator } = await rig.open();
+  try {
+    const state = await startedWithDraft(rig, store);
+    const result = await coordinator.approvePublication(approveArgs(state));
+    strictEqual(result.published, false);
+    strictEqual(result.outcome, "publication-failed");
+    strictEqual(result.reason, "write-refused");
+    strictEqual(result.attemptState, "terminal");
+    strictEqual(result.runState, "active", "the run stays with the Developer, not parked");
+    strictEqual(store.getAttempt(state.attempt.attemptId).result.kind, "publication-failed");
+    strictEqual(store.getApproval(result.approval.nonce).status, "consumed");
+    ok(
+      store
+        .readEvents({ runId: state.run.runId, afterCursor: 0 })
+        .events.some(({ event }) => event.kind === "publication.failed"),
+    );
+  } finally {
+    rig.close();
+  }
+});
+
+test("an ambiguous write is an Unknown outcome: no retry exists before reconciliation", async () => {
+  const rig = publicationRig({
+    onWrite: async () => {
+      throw new Error("fetch failed");
+    },
+  });
+  const { store, coordinator } = await rig.open();
+  try {
+    const state = await startedWithDraft(rig, store);
+    const result = await coordinator.approvePublication(approveArgs(state));
+    strictEqual(result.published, false);
+    strictEqual(result.outcome, "publication-unknown");
+    strictEqual(result.attemptState, "unknown");
+    strictEqual(result.runState, "unknown");
+    strictEqual(store.getAttempt(state.attempt.attemptId).result.kind, "publication-unknown");
+
+    // The spent nonce's answer is the record: a fresh approval on the
+    // unknown attempt refuses — reconciliation comes first, always. (The
+    // clock first moves past the prior command's lease, so the refusal is
+    // the attempt's state, not the fence's busy.)
+    rig.tickMs(60_000);
+    await rejects(
+      () =>
+        coordinator.approvePublication(
+          approveArgs({ ...state, requestId: "approve-2-should-refuse" }),
+        ),
+      (error) => error.code === "attempt_not_active",
+    );
+    strictEqual(rig.writeCalls.length, 1, "nothing re-entered the tracker");
+
+    // Reconciliation resolves the uncertainty on the record — and even a
+    // resolution never revives the spent approval; the next publication is
+    // a fresh approval on whatever the reconciliation leaves active.
+    store.beginAttemptReconciliation({ attemptId: state.attempt.attemptId });
+    const resolved = store.resolveAttemptReconciliation({
+      attemptId: state.attempt.attemptId,
+      to: "terminal",
+      basis: "the tracker serves the approved body; verified by the human",
+    });
+    strictEqual(resolved.state, "terminal");
+  } finally {
+    rig.close();
+  }
+});
+
+test("a read-back that cannot be read parks the attempt awaiting-human", async () => {
+  const rig = publicationRig({ failReadBack: true });
+  const { store, coordinator } = await rig.open();
+  try {
+    const state = await startedWithDraft(rig, store);
+    const result = await coordinator.approvePublication(approveArgs(state));
+    strictEqual(result.published, false);
+    strictEqual(result.outcome, "publication-failed");
+    strictEqual(result.reason, "read-back-unavailable");
+    strictEqual(result.attemptState, "awaiting-human");
+    strictEqual(result.runState, "awaiting-human");
+  } finally {
+    rig.close();
+  }
+});
+
+test("a read-back that shows another body parks the attempt awaiting-human", async () => {
+  const rig = publicationRig({ mutateAfterWrite: "a concurrent human edit" });
+  const { store, coordinator } = await rig.open();
+  try {
+    const state = await startedWithDraft(rig, store);
+    const result = await coordinator.approvePublication(approveArgs(state));
+    strictEqual(result.published, false);
+    strictEqual(result.outcome, "publication-failed");
+    strictEqual(result.reason, "read-back-mismatch");
+    strictEqual(result.attemptState, "awaiting-human");
+    strictEqual(result.runState, "awaiting-human");
+    ok(result.readBack.matched === false);
+    const recorded = store.getAttempt(state.attempt.attemptId).result;
+    deepStrictEqual(recorded.observedRevision, {
+      updatedAt: "2026-09-18T10:00:05.000Z",
+      bodyHash: bodyDigestFor("a concurrent human edit"),
+    });
+  } finally {
+    rig.close();
+  }
+});
+
+test("the draft view exposes the digest of the exact bytes it displayed", async () => {
+  const rig = publicationRig();
+  const { store, coordinator } = await rig.open();
+  try {
+    const state = await startedWithDraft(rig, store);
+    rig.tickMs(-60_000);
+    const view = await coordinator.draftView({
+      runId: state.run.runId,
+      attemptId: state.attempt.attemptId,
+    });
+    strictEqual(view.publicationBodyDigest, bodyDigestFor(publicationBodyFor(state.draft)));
+
+    // No draft, no digest — the honest null, like the diff.
+    const { run } = store.createRun({ issueId: "231", requestId: "req-nodraft" });
+    const { lease } = store.acquireLease({ runId: run.runId, owner: "coordinator" });
+    const { attempt } = store.createAttempt({
+      runId: run.runId,
+      requestId: "req-nodraft-attempt",
+      intent: { kind: "clarification-start" },
+      leaseToken: lease.token,
+    });
+    const empty = await coordinator.draftView({ runId: run.runId, attemptId: attempt.attemptId });
+    strictEqual(empty.publicationBodyDigest, null);
+  } finally {
+    rig.close();
+  }
+});

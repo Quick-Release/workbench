@@ -7,6 +7,7 @@ import test from "node:test";
 
 import {
   ATTEMPT_ORIGINS,
+  APPROVAL_STATUSES,
   DEFAULT_LEASE_TTL_MS,
   EVENT_ENVELOPE_VERSION,
   LIFECYCLE_STATES,
@@ -1184,7 +1185,7 @@ CREATE TABLE IF NOT EXISTS events (
 
 test("a version-1 file upgrades in place and everything written before reads back", async () => {
   await withStore(async ({ databasePath }) => {
-    strictEqual(SCHEMA_VERSION, "5");
+    strictEqual(SCHEMA_VERSION, "6");
 
     // A file exactly as the previous schema wrote it — version stamp, one
     // run, one attempt — then abandoned mid-pilot.
@@ -1242,7 +1243,7 @@ test("a version-1 file upgrades in place and everything written before reads bac
     const raw = new DatabaseSync(databasePath);
     strictEqual(
       raw.prepare("SELECT value FROM store_meta WHERE key = 'schema_version'").get().value,
-      "5",
+      "6",
     );
     raw.close();
 
@@ -1509,7 +1510,7 @@ ALTER TABLE attempts ADD COLUMN result TEXT;`);
     const raw = new DatabaseSync(databasePath);
     strictEqual(
       raw.prepare("SELECT value FROM store_meta WHERE key = 'schema_version'").get().value,
-      "5",
+      "6",
     );
     raw.close();
   });
@@ -1584,7 +1585,7 @@ test("a version-3 file upgrades through to the current schema and gains the fail
     const raw = new DatabaseSync(databasePath);
     strictEqual(
       raw.prepare("SELECT value FROM store_meta WHERE key = 'schema_version'").get().value,
-      "5",
+      "6",
     );
     raw.close();
   });
@@ -2318,7 +2319,7 @@ test("retained evidence is discarded only through the typed destructive confirma
   });
 });
 
-test("a version-4 file upgrades to version 5 and gains the discard stamp", async () => {
+test("a version-4 file upgrades through to the current schema and gains the discard stamp", async () => {
   await withStore(async ({ databasePath }) => {
     // A current file, then rolled back to exactly what version 4 wrote:
     // the discard column dropped, the stamp moved back — the v4 delta is
@@ -2346,7 +2347,237 @@ test("a version-4 file upgrades to version 5 and gains the discard stamp", async
     const check = new DatabaseSync(databasePath);
     strictEqual(
       check.prepare("SELECT value FROM store_meta WHERE key = 'schema_version'").get().value,
-      "5",
+      "6",
+    );
+    check.close();
+  });
+});
+
+// --- Ticket #234: the approval binding's durables ---------------------------
+
+import { buildApprovalBinding } from "./approval.mjs";
+import { clarificationApprovalStatuses } from "../../../src/types.ts";
+
+test("the approval status vocabulary never drifts from the seam's", () => {
+  deepStrictEqual([...APPROVAL_STATUSES], [...clarificationApprovalStatuses]);
+});
+
+// An approval binding to record: the full approval of one exact issue-body
+// publication, assembled by the binding module and stored verbatim.
+const bindingFor = (overrides = {}) =>
+  buildApprovalBinding({
+    host: "example/project",
+    issueNumber: 42,
+    issueId: "GH-42",
+    revision: { updatedAt: "2026-09-18T00:00:00.000Z", bodyHash: "sha-256:abc" },
+    bodyDigest: "sha-256:def",
+    provider: "openai-codex-oauth",
+    dataDestination: "https://api.openai.com",
+    contextDigest: "sha-256:123",
+    capabilitySet: ["publishes the approved issue body"],
+    ...overrides,
+  });
+
+// A run, its active attempt, and the controller lease every mutation
+// beneath the run travels under.
+const leasedAttempt = (store, requestId = "approve-1") => {
+  const { run, lease } = leasedRun(store, requestId);
+  const { attempt } = store.createAttempt({
+    runId: run.runId,
+    requestId: `${requestId}-attempt`,
+    intent,
+    leaseToken: lease.token,
+  });
+  return { run, attempt, lease };
+};
+
+test("an approval is recorded pending under the lease and reads back whole", async () => {
+  await withStore(async ({ databasePath }) => {
+    const store = open({ databasePath });
+    const { run, attempt, lease } = leasedAttempt(store);
+    const binding = bindingFor();
+
+    const { approval } = store.recordApproval({
+      attemptId: attempt.attemptId,
+      binding,
+      leaseToken: lease.token,
+    });
+    ok(approval.nonce.startsWith("approval_"));
+    strictEqual(approval.attemptId, attempt.attemptId);
+    strictEqual(approval.runId, run.runId);
+    strictEqual(approval.status, "pending");
+    deepStrictEqual(approval.binding, binding);
+    strictEqual(approval.expiresAt, "2026-09-18T00:05:00.000Z");
+    strictEqual(approval.consumedAt, undefined);
+
+    const readBack = store.getApproval(approval.nonce);
+    deepStrictEqual(readBack, approval);
+    deepStrictEqual(store.latestApproval(attempt.attemptId), approval);
+    store.close();
+  });
+});
+
+test("a recorded approval is durable across a close and reopen", async () => {
+  await withStore(async ({ databasePath }) => {
+    const first = open({ databasePath });
+    const { attempt, lease } = leasedAttempt(first);
+    const { approval } = first.recordApproval({
+      attemptId: attempt.attemptId,
+      binding: bindingFor(),
+      leaseToken: lease.token,
+    });
+    first.close();
+
+    const second = open({ databasePath });
+    deepStrictEqual(second.getApproval(approval.nonce), approval);
+    second.close();
+  });
+});
+
+test("an approval is single-use: the second consumption is a typed refusal", async () => {
+  await withStore(async ({ databasePath }) => {
+    const store = open({ databasePath });
+    const { attempt, lease } = leasedAttempt(store);
+    const { approval } = store.recordApproval({
+      attemptId: attempt.attemptId,
+      binding: bindingFor(),
+      leaseToken: lease.token,
+    });
+
+    const consumed = store.consumeApproval({ nonce: approval.nonce, leaseToken: lease.token });
+    strictEqual(consumed.status, "consumed");
+    strictEqual(consumed.consumedAt, "2026-09-18T00:00:00Z");
+
+    throws(
+      () => store.consumeApproval({ nonce: approval.nonce, leaseToken: lease.token }),
+      (error) => error.code === "approval_already_used",
+    );
+    store.close();
+  });
+});
+
+test("an expired approval cannot be consumed; a stale one neither", async () => {
+  await withStore(async ({ databasePath }) => {
+    const { store, tick } = openTimed({ databasePath });
+    const { attempt, lease } = leasedAttempt(store);
+    const { approval } = store.recordApproval({
+      attemptId: attempt.attemptId,
+      binding: bindingFor(),
+      ttlMs: 1000,
+      leaseToken: lease.token,
+    });
+    tick(2000);
+    throws(
+      () => store.consumeApproval({ nonce: approval.nonce, leaseToken: lease.token }),
+      (error) => error.code === "approval_expired",
+    );
+
+    // A fresh approval, deliberately marked stale: the gate refused it, and
+    // the store's law makes that refusal permanent.
+    const { approval: fresh } = store.recordApproval({
+      attemptId: attempt.attemptId,
+      binding: bindingFor(),
+      leaseToken: lease.token,
+    });
+    const marked = store.markApprovalStale({ nonce: fresh.nonce, leaseToken: lease.token });
+    strictEqual(marked.status, "stale");
+    throws(
+      () => store.consumeApproval({ nonce: fresh.nonce, leaseToken: lease.token }),
+      (error) => error.code === "approval_stale",
+    );
+    store.close();
+  });
+});
+
+test("approval mutations travel under the live controller lease", async () => {
+  await withStore(async ({ databasePath }) => {
+    const store = open({ databasePath });
+    const { attempt, lease } = leasedAttempt(store);
+    throws(
+      () => store.recordApproval({ attemptId: attempt.attemptId, binding: bindingFor() }),
+      (error) => error.code === "lease_required",
+    );
+    const { approval } = store.recordApproval({
+      attemptId: attempt.attemptId,
+      binding: bindingFor(),
+      leaseToken: lease.token,
+    });
+    throws(
+      () => store.consumeApproval({ nonce: approval.nonce, leaseToken: "lease_forged" }),
+      (error) => error.code === "lease_not_held",
+    );
+    throws(
+      () => store.markApprovalStale({ nonce: approval.nonce, leaseToken: "lease_forged" }),
+      (error) => error.code === "lease_not_held",
+    );
+    store.close();
+  });
+});
+
+test("an approval of another repo's attempt is invisible and unconsumable here", async () => {
+  await withStore(async ({ databasePath }) => {
+    const home = open({ databasePath, hostRepo: "example/project" });
+    const { attempt, lease } = leasedAttempt(home);
+    const { approval } = home.recordApproval({
+      attemptId: attempt.attemptId,
+      binding: bindingFor(),
+      leaseToken: lease.token,
+    });
+    home.close();
+
+    const foreign = open({ databasePath, hostRepo: "other/project" });
+    strictEqual(foreign.getApproval(approval.nonce), null);
+    throws(
+      () => foreign.recordApproval({ attemptId: attempt.attemptId, binding: bindingFor() }),
+      (error) => error.code === "attempt_not_found",
+    );
+    throws(
+      () =>
+        foreign.consumeApproval({
+          nonce: approval.nonce,
+          leaseToken: "lease_foreign",
+        }),
+      (error) => error.code === "approval_not_found",
+    );
+    foreign.close();
+  });
+});
+
+test("a version-5 file upgrades to version 6 and gains the approvals table", async () => {
+  await withStore(async ({ databasePath }) => {
+    // A current file, rolled back to exactly what version 5 wrote: the
+    // approvals table dropped, the stamp moved back — the v5 delta is only
+    // the table, so this is a genuine v5 file.
+    const seed = open({ databasePath });
+    const { run } = seed.createRun({ issueId: "GH-42", requestId: "approve-v5" });
+    seed.close();
+    const raw = new DatabaseSync(databasePath);
+    raw.exec("DROP TABLE approvals;");
+    raw.prepare("UPDATE store_meta SET value = '5' WHERE key = 'schema_version'").run();
+    raw.close();
+
+    const store = open({ databasePath });
+    strictEqual(SCHEMA_VERSION, "6");
+    const { lease } = store.acquireLease({ runId: run.runId, owner: "coordinator" });
+    const { attempt } = store.createAttempt({
+      runId: run.runId,
+      requestId: "approve-v5-attempt",
+      intent,
+      leaseToken: lease.token,
+    });
+    const { approval } = store.recordApproval({
+      attemptId: attempt.attemptId,
+      binding: bindingFor(),
+      leaseToken: lease.token,
+    });
+    strictEqual(approval.status, "pending");
+    strictEqual(store.getRun(run.runId).state, "active");
+    store.close();
+
+    const check = new DatabaseSync(databasePath);
+    strictEqual(
+      check.prepare("SELECT value FROM store_meta WHERE key = 'schema_version'").get().value,
+      "6",
     );
     check.close();
   });

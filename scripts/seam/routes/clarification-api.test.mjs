@@ -1,4 +1,4 @@
-import { deepStrictEqual, match, strictEqual } from "node:assert";
+import { deepStrictEqual, match, ok, strictEqual } from "node:assert";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -1506,4 +1506,142 @@ test("a recovered run's evidence round-trips the seam schema", async () => {
     deepStrictEqual(after.json.events, []);
     strictEqual(after.json.latestCursor, 0);
   });
+});
+
+// --- Ticket #234: the publication route -------------------------------------
+
+import { parseClarificationPublicationResult } from "../../../src/schema.ts";
+
+const publication = (overrides = {}) => ({
+  method: "POST",
+  pathname: "/api/clarification/runs/run_1/attempts/attempt_1/publication",
+  body: JSON.stringify({
+    requestId: "approve-1",
+    revision: { updatedAt: "2026-09-18T10:00:00.000Z", bodyHash: "sha-256:abc" },
+    bodyDigest: "sha-256:def",
+  }),
+  posture: disabled,
+  coordinator: null,
+  ...loopback,
+  ...overrides,
+});
+
+test("the publication route is a clarification route", () => {
+  ok(isClarificationApiRoute("/api/clarification/runs/run_1/attempts/attempt_1/publication"));
+  ok(!isClarificationApiRoute("/api/clarification/runs/run_1/attempts/attempt_1/publish"));
+});
+
+test("a disabled install denies the publication write before the body is read", async () => {
+  const denial = await handleClarificationApi(publication());
+  strictEqual(denial.status, 403);
+  strictEqual(denial.json.error, "clarification_disabled");
+});
+
+test("the publication route speaks POST only", async () => {
+  const mismatch = await handleClarificationApi(publication({ method: "GET", body: undefined }));
+  strictEqual(mismatch.status, 405);
+});
+
+test("the publication route drives the coordinator and parses the answer", async () => {
+  const calls = [];
+  const coordinator = {
+    approvePublication: async (args) => {
+      calls.push(args);
+      return {
+        published: true,
+        outcome: "published",
+        approval: {
+          nonce: "approval_1",
+          status: "consumed",
+          expiresAt: "2026-09-18T10:05:00.000Z",
+        },
+        readBack: {
+          matched: true,
+          revision: { updatedAt: "2026-09-18T10:00:05.000Z", bodyHash: "sha-256:def" },
+        },
+        attemptState: "terminal",
+        runState: "terminal",
+      };
+    },
+  };
+  const response = await handleClarificationApi(publication({ posture: enabled, coordinator }));
+  strictEqual(response.status, 200);
+  const parsed = response.json;
+  deepStrictEqual(calls[0], {
+    runId: "run_1",
+    attemptId: "attempt_1",
+    requestId: "approve-1",
+    revision: { updatedAt: "2026-09-18T10:00:00.000Z", bodyHash: "sha-256:abc" },
+    bodyDigest: "sha-256:def",
+  });
+  strictEqual(parsed.published, true);
+});
+
+test("a malformed publication request is a 400, never a coordinator call", async () => {
+  const coordinator = { approvePublication: async () => ({}) };
+  const missing = await handleClarificationApi(
+    publication({ posture: enabled, coordinator, body: JSON.stringify({ requestId: "x" }) }),
+  );
+  strictEqual(missing.status, 400);
+  const garbage = await handleClarificationApi(
+    publication({ posture: enabled, coordinator, body: "not json" }),
+  );
+  strictEqual(garbage.status, 400);
+});
+
+test("the publication route's typed rejections keep their status codes", async () => {
+  const throwsTyped = (code) => async () => {
+    const error = new Error(`typed ${code}`);
+    error.code = code;
+    throw error;
+  };
+  const stale = await handleClarificationApi(
+    publication({
+      posture: enabled,
+      coordinator: { approvePublication: throwsTyped("approval_stale") },
+    }),
+  );
+  strictEqual(stale.status, 409);
+  strictEqual(stale.json.error, "approval_stale");
+
+  const used = await handleClarificationApi(
+    publication({
+      posture: enabled,
+      coordinator: { approvePublication: throwsTyped("approval_used") },
+    }),
+  );
+  strictEqual(used.status, 409);
+
+  const noDraft = await handleClarificationApi(
+    publication({
+      posture: enabled,
+      coordinator: { approvePublication: throwsTyped("no_draft") },
+    }),
+  );
+  strictEqual(noDraft.status, 409);
+
+  const notFound = await handleClarificationApi(
+    publication({
+      posture: enabled,
+      coordinator: { approvePublication: throwsTyped("attempt_not_found") },
+    }),
+  );
+  strictEqual(notFound.status, 404);
+});
+
+test("the result schema admits the replay answer and the unknown outcome", () => {
+  const replay = parseClarificationPublicationResult({
+    published: false,
+    replayed: true,
+    approval: { nonce: "approval_1", status: "consumed", expiresAt: "2026-09-18T10:05:00.000Z" },
+  });
+  strictEqual(replay.replayed, true);
+  const uncertain = parseClarificationPublicationResult({
+    published: false,
+    outcome: "publication-unknown",
+    approval: { nonce: "approval_2", status: "consumed", expiresAt: "2026-09-18T10:05:00.000Z" },
+    attemptState: "unknown",
+    runState: "unknown",
+  });
+  strictEqual(uncertain.outcome, "publication-unknown");
 });

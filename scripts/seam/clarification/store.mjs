@@ -53,6 +53,16 @@ import { DatabaseSync } from "node:sqlite";
 // the usage budget's lines keep reported, estimated, and unknown distinct.
 // Every policy mutation is fenced like every write; the reads are open.
 //
+// The approval binding's durables (ticket #234, ADR 0014): one approval row
+// per explicit Developer approval of the issue-body publication, carrying
+// the full binding verbatim, a single-use nonce, and an expiry. The nonce
+// is the approval's spendable identity: consumption is a compare-and-set
+// from pending, so a second write attempt — even a raced one — is a typed
+// refusal, never a second publication. Expiry is checked at consumption
+// like the lease's: arithmetic against the clock, not trust in the caller.
+// A gate-refused approval is marked stale and is then dead forever. The
+// record is evidence: nothing here writes to the tracker.
+//
 // Host-repo scoping: the store is opened for exactly one host repo and every
 // row carries its own host_repo; all reads and writes filter on it. Another
 // repo's records — even in the very same file — are invisible,
@@ -63,7 +73,7 @@ import { DatabaseSync } from "node:sqlite";
 // read-compatible steps, so data written before a disable or upgrade stays
 // interpretable.
 
-export const SCHEMA_VERSION = "5";
+export const SCHEMA_VERSION = "6";
 
 // The operational event ledger's own envelope version (ADR 0020): the
 // run-level observation stream carries this, never the managed adapter's
@@ -113,6 +123,16 @@ export const RECONCILIATION_RESOLUTIONS = [
 const DISCARDABLE_STATES = ["unknown", "awaiting-human", "quarantined"];
 
 export const DEFAULT_LEASE_TTL_MS = 30_000;
+
+// How long a recorded approval stays spendable. The approval is meant to be
+// consumed immediately by the same act that recorded it; the window exists
+// for the durable record's sake — an approval whose command died before the
+// write reads back as expired, never as silently still-live forever.
+export const DEFAULT_APPROVAL_TTL_MS = 300_000;
+
+// The approval row's states. Pending is the only spendable one; consumed
+// and stale are terminal records of why the nonce is dead.
+export const APPROVAL_STATUSES = ["pending", "consumed", "stale"];
 
 export const EVENT_LEDGER_LIMIT = 1000;
 
@@ -178,6 +198,18 @@ CREATE TABLE IF NOT EXISTS usage_lines (
   created_at TEXT NOT NULL,
   PRIMARY KEY (host_repo, run_id, line_id)
 );`;
+const APPROVALS_TABLE = `
+CREATE TABLE IF NOT EXISTS approvals (
+  nonce TEXT PRIMARY KEY,
+  attempt_id TEXT NOT NULL REFERENCES attempts(attempt_id),
+  run_id TEXT NOT NULL REFERENCES runs(run_id),
+  host_repo TEXT NOT NULL,
+  binding TEXT NOT NULL,
+  status TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  consumed_at TEXT
+);`;
 
 // The attempt origins: the Developer's manual acts, and the one
 // coordinator-created retry that durable non-dispatch evidence permits.
@@ -226,6 +258,7 @@ ${DRAFTS_TABLE}
 ${FAILURE_SIGNATURES_TABLE}
 ${ESCALATIONS_TABLE}
 ${USAGE_LINES_TABLE}
+${APPROVALS_TABLE}
 CREATE TABLE IF NOT EXISTS events (
   host_repo TEXT NOT NULL,
   run_id TEXT NOT NULL REFERENCES runs(run_id),
@@ -254,6 +287,11 @@ CREATE TABLE IF NOT EXISTS events (
 // typed destructive discard, so a closed record stays interpretable about
 // how its retained evidence ended. Everything a v4 file holds keeps
 // reading back untouched.
+//
+// v5 → v6: the approvals table is new (ticket #234) — one approval binding
+// per explicit Developer approval of the issue-body publication, with its
+// single-use nonce and expiry. Everything a v5 file holds keeps reading
+// back untouched.
 const MIGRATIONS = {
   1: (database) => {
     database.exec(`${LEASES_TABLE}
@@ -273,6 +311,9 @@ ${RETRY_INDEX}`);
   },
   4: (database) => {
     database.exec("ALTER TABLE runs ADD COLUMN discarded_at TEXT;");
+  },
+  5: (database) => {
+    database.exec(APPROVALS_TABLE);
   },
 };
 
@@ -405,6 +446,23 @@ export const openClarificationStore = ({
   const getDraftInTx = (attemptId) =>
     draftRow(database.prepare(draftSelect).get(attemptId, hostRepo));
 
+  const approvalRow = (row) =>
+    row === undefined
+      ? null
+      : {
+          nonce: row.nonce,
+          attemptId: row.attempt_id,
+          runId: row.run_id,
+          hostRepo: row.host_repo,
+          binding: JSON.parse(row.binding),
+          status: row.status,
+          expiresAt: row.expires_at,
+          createdAt: row.created_at,
+          ...(row.consumed_at === null || row.consumed_at === undefined
+            ? {}
+            : { consumedAt: row.consumed_at }),
+        };
+
   // Reads and writes always carry the host repo: a run from another repo is
   // invisible here, indistinguishable from one that does not exist.
   const ownRun = (runId) =>
@@ -414,6 +472,11 @@ export const openClarificationStore = ({
     database
       .prepare("SELECT * FROM attempts WHERE attempt_id = ? AND host_repo = ?")
       .get(attemptId, hostRepo);
+
+  const ownApproval = (nonce) =>
+    database
+      .prepare("SELECT * FROM approvals WHERE nonce = ? AND host_repo = ?")
+      .get(nonce, hostRepo);
 
   // The lease read model: ownership and expiry arithmetic, never the token
   // (the token is a capability, not a display fact) and never an
@@ -924,6 +987,143 @@ export const openClarificationStore = ({
     // and an attempt from another repo, are the same honest null.
     getDraft(attemptId) {
       return getDraftInTx(attemptId);
+    },
+
+    // The approval binding's durable record (ticket #234): the Developer's
+    // explicit approval of one exact issue-body publication, committed
+    // BEFORE anything is written to the tracker — a crash after this point
+    // leaves the approval inspectable, never the write unproven and
+    // unrecorded. The binding's shape is the approval module's contract,
+    // validated before it reaches the store; the nonce is minted here, the
+    // only spendable identity of this approval. Fenced like every mutation,
+    // and only an active attempt approves anything.
+    recordApproval({ attemptId, binding, ttlMs = DEFAULT_APPROVAL_TTL_MS, leaseToken }) {
+      if (!isPlainObject(binding))
+        throw storeError("invalid_request", "an approval carries its binding object");
+      if (!Number.isInteger(ttlMs) || ttlMs <= 0)
+        throw storeError("invalid_request", "an approval needs a positive ttl in milliseconds");
+      return tx(() => {
+        const attempt = ownAttempt(attemptId);
+        if (attempt === undefined)
+          throw storeError(
+            "attempt_not_found",
+            `no attempt "${attemptId}" is visible to this host repo`,
+          );
+        requireLiveLease(attempt.run_id, leaseToken);
+        if (attempt.state !== "active")
+          throw storeError(
+            "attempt_not_active",
+            `attempt "${attemptId}" is ${attempt.state} — only an active attempt approves a publication`,
+          );
+        const now = clock();
+        const approval = {
+          nonce: `approval_${randomUUID()}`,
+          attemptId,
+          runId: attempt.run_id,
+          hostRepo,
+          binding,
+          status: "pending",
+          expiresAt: new Date(Date.parse(now) + ttlMs).toISOString(),
+          createdAt: now,
+        };
+        database
+          .prepare(
+            "INSERT INTO approvals (nonce, attempt_id, run_id, host_repo, binding, status, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+          )
+          .run(
+            approval.nonce,
+            approval.attemptId,
+            approval.runId,
+            approval.hostRepo,
+            JSON.stringify(approval.binding),
+            approval.status,
+            approval.expiresAt,
+            approval.createdAt,
+          );
+        return { approval };
+      });
+    },
+
+    // Open reads: an approval, and an attempt's newest one. Evidence, like
+    // every read — the token is never in the row to begin with.
+    getApproval(nonce) {
+      if (typeof nonce !== "string" || nonce === "")
+        throw storeError("invalid_request", "an approval is named by its nonce");
+      return approvalRow(
+        database
+          .prepare("SELECT * FROM approvals WHERE nonce = ? AND host_repo = ?")
+          .get(nonce, hostRepo),
+      );
+    },
+
+    latestApproval(attemptId) {
+      return approvalRow(
+        database
+          .prepare(
+            "SELECT * FROM approvals WHERE attempt_id = ? AND host_repo = ? ORDER BY rowid DESC LIMIT 1",
+          )
+          .get(attemptId, hostRepo),
+      );
+    },
+
+    // The single-use consumption: a compare-and-set from pending, under the
+    // live lease, in one transaction. The expiry is checked here like the
+    // lease's — arithmetic against the clock — so an approval cannot be
+    // spent a moment after its death by a caller that skipped the gate. A
+    // raced or dead approval is a typed refusal; the write that would have
+    // ridden it must never happen.
+    consumeApproval({ nonce, leaseToken }) {
+      return tx(() => {
+        const row = ownApproval(nonce);
+        if (row === undefined)
+          throw storeError("approval_not_found", `no approval is visible to this host repo`);
+        requireLiveLease(row.run_id, leaseToken);
+        if (Date.parse(row.expires_at) <= Date.parse(clock()))
+          throw storeError(
+            "approval_expired",
+            `the approval expired at ${row.expires_at} — approve the current diff again`,
+          );
+        const updated = database
+          .prepare(
+            "UPDATE approvals SET status = 'consumed', consumed_at = ? WHERE nonce = ? AND host_repo = ? AND status = 'pending'",
+          )
+          .run(clock(), nonce, hostRepo);
+        if (updated.changes === 0) {
+          const reality = ownApproval(nonce);
+          throw storeError(
+            reality?.status === "stale" ? "approval_stale" : "approval_already_used",
+            reality?.status === "stale"
+              ? "this approval went stale and can never publish"
+              : "this approval is single-use and has already been spent",
+          );
+        }
+        return approvalRow(ownApproval(nonce));
+      });
+    },
+
+    // The gate's refusal, made durable: a pending approval the pre-write
+    // check found stale is marked stale, and is then dead forever — not
+    // re-judged at every future gate, but visibly, structurally spent.
+    markApprovalStale({ nonce, leaseToken }) {
+      return tx(() => {
+        const row = ownApproval(nonce);
+        if (row === undefined)
+          throw storeError("approval_not_found", `no approval is visible to this host repo`);
+        requireLiveLease(row.run_id, leaseToken);
+        const updated = database
+          .prepare(
+            "UPDATE approvals SET status = 'stale' WHERE nonce = ? AND host_repo = ? AND status = 'pending'",
+          )
+          .run(nonce, hostRepo);
+        if (updated.changes === 0) {
+          const reality = ownApproval(nonce);
+          throw storeError(
+            reality?.status === "consumed" ? "approval_already_used" : "approval_stale",
+            `this approval is already ${reality?.status ?? "not pending"}`,
+          );
+        }
+        return approvalRow(ownApproval(nonce));
+      });
     },
 
     listAttempts(runId) {

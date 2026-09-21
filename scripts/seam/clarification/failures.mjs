@@ -28,6 +28,11 @@ import { createHash } from "node:crypto";
 // re-rendered manifest. The one coordinator retry is gated elsewhere on the
 // durable non-dispatch proof this module defines.
 
+// The policy's own contract version: approvals bind to the version of the
+// policy that will classify their publication's outcomes (ticket #234), so
+// a binding written under one policy never silently travels under another.
+export const FAILURE_POLICY_VERSION = "clarification-failure-policy/v1";
+
 export const FAILURE_CLASSIFICATIONS = [
   "known-failure",
   "unsupported",

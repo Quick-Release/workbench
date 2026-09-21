@@ -6,6 +6,7 @@ import { tokenFromGhCli } from "../../tracker/index.mjs";
 import { collectTrackerContext } from "./context-packet.mjs";
 import { clarificationError, createClarificationCoordinator } from "./coordinator.mjs";
 import { evaluateClarificationPosture } from "./posture.mjs";
+import { publishIssueBodyViaRest } from "./approval.mjs";
 import { openClarificationStore } from "./store.mjs";
 
 // The enabled install's clarification runtime (spec #221, ticket #230):
@@ -73,6 +74,30 @@ export const clarificationRuntimeLoader = ({
       clock,
     });
   };
+  // The issue-body write the publication approval dispatches (ticket #234):
+  // the capability's one tracker mutation, through the same credentials
+  // that never travel further. Unreadable credentials are a typed
+  // pre-dispatch refusal — never a blind attempt.
+  const updateIssueBody = async (slug, issueNumber, body) => {
+    if (!slug)
+      throw clarificationError(
+        "context_unavailable",
+        "this install declares no repositoryUrl — the host repository is unknown, so nothing can be published",
+      );
+    const credentials = await token();
+    if (!credentials)
+      throw clarificationError(
+        "context_unavailable",
+        "the host tracker credentials are unreadable (gh auth token) — the issue-body write was not dispatched",
+      );
+    return publishIssueBodyViaRest({
+      repo: slug,
+      issueNumber,
+      body,
+      token: credentials,
+      fetchImpl,
+    });
+  };
   return async () => {
     const config = await loadConfig();
     const posture = evaluateClarificationPosture(config.clarification);
@@ -100,7 +125,10 @@ export const clarificationRuntimeLoader = ({
       posture,
       coordinator: createClarificationCoordinator({
         store: store.database,
-        tracker: { readContext: ({ issueNumber }) => readContext(slug, issueNumber) },
+        tracker: {
+          readContext: ({ issueNumber }) => readContext(slug, issueNumber),
+          updateIssueBody: ({ issueNumber, body }) => updateIssueBody(slug, issueNumber, body),
+        },
         sessions: {
           start: async () => {
             throw clarificationError(
@@ -112,6 +140,7 @@ export const clarificationRuntimeLoader = ({
         clock,
         provider: config.clarification.provider,
         dataDestination: config.clarification.dataDestination,
+        hostRepo: slug,
       }),
     };
   };
