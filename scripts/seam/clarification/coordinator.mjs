@@ -558,6 +558,51 @@ export const createClarificationCoordinator = ({
     return draftView({ runId, attemptId });
   };
 
+  // The read-back's failure landing: the write was delivered but could not
+  // be proven — a typed failure with its evidence, the attempt and run
+  // parked awaiting-human, the outcome, the lifecycle move, and the event
+  // committing as one store transaction. The nonce is spent; a fresh
+  // approval of a fresh view is the only re-entry.
+  const readBackFailed = ({
+    runId,
+    attemptId,
+    requestId,
+    approval,
+    reason,
+    message,
+    evidence,
+    readBack,
+    leaseToken,
+  }) => {
+    store.recordAttemptOutcome({
+      attemptId,
+      to: "awaiting-human",
+      result: {
+        kind: "publication-failed",
+        reason,
+        message,
+        ...(evidence ?? {}),
+        failedAt: clock(),
+      },
+      event: {
+        kind: "publication.failed",
+        data: { attemptId, requestId, nonce: approval.nonce, reason, ...(evidence ?? {}) },
+      },
+      leaseToken,
+    });
+    store.updateRunState({ runId, to: "awaiting-human", leaseToken });
+    wakeAfterStore(runId);
+    return {
+      published: false,
+      outcome: "publication-failed",
+      reason,
+      approval: projectApproval(approval),
+      ...(readBack ? { readBack } : {}),
+      attemptState: "awaiting-human",
+      runState: "awaiting-human",
+    };
+  };
+
   // The ONE publication (ticket #234, ADR 0014): the Developer's explicit
   // "approve and update issue". The command is the whole fence, in order —
   // the presented diff digest and revision are checked against a fresh
@@ -613,16 +658,41 @@ export const createClarificationCoordinator = ({
 
     return serializedFor(run.issueId, async () => {
       // A replayed approval request is answered from the record — never a
-      // second binding, never a second write.
+      // second binding, never a second write. The record's answer is the
+      // truth: a publication that already reached an outcome returns that
+      // outcome with its evidence (a success answered as a success), and a
+      // request whose first command died before any outcome returns the
+      // approval's state honestly.
       const ledger = store.readEvents({ runId, afterCursor: 0 });
       const replayed = ledger.events.some(
         ({ event }) =>
           event.type === "operational" &&
           event.kind === "publication.approved" &&
+          event.data?.attemptId === attemptId &&
           event.data?.requestId === requestId,
       );
-      if (replayed)
-        return { published: false, replayed: true, approval: store.latestApproval(attemptId) };
+      if (replayed) {
+        const current = store.getAttempt(attemptId);
+        const result = current?.result ?? null;
+        const latest = store.latestApproval(attemptId);
+        const projected = latest ? projectApproval(latest) : null;
+        const outcome = {
+          published: "published",
+          "publication-failed": "publication-failed",
+          "publication-unknown": "publication-unknown",
+        }[result?.kind];
+        if (outcome === undefined) return { published: false, replayed: true, approval: projected };
+        return {
+          published: result.kind === "published",
+          outcome,
+          replayed: true,
+          ...(result.kind === "publication-failed" ? { reason: result.reason } : {}),
+          approval: projected,
+          ...(result.kind === "published" ? { readBack: result.readBack } : {}),
+          attemptState: current.state,
+          runState: store.getRun(runId).state,
+        };
+      }
 
       // The saved draft is the only publishable thing; the presented digest
       // pins it to the diff the Developer actually saw.
@@ -788,68 +858,30 @@ export const createClarificationCoordinator = ({
       const readBack = await tracker.readContext({ issueNumber });
       if (!readBack || readBack.failed || !readBack.revision) {
         const freshToken = holdLease({ runId, attemptId }, leaseToken);
-        store.recordAttemptOutcome({
+        return readBackFailed({
+          runId,
           attemptId,
-          to: "awaiting-human",
-          result: {
-            kind: "publication-failed",
-            reason: "read-back-unavailable",
-            message: "the write was delivered but the read-back could not prove it",
-            failedAt: clock(),
-          },
-          event: {
-            kind: "publication.failed",
-            data: { attemptId, requestId, nonce: approval.nonce, reason: "read-back-unavailable" },
-          },
+          requestId,
+          approval: consumed,
+          reason: "read-back-unavailable",
+          message: "the write was delivered but the read-back could not prove it",
           leaseToken: freshToken,
         });
-        store.updateRunState({ runId, to: "awaiting-human", leaseToken: freshToken });
-        wakeAfterStore(runId);
-        return {
-          published: false,
-          outcome: "publication-failed",
-          reason: "read-back-unavailable",
-          approval: projectApproval(consumed),
-          attemptState: "awaiting-human",
-          runState: "awaiting-human",
-        };
       }
       const matched = readBack.revision.bodyHash === bodyDigest;
       if (!matched) {
         const freshToken = holdLease({ runId, attemptId }, leaseToken);
-        store.recordAttemptOutcome({
+        return readBackFailed({
+          runId,
           attemptId,
-          to: "awaiting-human",
-          result: {
-            kind: "publication-failed",
-            reason: "read-back-mismatch",
-            message: "the tracker now serves a body other than the approved one",
-            observedRevision: readBack.revision,
-            failedAt: clock(),
-          },
-          event: {
-            kind: "publication.failed",
-            data: {
-              attemptId,
-              requestId,
-              nonce: approval.nonce,
-              reason: "read-back-mismatch",
-              observedRevision: readBack.revision,
-            },
-          },
-          leaseToken: freshToken,
-        });
-        store.updateRunState({ runId, to: "awaiting-human", leaseToken: freshToken });
-        wakeAfterStore(runId);
-        return {
-          published: false,
-          outcome: "publication-failed",
+          requestId,
+          approval: consumed,
           reason: "read-back-mismatch",
-          approval: projectApproval(consumed),
+          message: "the tracker now serves a body other than the approved one",
+          evidence: { observedRevision: readBack.revision },
+          leaseToken: freshToken,
           readBack: { matched: false, revision: readBack.revision },
-          attemptState: "awaiting-human",
-          runState: "awaiting-human",
-        };
+        });
       }
 
       // Proven: the attempt closes terminal with the read-back as its

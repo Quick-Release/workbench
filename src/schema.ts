@@ -1316,13 +1316,13 @@ export const ClarificationPublicationResultSchema = Schema.Struct({
   runState: Schema.optional(Schema.Literals(clarificationLifecycleStates)),
 });
 
-export type ClarificationPublicationAnswer = Schema.Schema.Type<
+export type ClarificationPublicationResult = Schema.Schema.Type<
   typeof ClarificationPublicationResultSchema
 >;
 
 export const parseClarificationPublicationResult: (
   input: unknown,
-) => ClarificationPublicationAnswer = Schema.decodeUnknownSync(
+) => ClarificationPublicationResult = Schema.decodeUnknownSync(
   ClarificationPublicationResultSchema,
   { onExcessProperty: "error" },
 );

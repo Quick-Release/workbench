@@ -1645,3 +1645,30 @@ test("the result schema admits the replay answer and the unknown outcome", () =>
   });
   strictEqual(uncertain.outcome, "publication-unknown");
 });
+
+test("the wire contract holds for the replay answer's projected approval", async () => {
+  // The record answers a replay: only the projected approval {nonce,
+  // status, expiresAt} may cross the seam — never the full durable row.
+  const coordinator = {
+    approvePublication: async () => ({
+      published: true,
+      outcome: "published",
+      replayed: true,
+      approval: { nonce: "approval_1", status: "consumed", expiresAt: "2026-09-18T10:05:00.000Z" },
+      readBack: {
+        matched: true,
+        revision: { updatedAt: "2026-09-18T10:00:05.000Z", bodyHash: "sha-256:def" },
+      },
+      attemptState: "terminal",
+      runState: "terminal",
+    }),
+  };
+  const response = await handleClarificationApi(publication({ posture: enabled, coordinator }));
+  strictEqual(response.status, 200);
+  strictEqual(response.json.published, true);
+  deepStrictEqual(response.json.approval, {
+    nonce: "approval_1",
+    status: "consumed",
+    expiresAt: "2026-09-18T10:05:00.000Z",
+  });
+});

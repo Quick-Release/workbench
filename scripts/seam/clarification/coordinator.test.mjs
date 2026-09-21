@@ -2697,8 +2697,13 @@ test("a replayed approval request is answered from the record, never re-written"
     const state = await startedWithDraft(rig, store);
     await coordinator.approvePublication(approveArgs(state));
     const replay = await coordinator.approvePublication(approveArgs(state));
-    strictEqual(replay.published, false);
+    // The record answers the replay with the proven outcome — a success
+    // answered as a success, its read-back evidence intact.
     strictEqual(replay.replayed, true);
+    strictEqual(replay.published, true);
+    strictEqual(replay.outcome, "published");
+    strictEqual(replay.readBack.matched, true);
+    strictEqual(replay.attemptState, "terminal");
     strictEqual(rig.writeCalls.length, 1, "the tracker write happened exactly once");
   } finally {
     rig.close();

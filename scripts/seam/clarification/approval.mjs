@@ -69,9 +69,10 @@ const BINDING_FIELDS = [
   "contractVersions",
 ];
 
-// The binding's shape gate. Assembly validates its own product with this,
-// and the store refuses a binding that arrives invalid — an approval is
-// only as good as the facts it pins.
+// The binding's shape gate. Assembly validates its own product with this
+// and refuses to build anything less — the binding's shape is this
+// module's contract, not the store's; an approval is only as good as the
+// facts it pins.
 export const validateApprovalBinding = (binding) => {
   const reasons = [];
   if (!isPlainObject(binding)) return approvalError("invalid_binding", "a binding is an object");

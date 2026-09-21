@@ -993,10 +993,11 @@ export const openClarificationStore = ({
     // explicit approval of one exact issue-body publication, committed
     // BEFORE anything is written to the tracker — a crash after this point
     // leaves the approval inspectable, never the write unproven and
-    // unrecorded. The binding's shape is the approval module's contract,
-    // validated before it reaches the store; the nonce is minted here, the
-    // only spendable identity of this approval. Fenced like every mutation,
-    // and only an active attempt approves anything.
+    // unrecorded. The binding's shape is the approval module's contract —
+    // assembly validates it there; the store checks only its object-ness
+    // and records it verbatim. The nonce is minted here, the only
+    // spendable identity of this approval. Fenced like every mutation, and
+    // only an active attempt approves anything.
     recordApproval({ attemptId, binding, ttlMs = DEFAULT_APPROVAL_TTL_MS, leaseToken }) {
       if (!isPlainObject(binding))
         throw storeError("invalid_request", "an approval carries its binding object");
