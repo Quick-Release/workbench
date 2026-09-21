@@ -655,39 +655,57 @@ export const createClarificationCoordinator = ({
         `no attempt "${attemptId}" is visible on run "${runId}" in this host repo`,
       );
     const issueNumber = Number(run.issueId);
+    if (!Number.isInteger(issueNumber) || issueNumber <= 0)
+      throw clarificationError(
+        "invalid_request",
+        `the run's issue id "${run.issueId}" is not an issue number — nothing on this run can be published`,
+      );
 
     return serializedFor(run.issueId, async () => {
       // A replayed approval request is answered from the record — never a
-      // second binding, never a second write. The record's answer is the
-      // truth: a publication that already reached an outcome returns that
-      // outcome with its evidence (a success answered as a success), and a
-      // request whose first command died before any outcome returns the
+      // second binding, never a second write. The answer speaks for THIS
+      // request's own approval (the nonce its approved event carries): a
+      // spent nonce's one publication is the attempt's result, so a spent
+      // replay returns that outcome with its evidence; a stale one refused;
+      // a request whose first command died before any outcome returns the
       // approval's state honestly.
       const ledger = store.readEvents({ runId, afterCursor: 0 });
-      const replayed = ledger.events.some(
+      const replayedEvent = ledger.events.find(
         ({ event }) =>
           event.type === "operational" &&
           event.kind === "publication.approved" &&
           event.data?.attemptId === attemptId &&
           event.data?.requestId === requestId,
       );
-      if (replayed) {
+      if (replayedEvent) {
+        const approval = store.getApproval(replayedEvent.event.data.nonce);
+        if (approval !== null && approval.status === "stale")
+          throw clarificationError(
+            "approval_stale",
+            "this approval went stale before publication — approve the fresh diff again",
+          );
         const current = store.getAttempt(attemptId);
         const result = current?.result ?? null;
-        const latest = store.latestApproval(attemptId);
-        const projected = latest ? projectApproval(latest) : null;
-        const outcome = {
-          published: "published",
-          "publication-failed": "publication-failed",
-          "publication-unknown": "publication-unknown",
-        }[result?.kind];
-        if (outcome === undefined) return { published: false, replayed: true, approval: projected };
+        const spent = approval !== null && approval.status === "consumed";
+        const outcome = spent
+          ? {
+              published: "published",
+              "publication-failed": "publication-failed",
+              "publication-unknown": "publication-unknown",
+            }[result?.kind]
+          : undefined;
+        if (outcome === undefined)
+          return {
+            published: false,
+            replayed: true,
+            approval: approval ? projectApproval(approval) : null,
+          };
         return {
           published: result.kind === "published",
           outcome,
           replayed: true,
           ...(result.kind === "publication-failed" ? { reason: result.reason } : {}),
-          approval: projected,
+          approval: projectApproval(approval),
           ...(result.kind === "published" ? { readBack: result.readBack } : {}),
           attemptState: current.state,
           runState: store.getRun(runId).state,

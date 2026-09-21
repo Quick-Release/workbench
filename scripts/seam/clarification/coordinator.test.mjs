@@ -2879,3 +2879,96 @@ test("the draft view exposes the digest of the exact bytes it displayed", async 
     rig.close();
   }
 });
+
+test("a run whose issue id is not an issue number refuses the approval typed", async () => {
+  const rig = publicationRig();
+  const { store, coordinator } = await rig.open();
+  try {
+    const { run } = store.createRun({ issueId: "GH-42", requestId: "req-named" });
+    const { lease } = store.acquireLease({ runId: run.runId, owner: "coordinator" });
+    const { attempt } = store.createAttempt({
+      runId: run.runId,
+      requestId: "req-named-attempt",
+      intent: { kind: "clarification-start" },
+      leaseToken: lease.token,
+    });
+    const draft = {
+      version: "clarification-draft/v1",
+      profile: "bug",
+      behavior: "x",
+      observation: "",
+      reproduction: "",
+      boundary: "",
+      scope: "",
+      exclusions: [],
+      acceptance: [],
+      dependencies: "",
+      performanceClaim: "",
+      performanceEvidence: "",
+      assumptions: [],
+      evidence: [],
+    };
+    store.saveDraft({ attemptId: attempt.attemptId, draft, leaseToken: lease.token });
+    await rejects(
+      () =>
+        coordinator.approvePublication({
+          runId: run.runId,
+          attemptId: attempt.attemptId,
+          requestId: "approve-named",
+          revision: { updatedAt: "2026-09-18T10:00:00.000Z", bodyHash: "sha-256:abc" },
+          bodyDigest: bodyDigestFor(publicationBodyFor(draft)),
+        }),
+      (error) => error.code === "invalid_request",
+    );
+    strictEqual(rig.writeCalls.length, 0);
+  } finally {
+    rig.close();
+  }
+});
+
+test("a replay answers from the request's own approval, not the attempt's newest", async () => {
+  // The first approval goes stale at the pre-write gate; the Developer
+  // re-renders and the second approval publishes. Replaying the first must
+  // report ITS fate — stale, never the second's success.
+  const movedRevision = { updatedAt: "2026-09-18T10:00:45.000Z", bodyHash: "sha-256:theirs" };
+  const rig = publicationRig({
+    script: [collectedIssue(), collectedIssue({ revision: movedRevision })],
+  });
+  const { store, coordinator } = await rig.open();
+  try {
+    const state = await startedWithDraft(rig, store);
+    await rejects(
+      () => coordinator.approvePublication(approveArgs({ ...state, requestId: "approve-1" })),
+      (error) => error.code === "approval_stale",
+    );
+
+    // The clock moves past the first command's lease before the Developer
+    // re-approves the re-rendered diff — the same gap any real retry has.
+    rig.tickMs(60_000);
+    const secondArgs = {
+      ...approveArgs({ ...state, requestId: "approve-2" }),
+      revision: movedRevision,
+    };
+    const second = await coordinator.approvePublication(secondArgs);
+    strictEqual(second.published, true);
+    const secondNonce = second.approval.nonce;
+
+    const firstReplay = await coordinator
+      .approvePublication({
+        ...secondArgs,
+        requestId: "approve-1",
+      })
+      .then(
+        () => "answered",
+        (error) => error.code,
+      );
+    strictEqual(firstReplay, "approval_stale");
+
+    const secondReplay = await coordinator.approvePublication(secondArgs);
+    strictEqual(secondReplay.published, true);
+    strictEqual(secondReplay.approval.nonce, secondNonce, "the replay speaks for its own approval");
+    strictEqual(rig.writeCalls.length, 1, "still exactly one tracker write");
+  } finally {
+    rig.close();
+  }
+});
