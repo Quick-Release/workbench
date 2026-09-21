@@ -16,6 +16,7 @@ import type {
 import {
   artifactKinds,
   blockerEdgeSources,
+  clarificationApprovalStatuses,
   clarificationAttemptOrigins,
   clarificationDraftProvenanceKinds,
   clarificationDraftVersion,
@@ -23,6 +24,8 @@ import {
   clarificationEventScopes,
   clarificationLifecycleStates,
   clarificationPostures,
+  clarificationPublicationFailureReasons,
+  clarificationPublicationResults,
   clarificationTaskProfiles,
   clientTicketKinds,
   decisionTicketKinds,
@@ -1253,6 +1256,10 @@ export const ClarificationDraftViewSchema = Schema.Struct({
     }),
   ),
   diff: Schema.NullOr(ClarificationDraftDiffSchema),
+  // The digest of exactly the bytes the view displayed as the diff's
+  // "after" (ticket #234): the publication approval presents it back, so a
+  // draft edited between viewing and approving cannot ride the old view.
+  publicationBodyDigest: Schema.optional(Schema.NullOr(Schema.String)),
   warnings: Schema.Array(Schema.String),
   savingIsNotApproval: Schema.Literal(noApprovalLine),
   savedAt: Schema.optional(Schema.String),
@@ -1262,6 +1269,63 @@ export type ClarificationDraftView = Schema.Schema.Type<typeof ClarificationDraf
 
 export const parseClarificationDraftView: (input: unknown) => ClarificationDraftView =
   Schema.decodeUnknownSync(ClarificationDraftViewSchema, { onExcessProperty: "error" });
+
+// The publication approval (spec #221, ticket #234, ADR 0014): the
+// Developer's one explicit "approve and update issue". The request presents
+// what the Developer saw — the diff's digest from the draft view and the
+// revision it was rendered against — plus its request id for dedup across
+// reconnects. The answer speaks the publication outcome: published (proven
+// by read-back), a named known failure, or an Unknown outcome; a replayed
+// request is answered from the record with `replayed`.
+export const ClarificationPublicationRequestSchema = Schema.Struct({
+  requestId: Schema.String,
+  revision: ClarificationRevisionSchema,
+  bodyDigest: Schema.String,
+});
+
+export type ClarificationPublicationRequest = Schema.Schema.Type<
+  typeof ClarificationPublicationRequestSchema
+>;
+
+export const parseClarificationPublicationRequest: (
+  input: unknown,
+) => ClarificationPublicationRequest = Schema.decodeUnknownSync(
+  ClarificationPublicationRequestSchema,
+  { onExcessProperty: "error" },
+);
+
+export const ClarificationPublicationApprovalSchema = Schema.Struct({
+  nonce: Schema.String,
+  status: Schema.Literals(clarificationApprovalStatuses),
+  expiresAt: Schema.String,
+});
+
+export const ClarificationPublicationResultSchema = Schema.Struct({
+  published: Schema.Boolean,
+  outcome: Schema.optional(Schema.Literals(clarificationPublicationResults)),
+  replayed: Schema.optional(Schema.Literal(true)),
+  reason: Schema.optional(Schema.Literals(clarificationPublicationFailureReasons)),
+  approval: Schema.NullOr(ClarificationPublicationApprovalSchema),
+  readBack: Schema.optional(
+    Schema.Struct({
+      matched: Schema.Boolean,
+      revision: ClarificationRevisionSchema,
+    }),
+  ),
+  attemptState: Schema.optional(Schema.Literals(clarificationLifecycleStates)),
+  runState: Schema.optional(Schema.Literals(clarificationLifecycleStates)),
+});
+
+export type ClarificationPublicationResult = Schema.Schema.Type<
+  typeof ClarificationPublicationResultSchema
+>;
+
+export const parseClarificationPublicationResult: (
+  input: unknown,
+) => ClarificationPublicationResult = Schema.decodeUnknownSync(
+  ClarificationPublicationResultSchema,
+  { onExcessProperty: "error" },
+);
 
 // The run's event stream (epic #20, ticket #26; issue #40): the runner's
 // typed events as the UI consumes them — a started echo of the request (the

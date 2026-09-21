@@ -8,6 +8,8 @@ import {
   parseClarificationDraftView,
   parseClarificationManifestResult,
   parseClarificationObservationResult,
+  parseClarificationPublicationRequest,
+  parseClarificationPublicationResult,
   parseClarificationRunResult,
   parseClarificationStartRequest,
   parseClarificationStartResult,
@@ -53,6 +55,8 @@ const COMMANDS_ROUTE = /^\/api\/clarification\/runs\/([^/]+)\/attempts\/([^/]+)\
 const CONVERSATION_ROUTE =
   /^\/api\/clarification\/runs\/([^/]+)\/attempts\/([^/]+)\/conversation\/?$/;
 const DRAFT_ROUTE = /^\/api\/clarification\/runs\/([^/]+)\/attempts\/([^/]+)\/draft\/?$/;
+const PUBLICATION_ROUTE =
+  /^\/api\/clarification\/runs\/([^/]+)\/attempts\/([^/]+)\/publication\/?$/;
 
 export const isClarificationApiRoute = (pathname) =>
   STATUS_ROUTE.test(pathname) ||
@@ -63,7 +67,8 @@ export const isClarificationApiRoute = (pathname) =>
   EVENTS_ROUTE.test(pathname) ||
   COMMANDS_ROUTE.test(pathname) ||
   CONVERSATION_ROUTE.test(pathname) ||
-  DRAFT_ROUTE.test(pathname);
+  DRAFT_ROUTE.test(pathname) ||
+  PUBLICATION_ROUTE.test(pathname);
 
 const NOT_AVAILABLE_MESSAGE =
   "owned clarification is enabled — starts are recorded durably, but the managed conversation runtime is not wired on this install yet";
@@ -123,6 +128,11 @@ const coordinatorRejection = (error) => {
     case "lease_required":
     case "lease_not_held":
     case "lease_expired":
+    case "approval_stale":
+    case "approval_used":
+    case "approval_expired":
+    case "no_draft":
+    case "attempt_not_active":
       return { status: 409, json: { error: error.code, message } };
     case "invalid_cursor":
     case "invalid_request":
@@ -598,6 +608,67 @@ export const handleClarificationDraft = async ({
   return methodMismatch("PUT");
 };
 
+// The publication route (spec #221, ticket #234): the Developer's one
+// explicit "approve and update issue" — a write the capability owns, so a
+// disabled or invalid install answers its typed denial before the body is
+// read. The result parses through the schema, so the wire contract holds
+// for every outcome the coordinator can answer with.
+export const handleClarificationPublication = async ({
+  method,
+  pathname,
+  host,
+  origin,
+  body,
+  posture,
+  coordinator,
+}) => {
+  const match = PUBLICATION_ROUTE.exec(pathname);
+  if (!match) return null;
+
+  const gate = gateRejection({ host, origin });
+  if (gate) return gate;
+
+  if (method !== "POST") return methodMismatch("POST");
+
+  const denial = postureDenial(posture);
+  if (denial) return denial;
+  if (!coordinator)
+    return {
+      status: 501,
+      json: { error: "clarification_unavailable", message: NOT_AVAILABLE_MESSAGE },
+    };
+
+  let raw;
+  try {
+    raw = JSON.parse(body ?? "");
+  } catch {
+    return invalidRequest("request body is not valid JSON");
+  }
+  let parsed;
+  try {
+    parsed = parseClarificationPublicationRequest(raw);
+  } catch (error) {
+    return invalidRequest(String(error?.message ?? error));
+  }
+
+  try {
+    return {
+      status: 200,
+      json: parseClarificationPublicationResult(
+        await coordinator.approvePublication({
+          runId: match[1],
+          attemptId: match[2],
+          requestId: parsed.requestId,
+          revision: parsed.revision,
+          bodyDigest: parsed.bodyDigest,
+        }),
+      ),
+    };
+  } catch (error) {
+    return coordinatorRejection(error);
+  }
+};
+
 export const handleClarificationApi = async (deps) =>
   (await handleClarificationStatus(deps)) ??
   (await handleClarificationManifest(deps)) ??
@@ -607,7 +678,8 @@ export const handleClarificationApi = async (deps) =>
   handleClarificationEvents(deps) ??
   (await handleClarificationConversationCommand(deps)) ??
   handleClarificationConversationState(deps) ??
-  (await handleClarificationDraft(deps));
+  (await handleClarificationDraft(deps)) ??
+  (await handleClarificationPublication(deps));
 
 // Turns the host's config block into the posture, with the unreadable-config
 // case as its own invalid posture — a config that cannot be read at all is

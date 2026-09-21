@@ -195,8 +195,10 @@ const requireProvenance = (provenance, what) => {
 
 // Canonical JSON: sorted keys, no whitespace — the bytes the digest is
 // taken over, so two assemblies of the same content address the same
-// packet regardless of key order.
-const canonicalJson = (value) => {
+// packet regardless of key order. Exported for the approval binding's
+// context digest (ticket #234), which digests the same material facts over
+// the same canonical form — one canonicalization for the whole capability.
+export const canonicalJson = (value) => {
   if (value === undefined) return "null";
   if (value === null || typeof value !== "object") return JSON.stringify(value);
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;

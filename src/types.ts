@@ -684,6 +684,37 @@ export type ClarificationAttemptOrigin = (typeof clarificationAttemptOrigins)[nu
 // The versioned envelope a persisted Clarification draft travels in.
 export const clarificationDraftVersion = "clarification-draft/v1";
 
+// The approval row's states (spec #221, ticket #234, ADR 0014): pending is
+// the only spendable state; consumed and stale are terminal records of why
+// a single-use nonce is dead. Mirrored from the durable store's vocabulary.
+export const clarificationApprovalStatuses = ["pending", "consumed", "stale"] as const;
+
+export type ClarificationApprovalStatus = (typeof clarificationApprovalStatuses)[number];
+
+// The publication attempt's outcome kinds (spec #221, ticket #234): proven
+// success, a known failure with its named reason, or an Unknown outcome
+// that demands reconciliation before anything retries. Mirrored from the
+// approval module's publication contract.
+export const clarificationPublicationResults = [
+  "published",
+  "publication-failed",
+  "publication-unknown",
+] as const;
+
+export type ClarificationPublicationResult = (typeof clarificationPublicationResults)[number];
+
+// The named known-failure reasons: a definite tracker refusal, versus the
+// two read-back failures where the write was delivered but could not be
+// proven.
+export const clarificationPublicationFailureReasons = [
+  "write-refused",
+  "read-back-mismatch",
+  "read-back-unavailable",
+] as const;
+
+export type ClarificationPublicationFailureReason =
+  (typeof clarificationPublicationFailureReasons)[number];
+
 // One operational event names its subject: the run, or one attempt on it.
 export const clarificationEventScopes = ["run", "attempt"] as const;
 

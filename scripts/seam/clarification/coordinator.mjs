@@ -50,6 +50,12 @@
 
 import { noApprovalLine, noPublishingLine } from "../../../src/types.ts";
 import {
+  approvalGateFor,
+  bodyDigestFor,
+  buildApprovalBinding,
+  contextDigestFor,
+} from "./approval.mjs";
+import {
   briefCompletenessFor,
   publicationBodyFor,
   renderIssueBodyDiff,
@@ -110,6 +116,14 @@ const projectAttempt = (attempt) => ({
   updatedAt: attempt.updatedAt,
 });
 
+// The approval projection a publication answer carries: the nonce's
+// identity and state — the record holds the full binding verbatim.
+const projectApproval = (approval) => ({
+  nonce: approval.nonce,
+  status: approval.status,
+  expiresAt: approval.expiresAt,
+});
+
 // The run section and the observation read speak the full snapshot
 // vocabulary — everything but the attempt's result column, which is
 // lifecycle evidence the ledger's operational events carry in its own time.
@@ -151,6 +165,7 @@ export const createClarificationCoordinator = ({
   clock,
   provider,
   dataDestination,
+  hostRepo,
 }) => {
   if (!store || typeof store.createRun !== "function")
     throw clarificationError("invalid_coordinator", "the coordinator needs a durable store port");
@@ -404,6 +419,22 @@ export const createClarificationCoordinator = ({
     }
   };
 
+  // A command that already holds the controller lease keeps it: renewal
+  // moves the window on the token this command acquired; only a genuinely
+  // expired or superseded token falls back to a fresh acquisition. A lease
+  // another writer now holds fences the write typed — never a takeover.
+  const holdLease = ({ runId, attemptId }, token) => {
+    if (token !== undefined) {
+      try {
+        store.renewLease({ runId, token });
+        return token;
+      } catch {
+        // Expired or superseded: a fresh acquisition decides who holds it.
+      }
+    }
+    return ensureLease({ runId, attemptId });
+  };
+
   // The draft view: the saved document (or its honest absence), the brief
   // completeness arithmetic over the task profile, and the visible
   // issue-body diff rendered from exactly the bytes publication would
@@ -479,6 +510,11 @@ export const createClarificationCoordinator = ({
       briefCompleteness: completeness.verdict,
       issue,
       diff,
+      // The digest of exactly the bytes this view displayed as the diff's
+      // "after" (ticket #234): the approval command presents it back, so a
+      // draft edited between viewing and approving cannot ride the old
+      // approval. Null with the draft, like the diff.
+      publicationBodyDigest: draft ? bodyDigestFor(publicationBodyFor(draft)) : null,
       warnings,
       savingIsNotApproval: noApprovalLine,
       ...(saved ? { savedAt: saved.updatedAt } : {}),
@@ -520,6 +556,389 @@ export const createClarificationCoordinator = ({
       leaseToken,
     });
     return draftView({ runId, attemptId });
+  };
+
+  // The read-back's failure landing: the write was delivered but could not
+  // be proven — a typed failure with its evidence, the attempt and run
+  // parked awaiting-human, the outcome, the lifecycle move, and the event
+  // committing as one store transaction. The nonce is spent; a fresh
+  // approval of a fresh view is the only re-entry.
+  const readBackFailed = ({
+    runId,
+    attemptId,
+    requestId,
+    approval,
+    reason,
+    message,
+    evidence,
+    readBack,
+    leaseToken,
+  }) => {
+    store.recordAttemptOutcome({
+      attemptId,
+      to: "awaiting-human",
+      result: {
+        kind: "publication-failed",
+        reason,
+        message,
+        ...(evidence ?? {}),
+        failedAt: clock(),
+      },
+      event: {
+        kind: "publication.failed",
+        data: { attemptId, requestId, nonce: approval.nonce, reason, ...(evidence ?? {}) },
+      },
+      leaseToken,
+    });
+    store.updateRunState({ runId, to: "awaiting-human", leaseToken });
+    wakeAfterStore(runId);
+    return {
+      published: false,
+      outcome: "publication-failed",
+      reason,
+      approval: projectApproval(approval),
+      ...(readBack ? { readBack } : {}),
+      attemptState: "awaiting-human",
+      runState: "awaiting-human",
+    };
+  };
+
+  // The ONE publication (ticket #234, ADR 0014): the Developer's explicit
+  // "approve and update issue". The command is the whole fence, in order —
+  // the presented diff digest and revision are checked against a fresh
+  // read; the full binding (host and issue identity with revision, provider
+  // and data destination, context digest, capability set, policy and
+  // contract versions, the exact body digest) commits durably with a
+  // single-use nonce BEFORE anything is written; a second fresh read stands
+  // between the binding and the write, and any drift marks the approval
+  // stale and blocks; then the nonce is spent, the write is dispatched, and
+  // a read-back proves what is actually there. A proven refusal is terminal
+  // evidence; an ambiguous write is an Unknown outcome. The nonce is spent
+  // before the write either way, so no retry can re-enter on the same
+  // approval, and an uncertain record must be reconciled first.
+  const approvePublication = async ({ runId, attemptId, requestId, revision, bodyDigest }) => {
+    if (typeof runId !== "string" || runId === "")
+      throw clarificationError("invalid_request", "a publication approval names a run id");
+    if (typeof attemptId !== "string" || attemptId === "")
+      throw clarificationError("invalid_request", "a publication approval names an attempt id");
+    if (typeof requestId !== "string" || requestId.trim() === "")
+      throw clarificationError("invalid_request", "a publication approval carries a request id");
+    if (
+      !revision ||
+      typeof revision.updatedAt !== "string" ||
+      typeof revision.bodyHash !== "string"
+    )
+      throw clarificationError(
+        "invalid_request",
+        "a publication approval presents the revision the diff was rendered against",
+      );
+    if (typeof bodyDigest !== "string" || !bodyDigest.startsWith("sha-256:"))
+      throw clarificationError(
+        "invalid_request",
+        "a publication approval presents the digest of the exact diff it approved",
+      );
+    if (hostRepo === undefined)
+      throw clarificationError(
+        "invalid_coordinator",
+        "the coordinator was built without a host repo — no approval can name what it covers",
+      );
+    const run = store.getRun(runId);
+    if (!run)
+      throw clarificationError(
+        "run_not_found",
+        `no clarification run "${runId}" is visible to this host repo`,
+      );
+    const attempt = store.getAttempt(attemptId);
+    if (attempt === null || attempt.runId !== runId)
+      throw clarificationError(
+        "attempt_not_found",
+        `no attempt "${attemptId}" is visible on run "${runId}" in this host repo`,
+      );
+    const issueNumber = Number(run.issueId);
+    if (!Number.isInteger(issueNumber) || issueNumber <= 0)
+      throw clarificationError(
+        "invalid_request",
+        `the run's issue id "${run.issueId}" is not an issue number — nothing on this run can be published`,
+      );
+
+    return serializedFor(run.issueId, async () => {
+      // A replayed approval request is answered from the record — never a
+      // second binding, never a second write. The answer speaks for THIS
+      // request's own approval (the nonce its approved event carries): a
+      // spent nonce's one publication is the attempt's result, so a spent
+      // replay returns that outcome with its evidence; a stale one refused;
+      // a request whose first command died before any outcome returns the
+      // approval's state honestly.
+      const ledger = store.readEvents({ runId, afterCursor: 0 });
+      const replayedEvent = ledger.events.find(
+        ({ event }) =>
+          event.type === "operational" &&
+          event.kind === "publication.approved" &&
+          event.data?.attemptId === attemptId &&
+          event.data?.requestId === requestId,
+      );
+      if (replayedEvent) {
+        const approval = store.getApproval(replayedEvent.event.data.nonce);
+        if (approval !== null && approval.status === "stale")
+          throw clarificationError(
+            "approval_stale",
+            "this approval went stale before publication — approve the fresh diff again",
+          );
+        const current = store.getAttempt(attemptId);
+        const result = current?.result ?? null;
+        const spent = approval !== null && approval.status === "consumed";
+        const outcome = spent
+          ? {
+              published: "published",
+              "publication-failed": "publication-failed",
+              "publication-unknown": "publication-unknown",
+            }[result?.kind]
+          : undefined;
+        if (outcome === undefined)
+          return {
+            published: false,
+            replayed: true,
+            approval: approval ? projectApproval(approval) : null,
+          };
+        return {
+          published: result.kind === "published",
+          outcome,
+          replayed: true,
+          ...(result.kind === "publication-failed" ? { reason: result.reason } : {}),
+          approval: projectApproval(approval),
+          ...(result.kind === "published" ? { readBack: result.readBack } : {}),
+          attemptState: current.state,
+          runState: store.getRun(runId).state,
+        };
+      }
+
+      // The saved draft is the only publishable thing; the presented digest
+      // pins it to the diff the Developer actually saw.
+      const saved = store.getDraft(attemptId);
+      if (!saved)
+        throw clarificationError(
+          "no_draft",
+          "no Clarification draft is saved on this attempt — nothing has been proposed to approve",
+        );
+      const body = publicationBodyFor(saved.draft);
+      if (bodyDigestFor(body) !== bodyDigest)
+        throw clarificationError(
+          "approval_stale",
+          "the draft changed since the diff you saw — re-render the draft view and approve the fresh diff",
+        );
+
+      // Gate one: what the Developer saw must still be the tracker's truth.
+      const gateRead = await requireCollectedContext(issueNumber);
+      if (!revisionMatches(revision, gateRead.revision))
+        throw clarificationError(
+          "approval_stale",
+          `issue ${issueNumber} moved past the revision the diff was rendered against — re-render and approve the fresh diff`,
+        );
+
+      // The binding commits before any write: a crash from here on leaves
+      // the approval inspectable, never the write unproven and unrecorded.
+      const binding = buildApprovalBinding({
+        host: hostRepo,
+        issueNumber,
+        issueId: run.issueId,
+        revision,
+        bodyDigest,
+        provider,
+        dataDestination,
+        contextDigest: contextDigestFor(gateRead),
+        capabilitySet: CAPABILITY_SUMMARY,
+      });
+      const leaseToken = ensureLease({ runId, attemptId });
+      const { approval } = store.recordApproval({ attemptId, binding, leaseToken });
+      recordEvent(runId, {
+        kind: "publication.approved",
+        data: {
+          attemptId,
+          requestId,
+          nonce: approval.nonce,
+          issueNumber,
+          revision,
+          bodyDigest,
+          contextDigest: binding.contextDigest,
+        },
+        leaseToken,
+      });
+
+      // Gate two: the fresh pre-write check. A concurrent edit or any
+      // material context change makes the pending approval stale and blocks
+      // the write — the refusal is marked on the record, and the write it
+      // blocked never happens.
+      const preWrite = await requireCollectedContext(issueNumber);
+      const verdict = approvalGateFor({
+        approval,
+        now: clock(),
+        freshRevision: preWrite.revision,
+        freshContextDigest: contextDigestFor(preWrite),
+      });
+      if (!verdict.ok) {
+        try {
+          store.markApprovalStale({ nonce: approval.nonce, leaseToken });
+        } catch (error) {
+          // A concurrent consumption beat the marking: the approval is
+          // already dead, which is the marking's whole purpose.
+          if (error?.code !== "approval_already_used") throw error;
+        }
+        recordEvent(runId, {
+          kind: "publication.blocked",
+          data: { attemptId, requestId, nonce: approval.nonce, reason: verdict.code },
+          leaseToken,
+        });
+        throw clarificationError(verdict.code, verdict.message);
+      }
+
+      // The point of no return: the nonce is spent before the write.
+      const consumed = store.consumeApproval({ nonce: approval.nonce, leaseToken });
+
+      // The capability's one tracker mutation.
+      try {
+        await tracker.updateIssueBody({ issueNumber, body });
+      } catch (error) {
+        const freshToken = holdLease({ runId, attemptId }, leaseToken);
+        if (error?.code === "publication-write-refused") {
+          // A definite refusal — the tracker saw and declined the write.
+          // Nothing was published; the attempt closes terminal and the
+          // Developer's fresh approval of the fresh reality is the only
+          // continuation.
+          store.recordAttemptOutcome({
+            attemptId,
+            to: "terminal",
+            result: {
+              kind: "publication-failed",
+              reason: "write-refused",
+              message: String(error?.message ?? error),
+              failedAt: clock(),
+            },
+            event: {
+              kind: "publication.failed",
+              data: { attemptId, requestId, nonce: approval.nonce, reason: "write-refused" },
+            },
+            leaseToken: freshToken,
+          });
+          publishEvent({
+            runId,
+            event: {
+              type: "lifecycle",
+              scope: "attempt",
+              id: attemptId,
+              state: "terminal",
+              at: clock(),
+            },
+          });
+          return {
+            published: false,
+            outcome: "publication-failed",
+            reason: "write-refused",
+            approval: projectApproval(consumed),
+            attemptState: "terminal",
+            runState: store.getRun(runId).state,
+          };
+        }
+        // An ambiguous failure — a network error may still have been sent.
+        // The outcome is Unknown: the record demands reconciliation, and no
+        // retry exists on a spent nonce.
+        store.recordAttemptOutcome({
+          attemptId,
+          to: "unknown",
+          result: {
+            kind: "publication-unknown",
+            uncertainty: ["issue-body-write"],
+            at: clock(),
+          },
+          event: {
+            kind: "publication.uncertain",
+            data: {
+              attemptId,
+              requestId,
+              nonce: approval.nonce,
+              uncertainty: ["issue-body-write"],
+            },
+          },
+          leaseToken: freshToken,
+        });
+        store.updateRunState({ runId, to: "unknown", leaseToken: freshToken });
+        wakeAfterStore(runId);
+        return {
+          published: false,
+          outcome: "publication-unknown",
+          approval: projectApproval(consumed),
+          attemptState: "unknown",
+          runState: "unknown",
+        };
+      }
+
+      // The read-back: success is proven by what the tracker now serves,
+      // never assumed from the write having returned.
+      const readBack = await tracker.readContext({ issueNumber });
+      if (!readBack || readBack.failed || !readBack.revision) {
+        const freshToken = holdLease({ runId, attemptId }, leaseToken);
+        return readBackFailed({
+          runId,
+          attemptId,
+          requestId,
+          approval: consumed,
+          reason: "read-back-unavailable",
+          message: "the write was delivered but the read-back could not prove it",
+          leaseToken: freshToken,
+        });
+      }
+      const matched = readBack.revision.bodyHash === bodyDigest;
+      if (!matched) {
+        const freshToken = holdLease({ runId, attemptId }, leaseToken);
+        return readBackFailed({
+          runId,
+          attemptId,
+          requestId,
+          approval: consumed,
+          reason: "read-back-mismatch",
+          message: "the tracker now serves a body other than the approved one",
+          evidence: { observedRevision: readBack.revision },
+          leaseToken: freshToken,
+          readBack: { matched: false, revision: readBack.revision },
+        });
+      }
+
+      // Proven: the attempt closes terminal with the read-back as its
+      // outcome evidence, the run completes with it.
+      const freshToken = holdLease({ runId, attemptId }, leaseToken);
+      store.recordAttemptOutcome({
+        attemptId,
+        to: "terminal",
+        result: {
+          kind: "published",
+          readBack: { matched: true, revision: readBack.revision },
+          publishedAt: clock(),
+        },
+        event: {
+          kind: "publication.succeeded",
+          data: { attemptId, requestId, nonce: approval.nonce, revision: readBack.revision },
+        },
+        leaseToken: freshToken,
+      });
+      store.updateRunState({ runId, to: "terminal", leaseToken: freshToken });
+      publishEvent({
+        runId,
+        event: {
+          type: "lifecycle",
+          scope: "attempt",
+          id: attemptId,
+          state: "terminal",
+          at: clock(),
+        },
+      });
+      return {
+        published: true,
+        outcome: "published",
+        approval: projectApproval(consumed),
+        readBack: { matched: true, revision: readBack.revision },
+        attemptState: "terminal",
+        runState: "terminal",
+      };
+    });
   };
 
   // The evidence pump: the runtime's frames become durable conversation
@@ -858,6 +1277,10 @@ export const createClarificationCoordinator = ({
     // an explicit save that is never an approval.
     draftView,
     saveDraft,
+
+    // The one publication (ticket #234): approve the exact visible diff and
+    // update the issue body — once, bound, proven by read-back.
+    approvePublication,
 
     // The failure policy's entry point (ticket #235, ADR 0023): one
     // observed outcome in, the full classified policy applied. The outcome
