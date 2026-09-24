@@ -560,6 +560,8 @@ import type {
   ClarificationDraftViewSchema,
   ClarificationManifestResultSchema,
   ClarificationRunResultSchema,
+  ClarificationRunSummarySchema,
+  ClarificationRunsListResultSchema,
   ClarificationStartResultSchema,
   ClarificationStatusResultSchema,
   ReviewCommentRequestSchema,
@@ -759,3 +761,17 @@ export type ClarificationDraftDocument = Schema.Schema.Type<
 >;
 
 export type ClarificationDraftView = Schema.Schema.Type<typeof ClarificationDraftViewSchema>;
+
+export type ClarificationRunsListResult = Schema.Schema.Type<
+  typeof ClarificationRunsListResultSchema
+>;
+
+export type ClarificationRunSummary = Schema.Schema.Type<typeof ClarificationRunSummarySchema>;
+
+// The controller lease's owner-of-record for clarification runs (spec #221,
+// ticket #237): the coordinator process acquires the lease implicitly per
+// mutation, so a lease held by this owner is the run's normal state. Any
+// other owner — another writer process — is the "controls moved" fact the
+// display renders. Defined here so the seam's identity and the display's
+// comparison cannot drift.
+export const clarificationLeaseOwner = "workbench-clarification-coordinator";

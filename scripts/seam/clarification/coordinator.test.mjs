@@ -122,6 +122,18 @@ const fakeStore = (overrides = {}, log = []) => {
       calls.push(["listRuns", {}]);
       return [...runs];
     },
+    getLease: (runId) => {
+      calls.push(["getLease", { runId }]);
+      return null;
+    },
+    usageBudgetFor: (runId) => {
+      calls.push(["usageBudgetFor", { runId }]);
+      return { runId, lines: [] };
+    },
+    listEscalations: (runId) => {
+      calls.push(["listEscalations", { runId }]);
+      return [];
+    },
     listAttempts: (runId) => {
       calls.push(["listAttempts", { runId }]);
       return attempts.filter((a) => a.runId === runId);
@@ -2971,4 +2983,95 @@ test("a replay answers from the request's own approval, not the attempt's newest
   } finally {
     rig.close();
   }
+});
+
+// --- The inspection display facts (spec #221, ticket #237): the run
+// --- section's read carries every axis the panels render — lease
+// --- ownership, the usage budget's honest totals, the escalation records —
+// --- as open reads on the durable record, and the runs list serves the
+// --- in-flight chips.
+
+test("the run section carries the display facts: lease, usage, escalations", async () => {
+  await withCoordinator(async ({ coordinator, store }) => {
+    const { run, attempt, lease } = attemptRun(store, "r-inspect");
+    store.appendUsageLines({
+      runId: run.runId,
+      lines: [
+        { kind: "reported", unit: "tokens", value: 12400 },
+        { kind: "unknown", unit: "subscription" },
+      ],
+      leaseToken: lease.token,
+    });
+    store.haltRun({
+      runId: run.runId,
+      record: {
+        runId: run.runId,
+        attemptId: attempt.attemptId,
+        signature: "sig-1",
+        repeats: 2,
+        classification: "known-failure",
+        kind: "provider-failure",
+        reason: "quota",
+        remainingAuthority: ["manual-retry"],
+        decision: "decide whether to start a fresh manual attempt or abandon this run",
+        at: "2026-09-18T00:00:00Z",
+      },
+      leaseToken: lease.token,
+    });
+
+    const section = await coordinator.runSection({ runId: run.runId, afterCursor: 0 });
+    // Ownership and expiry arithmetic — never the token.
+    deepStrictEqual(section.lease, {
+      owner: "test-controller",
+      generation: 1,
+      acquiredAt: "2026-09-18T00:00:00Z",
+      expiresAt: "2026-09-18T00:00:30.000Z",
+      expired: false,
+    });
+    // The budget with its honest totals: kinds never convert.
+    strictEqual(section.usage.lines.length, 2);
+    deepStrictEqual(section.usage.totals, {
+      reported: { tokens: 12400 },
+      estimated: {},
+      unknownLines: 1,
+    });
+    // The escalation records ride along — the return card's decision text.
+    strictEqual(section.escalations.length, 1);
+    strictEqual(
+      section.escalations[0].decision,
+      "decide whether to start a fresh manual attempt or abandon this run",
+    );
+
+    // A run with no lease, no usage, no escalations reads as the honest
+    // empty facts — never a guessed default.
+    const { run: bare } = store.createRun({ issueId: "GH-43", requestId: "r-bare" });
+    const bareSection = await coordinator.runSection({ runId: bare.runId, afterCursor: 0 });
+    strictEqual(bareSection.lease, null);
+    deepStrictEqual(bareSection.usage, {
+      runId: bare.runId,
+      lines: [],
+      totals: { reported: {}, estimated: {}, unknownLines: 0 },
+    });
+    deepStrictEqual(bareSection.escalations, []);
+  });
+});
+
+test("the runs list read serves the in-flight chips", async () => {
+  await withCoordinator(async ({ coordinator, store }) => {
+    store.createRun({ issueId: "GH-42", requestId: "r-list-1" });
+    const { run: second } = store.createRun({ issueId: "GH-43", requestId: "r-list-2" });
+
+    const listed = coordinator.runs();
+    strictEqual(listed.length, 2);
+    // The projection shape: identity and lifecycle words only — no lease
+    // tokens, no dispatch intents.
+    const secondView = listed.find((run) => run.issueId === "GH-43");
+    deepStrictEqual(secondView, {
+      runId: second.runId,
+      issueId: "GH-43",
+      state: "active",
+      createdAt: second.createdAt,
+      updatedAt: second.updatedAt,
+    });
+  });
 });
