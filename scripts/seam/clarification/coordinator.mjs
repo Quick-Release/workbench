@@ -48,7 +48,7 @@
 // lifecycle move it drives, and its operational event commit as one store
 // transaction, so evidence and record cannot disagree.
 
-import { noApprovalLine, noPublishingLine } from "../../../src/types.ts";
+import { clarificationLeaseOwner, noApprovalLine, noPublishingLine } from "../../../src/types.ts";
 import {
   approvalGateFor,
   bodyDigestFor,
@@ -97,7 +97,7 @@ export const clarificationError = (code, message, extra = {}) =>
 // The coordinator is the run records' controller: the lease it presents on
 // every fenced mutation is its own, named so a human reading the record
 // knows who held it.
-export const LEASE_OWNER = "workbench-clarification-coordinator";
+export const LEASE_OWNER = clarificationLeaseOwner;
 
 // The display projection of a durable run row for the start's answer: the
 // run section's facts, never the lease token or the raw dispatch intent.
@@ -1263,6 +1263,12 @@ export const createClarificationCoordinator = ({
       const attempts = store.listAttempts(runId);
       const snapshot = store.getSnapshot(runId);
       const ledger = store.readEvents({ runId, afterCursor });
+      // The inspection display's axes (ticket #237), as open reads on the
+      // durable record: lease ownership and expiry arithmetic, the usage
+      // budget with its honest totals, and the escalation records. None of
+      // them is a state word of its own — the panels render each in its
+      // owner's vocabulary.
+      const { lines } = store.usageBudgetFor(runId);
       return {
         run,
         attempts: attempts.map(projectAttemptSnapshot),
@@ -1270,7 +1276,16 @@ export const createClarificationCoordinator = ({
         latestCursor: ledger.latestCursor,
         events: ledger.events,
         ...(ledger.gap ? { gap: ledger.gap } : {}),
+        lease: store.getLease(runId),
+        usage: { runId, lines, totals: summarizeUsageBudget(lines) },
+        escalations: store.listEscalations(runId),
       };
+    },
+
+    // Every run's identity and lifecycle word, newest first — the read the
+    // In flight view's run-status chips render from. Open, like every read.
+    runs() {
+      return store.listRuns().map(projectRun);
     },
 
     // The Clarification draft read and save (ticket #233): open read, and

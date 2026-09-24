@@ -4,6 +4,7 @@ import {
   parseClarificationConversationCommandRequest,
   parseClarificationConversationCommandResult,
   parseClarificationConversationState,
+  parseClarificationDiscardRequest,
   parseClarificationDraftDocument,
   parseClarificationDraftView,
   parseClarificationManifestResult,
@@ -11,6 +12,8 @@ import {
   parseClarificationPublicationRequest,
   parseClarificationPublicationResult,
   parseClarificationRunResult,
+  parseClarificationRunSnapshot,
+  parseClarificationRunsListResult,
   parseClarificationStartRequest,
   parseClarificationStartResult,
   parseClarificationStatusResult,
@@ -49,6 +52,8 @@ const STATUS_ROUTE = /^\/api\/clarification\/?$/;
 const MANIFEST_ROUTE = /^\/api\/clarification\/manifest\/?$/;
 const START_ROUTE = /^\/api\/clarification\/start\/?$/;
 const RUN_ROUTE = /^\/api\/clarification\/run\/?$/;
+const RUNS_ROUTE = /^\/api\/clarification\/runs\/?$/;
+const DISCARD_ROUTE = /^\/api\/clarification\/runs\/([^/]+)\/discard\/?$/;
 const OBSERVATION_ROUTE = /^\/api\/clarification\/runs\/([^/]+)\/observation\/?$/;
 const EVENTS_ROUTE = /^\/api\/clarification\/runs\/([^/]+)\/attempts\/([^/]+)\/events\/?$/;
 const COMMANDS_ROUTE = /^\/api\/clarification\/runs\/([^/]+)\/attempts\/([^/]+)\/commands\/?$/;
@@ -63,6 +68,8 @@ export const isClarificationApiRoute = (pathname) =>
   MANIFEST_ROUTE.test(pathname) ||
   START_ROUTE.test(pathname) ||
   RUN_ROUTE.test(pathname) ||
+  RUNS_ROUTE.test(pathname) ||
+  DISCARD_ROUTE.test(pathname) ||
   OBSERVATION_ROUTE.test(pathname) ||
   EVENTS_ROUTE.test(pathname) ||
   COMMANDS_ROUTE.test(pathname) ||
@@ -138,6 +145,14 @@ const coordinatorRejection = (error) => {
     case "invalid_request":
     case "invalid_draft":
       return { status: 400, json: { error: "invalid_request", message } };
+    // The discard's unechoed confirmation is the caller's mistake — named
+    // as itself, not folded into a generic 400. A state conflict (the
+    // discard's non-discardable run, a raced lifecycle move) is a 409, not
+    // a seam failure.
+    case "discard_unconfirmed":
+      return { status: 400, json: { error: error.code, message } };
+    case "illegal_transition":
+      return { status: 409, json: { error: error.code, message } };
     case "context_unavailable":
     case "conversation_unavailable":
       return { status: 503, json: { error: error.code, message } };
@@ -397,6 +412,91 @@ export const handleClarificationConversationCommand = async ({
     return {
       status: 200,
       json: parseClarificationConversationCommandResult(result),
+    };
+  } catch (error) {
+    return coordinatorRejection(error);
+  }
+};
+
+// The runs list (spec #221, ticket #237): every run's identity and
+// lifecycle word, newest first — the In flight view's run-status chips read.
+// Open like the observation routes: run records stay read-only inspectable
+// on every install, and the chips render zero actions.
+export const handleClarificationRunsList = ({ method, pathname, host, origin, coordinator }) => {
+  if (!RUNS_ROUTE.test(pathname)) return null;
+
+  const gate = gateRejection({ host, origin });
+  if (gate) return gate;
+
+  if (method !== "GET") return methodMismatch("GET");
+  if (!coordinator)
+    return {
+      status: 501,
+      json: { error: "clarification_unavailable", message: NOT_AVAILABLE_MESSAGE },
+    };
+
+  try {
+    return {
+      status: 200,
+      json: parseClarificationRunsListResult({ runs: coordinator.runs() }),
+    };
+  } catch (error) {
+    return coordinatorRejection(error);
+  }
+};
+
+// The typed destructive discard (spec #221, ticket #236, displayed by
+// ticket #237): the one path that deletes retained evidence, driven by the
+// confirmation echoing the run id. A write the capability owns, so a
+// disabled or invalid install answers its typed denial before the body is
+// read — and the answer is the run reading back terminal, marked discarded.
+export const handleClarificationDiscard = async ({
+  method,
+  pathname,
+  host,
+  origin,
+  body,
+  posture,
+  coordinator,
+}) => {
+  const match = DISCARD_ROUTE.exec(pathname);
+  if (!match) return null;
+
+  const gate = gateRejection({ host, origin });
+  if (gate) return gate;
+
+  if (method !== "POST") return methodMismatch("POST");
+
+  const denial = postureDenial(posture);
+  if (denial) return denial;
+  if (!coordinator)
+    return {
+      status: 501,
+      json: { error: "clarification_unavailable", message: NOT_AVAILABLE_MESSAGE },
+    };
+
+  let raw;
+  try {
+    raw = JSON.parse(body ?? "");
+  } catch {
+    return invalidRequest("request body is not valid JSON");
+  }
+  let parsed;
+  try {
+    parsed = parseClarificationDiscardRequest(raw);
+  } catch (error) {
+    return invalidRequest(String(error?.message ?? error));
+  }
+
+  try {
+    return {
+      status: 200,
+      json: parseClarificationRunSnapshot(
+        await coordinator.discardRunEvidence({
+          runId: match[1],
+          confirmation: parsed.confirmation,
+        }),
+      ),
     };
   } catch (error) {
     return coordinatorRejection(error);
@@ -674,6 +774,8 @@ export const handleClarificationApi = async (deps) =>
   (await handleClarificationManifest(deps)) ??
   (await handleClarificationRun(deps)) ??
   (await handleClarificationStart(deps)) ??
+  handleClarificationRunsList(deps) ??
+  (await handleClarificationDiscard(deps)) ??
   handleClarificationObservation(deps) ??
   handleClarificationEvents(deps) ??
   (await handleClarificationConversationCommand(deps)) ??

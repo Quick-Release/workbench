@@ -2,10 +2,12 @@ import { Rocket } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { runChipFor } from "@/lib/clarification-inspection";
 import type { DisplayCaveat } from "@/lib/display-state";
 import { deriveDisplayState } from "@/lib/display-state";
 import { inFlightBuckets } from "@/lib/in-flight";
-import type { WorkItemRecord } from "@/types";
+import { workItemIdNumberText } from "@/lib/work-item-id.mjs";
+import type { ClarificationRunSummary, WorkItemRecord } from "@/types";
 
 type InFlightBucketKey = "reviewing" | "implementing" | "notStarted";
 
@@ -13,13 +15,17 @@ type InFlightRowProps = {
   record: WorkItemRecord;
   bucket: InFlightBucketKey;
   caveats: readonly DisplayCaveat[];
+  runState: string | null;
 };
 
 // One in-flight row: the claimed work item, informational only. The issue
 // id links out to GitHub as the secondary link; the view itself offers no
 // actions — claimed-but-not-started rows wear the informational marking
-// until session spawning lands (ticket #62).
-export function InFlightRow({ record, bucket, caveats }: InFlightRowProps) {
+// until session spawning lands (ticket #62). The run-status chip (ticket
+// #237) is a word from the run lifecycle's own vocabulary with zero
+// actions; the issue panel is where anything actionable lives.
+export function InFlightRow({ record, bucket, caveats, runState }: InFlightRowProps) {
+  const runStateUnknown = runState === "unknown";
   return (
     <li
       data-slot="in-flight-row"
@@ -40,6 +46,17 @@ export function InFlightRow({ record, bucket, caveats }: InFlightRowProps) {
         {record.phase && <Badge variant="outline">{record.phase}</Badge>}
         {record.triageState !== "unlabeled" && (
           <Badge variant="outline">{record.triageState}</Badge>
+        )}
+        {runState && (
+          <Badge
+            data-slot="in-flight-run-state"
+            data-run-state={runState}
+            data-unknown={runStateUnknown || undefined}
+            variant="outline"
+            className={runStateUnknown ? "text-amber-600" : undefined}
+          >
+            {runState}
+          </Badge>
         )}
         {bucket === "notStarted" && <Badge variant="outline">informational</Badge>}
         {record.assignees.length > 0 && (
@@ -74,7 +91,13 @@ const BUCKETS: readonly { key: InFlightBucketKey; label: string; blurb: string }
 // priority order, straight from the display-state derivation through the
 // workflow read endpoint. Informational only — nothing here recommends or
 // acts.
-export function InFlightPage({ workItems }: { workItems: readonly WorkItemRecord[] }) {
+export function InFlightPage({
+  workItems,
+  runs,
+}: {
+  workItems: readonly WorkItemRecord[];
+  runs?: readonly ClarificationRunSummary[];
+}) {
   const buckets = inFlightBuckets(workItems);
   const total = buckets.reviewing.length + buckets.implementing.length + buckets.notStarted.length;
 
@@ -109,6 +132,9 @@ export function InFlightPage({ workItems }: { workItems: readonly WorkItemRecord
                         record={record}
                         bucket={key}
                         caveats={deriveDisplayState(record, false).caveats}
+                        runState={
+                          runs ? runChipFor(runs, Number(workItemIdNumberText(record.id))) : null
+                        }
                       />
                     ))}
                   </ul>

@@ -26,6 +26,8 @@ import {
   clarificationPostures,
   clarificationPublicationFailureReasons,
   clarificationPublicationResults,
+  clarificationUsageLineKinds,
+  clarificationFailureClassifications,
   clarificationTaskProfiles,
   clientTicketKinds,
   decisionTicketKinds,
@@ -979,6 +981,8 @@ export const ClarificationRunSnapshotSchema = Schema.Struct({
   discardedAt: Schema.optional(Schema.NullOr(Schema.String)),
 });
 
+export type ClarificationRunSnapshot = Schema.Schema.Type<typeof ClarificationRunSnapshotSchema>;
+
 export const ClarificationAttemptSnapshotSchema = Schema.Struct({
   attemptId: Schema.String,
   runId: Schema.String,
@@ -1052,12 +1056,120 @@ export type ClarificationStartResult = Schema.Schema.Type<typeof ClarificationSt
 export const parseClarificationStartResult: (input: unknown) => ClarificationStartResult =
   Schema.decodeUnknownSync(ClarificationStartResultSchema, { onExcessProperty: "error" });
 
+// The controller lease's read model (ticket #237): ownership and expiry
+// arithmetic — never the token, which is a capability and not a display
+// fact, and never an alive/dead claim, which a lease is not.
+export const ClarificationLeaseViewSchema = Schema.Struct({
+  owner: Schema.String,
+  generation: Schema.Number,
+  acquiredAt: Schema.String,
+  expiresAt: Schema.String,
+  expired: Schema.Boolean,
+});
+
+export type ClarificationLeaseView = Schema.Schema.Type<typeof ClarificationLeaseViewSchema>;
+
+// One usage budget line (ADR 0023): its kind — provider-reported,
+// estimated, unknown — travels with it forever. An unknown line carries no
+// number, because a number there would be an invention.
+export const ClarificationUsageLineSchema = Schema.Struct({
+  lineId: Schema.String,
+  attemptId: Schema.optional(Schema.String),
+  kind: Schema.Literals(clarificationUsageLineKinds),
+  unit: Schema.String,
+  value: Schema.NullOr(Schema.Number),
+  detail: Schema.optional(Schema.Unknown),
+  createdAt: Schema.String,
+});
+
+export type ClarificationUsageLine = Schema.Schema.Type<typeof ClarificationUsageLineSchema>;
+
+// The budget's honest totals: sums computed within one kind and one unit,
+// never across; an unknown line contributes a count, never a number.
+export const ClarificationUsageTotalsSchema = Schema.Struct({
+  reported: Schema.Record(Schema.String, Schema.Number),
+  estimated: Schema.Record(Schema.String, Schema.Number),
+  unknownLines: Schema.Number,
+});
+
+export type ClarificationUsageTotals = Schema.Schema.Type<typeof ClarificationUsageTotalsSchema>;
+
+export const ClarificationUsageResultSchema = Schema.Struct({
+  runId: Schema.String,
+  lines: Schema.Array(ClarificationUsageLineSchema),
+  totals: ClarificationUsageTotalsSchema,
+});
+
+export type ClarificationUsageResult = Schema.Schema.Type<typeof ClarificationUsageResultSchema>;
+
+// The no-progress halt's bounded handoff (ADR 0023): the repeated failure's
+// signature and repeat count, the authority that remains, and the next
+// human decision in one sentence — the return card's missing-decision
+// field, verbatim from the record.
+export const ClarificationEscalationSchema = Schema.Struct({
+  runId: Schema.String,
+  attemptId: Schema.String,
+  signature: Schema.String,
+  repeats: Schema.Number,
+  classification: Schema.Literals(clarificationFailureClassifications),
+  kind: Schema.String,
+  reason: Schema.optional(Schema.String),
+  remainingAuthority: Schema.Array(Schema.String),
+  decision: Schema.String,
+  at: Schema.String,
+});
+
+export type ClarificationEscalation = Schema.Schema.Type<typeof ClarificationEscalationSchema>;
+
+// One run's identity and lifecycle word — the runs-list entry the In
+// flight view's run-status chips render from. No lease tokens, no dispatch
+// intents: identity and lifecycle only.
+export const ClarificationRunSummarySchema = Schema.Struct({
+  runId: Schema.String,
+  issueId: Schema.String,
+  state: Schema.String,
+  createdAt: Schema.String,
+  updatedAt: Schema.String,
+});
+
+export type ClarificationRunSummary = Schema.Schema.Type<typeof ClarificationRunSummarySchema>;
+
+export const ClarificationRunsListResultSchema = Schema.Struct({
+  runs: Schema.Array(ClarificationRunSummarySchema),
+});
+
+export type ClarificationRunsListResult = Schema.Schema.Type<
+  typeof ClarificationRunsListResultSchema
+>;
+
+export const parseClarificationRunsListResult: (input: unknown) => ClarificationRunsListResult =
+  Schema.decodeUnknownSync(ClarificationRunsListResultSchema, { onExcessProperty: "error" });
+
+export const parseClarificationRunSnapshot: (input: unknown) => ClarificationRunSnapshot =
+  Schema.decodeUnknownSync(ClarificationRunSnapshotSchema, { onExcessProperty: "error" });
+
+// The typed destructive discard's request (spec #221, ticket #236): the
+// confirmation echoes the run id — the caller names what it destroys.
+export const ClarificationDiscardRequestSchema = Schema.Struct({
+  confirmation: Schema.NonEmptyString,
+});
+
+export type ClarificationDiscardRequest = Schema.Schema.Type<
+  typeof ClarificationDiscardRequestSchema
+>;
+
+export const parseClarificationDiscardRequest: (input: unknown) => ClarificationDiscardRequest =
+  Schema.decodeUnknownSync(ClarificationDiscardRequestSchema, { onExcessProperty: "error" });
+
 // The run section's read (spec #221, tickets #230 + #231): the run's
 // lifecycle, its attempts, the reconnect snapshot baseline with its saved-at
 // stamp, and the operational event ledger after the viewer's cursor — the
 // same envelope vocabulary the live stream carries, so the run section and
 // the stream are one history, never two. An expired cursor's explicit gap
-// rides through, never a silently complete history.
+// rides through, never a silently complete history. The inspection display's
+// axes (ticket #237) ride alongside as the open reads they are: lease
+// ownership, the usage budget, the escalation records — optional because
+// every field added after its mirror first ships is.
 export const ClarificationRunResultSchema = Schema.Struct({
   run: ClarificationRunSnapshotSchema,
   attempts: Schema.Array(ClarificationAttemptSnapshotSchema),
@@ -1066,6 +1178,9 @@ export const ClarificationRunResultSchema = Schema.Struct({
   latestCursor: Schema.Number,
   events: Schema.Array(ClarificationEventEnvelopeSchema),
   gap: Schema.optional(ClarificationEventGapSchema),
+  lease: Schema.optional(ClarificationLeaseViewSchema),
+  usage: Schema.optional(ClarificationUsageResultSchema),
+  escalations: Schema.optional(Schema.Array(ClarificationEscalationSchema)),
 });
 
 export type ClarificationRunResult = Schema.Schema.Type<typeof ClarificationRunResultSchema>;

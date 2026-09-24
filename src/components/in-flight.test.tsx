@@ -1,8 +1,17 @@
 import { renderToString } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
 
-import type { WorkItemRecord } from "../types";
+import type { ClarificationRunSummary, WorkItemRecord } from "../types";
 import { InFlightPage } from "./InFlightPage";
+
+const run = (overrides: Partial<ClarificationRunSummary> = {}): ClarificationRunSummary => ({
+  runId: "run_1",
+  issueId: "64",
+  state: "active",
+  createdAt: "2026-09-18T10:00:01.000Z",
+  updatedAt: "2026-09-18T10:00:01.000Z",
+  ...overrides,
+});
 
 const item = (number: number, overrides: Partial<WorkItemRecord> = {}): WorkItemRecord => ({
   id: `GH-${number}`,
@@ -19,8 +28,10 @@ const item = (number: number, overrides: Partial<WorkItemRecord> = {}): WorkItem
   ...overrides,
 });
 
-const renderPage = (workItems: readonly WorkItemRecord[]) =>
-  renderToString(<InFlightPage workItems={workItems} />);
+const renderPage = (
+  workItems: readonly WorkItemRecord[],
+  runs?: readonly ClarificationRunSummary[],
+) => renderToString(<InFlightPage workItems={workItems} runs={runs} />);
 
 describe("the in-flight view", () => {
   it("renders the buckets in priority order with their membership", () => {
@@ -85,5 +96,43 @@ describe("the in-flight view", () => {
   it("renders the empty state when nothing is in flight", () => {
     const html = renderPage([]);
     expect(html).toContain("Nothing is in flight");
+  });
+
+  it("chips the run lifecycle word onto rows with a live clarification run", () => {
+    const html = renderPage(
+      [item(64, { title: "Clarifying", assignees: ["vvaz"], phase: "implementing" })],
+      [run({ issueId: "64", state: "awaiting-human" })],
+    );
+    expect(html).toContain('data-slot="in-flight-run-state"');
+    expect(html).toContain('data-run-state="awaiting-human"');
+    expect(html).toContain("awaiting-human");
+  });
+
+  it("renders an unknown run state as the word, amber, never a spinner", () => {
+    const html = renderPage(
+      [item(64, { title: "Clarifying", assignees: ["vvaz"], phase: "implementing" })],
+      [run({ issueId: "64", state: "unknown" })],
+    );
+    const chip = html.match(/<span[^>]*data-run-state="unknown"[^>]*>/);
+    expect(chip).toBeTruthy();
+    expect(chip?.[0]).toContain("amber");
+  });
+
+  it("chips nothing for a finished run and never renders actions for the chip", () => {
+    const html = renderPage(
+      [item(64, { title: "Done clarifying", assignees: ["vvaz"], phase: "implementing" })],
+      [run({ issueId: "64", state: "terminal" })],
+    );
+    expect(html).not.toContain("in-flight-run-state");
+
+    const withRuns = renderPage(
+      [item(64, { title: "Clarifying", assignees: ["vvaz"], phase: "implementing" })],
+      [run({ issueId: "64", state: "active" })],
+    );
+    expect(withRuns).toContain("in-flight-run-state");
+    expect(withRuns).not.toContain("<button");
+    // Workflow phases stay GitHub's: the run chip rides next to the phase
+    // badge, it never replaces or moves it.
+    expect(withRuns).toContain("implementing");
   });
 });

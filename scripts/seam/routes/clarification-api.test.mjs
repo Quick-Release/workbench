@@ -66,6 +66,25 @@ const run = (overrides = {}) => ({
   ...overrides,
 });
 
+const list = (overrides = {}) => ({
+  method: "GET",
+  pathname: "/api/clarification/runs",
+  posture: disabled,
+  coordinator: null,
+  ...loopback,
+  ...overrides,
+});
+
+const discard = (overrides = {}) => ({
+  method: "POST",
+  pathname: "/api/clarification/runs/run_1/discard",
+  body: JSON.stringify({ confirmation: "run_1" }),
+  posture: disabled,
+  coordinator: null,
+  ...loopback,
+  ...overrides,
+});
+
 const command = (overrides = {}) => ({
   method: "POST",
   pathname: "/api/clarification/runs/run_1/attempts/attempt_1/commands",
@@ -172,6 +191,74 @@ const fakeCoordinator = (overrides = {}) => {
             },
           },
         ],
+        lease: {
+          owner: "workbench-clarification-coordinator",
+          generation: 2,
+          acquiredAt: "2026-09-18T10:00:05.000Z",
+          expiresAt: "2026-09-18T10:00:35.000Z",
+          expired: false,
+        },
+        usage: {
+          runId: "run_1",
+          lines: [
+            {
+              lineId: "usage_1",
+              attemptId: "attempt_1",
+              kind: "reported",
+              unit: "provider",
+              value: null,
+              detail: { totalTokens: 12400 },
+              createdAt: "2026-09-18T10:00:06.000Z",
+            },
+            {
+              lineId: "usage_2",
+              kind: "unknown",
+              unit: "subscription",
+              value: null,
+              createdAt: "2026-09-18T10:00:07.000Z",
+            },
+          ],
+          totals: { reported: {}, estimated: {}, unknownLines: 1 },
+        },
+        escalations: [
+          {
+            runId: "run_1",
+            attemptId: "attempt_1",
+            signature: "sig-1",
+            repeats: 2,
+            classification: "known-failure",
+            kind: "provider-failure",
+            reason: "quota",
+            remainingAuthority: ["manual-retry"],
+            decision: "decide whether to start a fresh manual attempt or abandon this run",
+            at: "2026-09-18T10:00:08.000Z",
+          },
+        ],
+      };
+    },
+    runs: () => {
+      calls.push(["runs", {}]);
+      return [
+        {
+          runId: "run_1",
+          issueId: "230",
+          state: "awaiting-human",
+          createdAt: "2026-09-18T10:00:01.000Z",
+          updatedAt: "2026-09-18T10:00:09.000Z",
+        },
+      ];
+    },
+    discardRunEvidence: async (args) => {
+      calls.push(["discardRunEvidence", args]);
+      return {
+        runId: "run_1",
+        hostRepo: "example/project",
+        issueId: "230",
+        requestId: "req-1",
+        state: "terminal",
+        createdAt: "2026-09-18T10:00:01.000Z",
+        updatedAt: "2026-09-18T10:00:09.000Z",
+        discardedAt: "2026-09-18T10:00:09.000Z",
       };
     },
     // The conversation commands record like every other coordinator call;
@@ -245,6 +332,8 @@ test("recognizes only the clarification routes", () => {
   strictEqual(isClarificationApiRoute("/api/clarification/manifest"), true);
   strictEqual(isClarificationApiRoute("/api/clarification/start"), true);
   strictEqual(isClarificationApiRoute("/api/clarification/run"), true);
+  strictEqual(isClarificationApiRoute("/api/clarification/runs"), true);
+  strictEqual(isClarificationApiRoute("/api/clarification/runs/run_1/discard"), true);
   strictEqual(isClarificationApiRoute("/api/clarification/other"), false);
   strictEqual(isClarificationApiRoute("/api/review"), false);
 });
@@ -492,6 +581,118 @@ test("the run route carries the after cursor and refuses an unknown run", async 
     run({ posture: enabled, coordinator: fakeCoordinator(), query: new URLSearchParams("") }),
   );
   strictEqual(noRun.status, 400);
+});
+
+test("the run route carries the inspection display facts through the schema", async () => {
+  const coordinator = fakeCoordinator();
+  const handled = await handleClarificationApi(run({ posture: enabled, coordinator }));
+  strictEqual(handled.status, 200);
+  // Ownership and expiry arithmetic — never the token.
+  deepStrictEqual(handled.json.lease, {
+    owner: "workbench-clarification-coordinator",
+    generation: 2,
+    acquiredAt: "2026-09-18T10:00:05.000Z",
+    expiresAt: "2026-09-18T10:00:35.000Z",
+    expired: false,
+  });
+  // The budget's kinds stay distinct forever.
+  strictEqual(handled.json.usage.lines.length, 2);
+  deepStrictEqual(handled.json.usage.totals, { reported: {}, estimated: {}, unknownLines: 1 });
+  // The escalation records ride through: the return card's decision text.
+  strictEqual(
+    handled.json.escalations[0].decision,
+    "decide whether to start a fresh manual attempt or abandon this run",
+  );
+});
+
+test("the runs list read serves the in-flight chips, openly", async () => {
+  const coordinator = fakeCoordinator();
+  const handled = await handleClarificationApi(list({ posture: enabled, coordinator }));
+  strictEqual(handled.status, 200);
+  strictEqual(handled.json.runs.length, 1);
+  strictEqual(handled.json.runs[0].runId, "run_1");
+  strictEqual(handled.json.runs[0].state, "awaiting-human");
+  deepStrictEqual(coordinator.calls, [["runs", {}]]);
+
+  // The read is open like every read: even a dormant install's records stay
+  // inspectable. An install with no coordinator holds none to read.
+  const dormant = await handleClarificationApi(list({ posture: disabled, coordinator }));
+  strictEqual(dormant.status, 200);
+  const none = await handleClarificationApi(list({ posture: enabled }));
+  strictEqual(none.status, 501);
+  strictEqual(none.json.error, "clarification_unavailable");
+
+  const wrongMethod = await handleClarificationApi(
+    list({ method: "POST", posture: enabled, coordinator }),
+  );
+  strictEqual(wrongMethod.status, 405);
+
+  const foreign = await handleClarificationApi(
+    list({ coordinator, host: "host-repo.example:4051" }),
+  );
+  strictEqual(foreign.status, 403);
+});
+
+test("the discard route is the one typed destructive path", async () => {
+  // A dormant install denies the write before the body is read.
+  strictEqual(
+    (await handleClarificationApi(discard({ coordinator: fakeCoordinator() }))).status,
+    403,
+  );
+  // No coordinator, no record to discard.
+  strictEqual((await handleClarificationApi(discard({ posture: enabled }))).status, 501);
+
+  // A confirmation that does not echo the run id refuses typed and destroys
+  // nothing.
+  const refusing = fakeCoordinator({
+    discardRunEvidence: async () => {
+      throw Object.assign(new Error("destructive and irreversible"), {
+        code: "discard_unconfirmed",
+      });
+    },
+  });
+  const unconfirmed = await handleClarificationApi(
+    discard({ posture: enabled, coordinator: refusing }),
+  );
+  strictEqual(unconfirmed.status, 400);
+  strictEqual(unconfirmed.json.error, "discard_unconfirmed");
+
+  // A run with no discardable retained evidence is a conflict, not a crash.
+  const conflicting = fakeCoordinator({
+    discardRunEvidence: async () => {
+      throw Object.assign(new Error("nothing discardable"), { code: "illegal_transition" });
+    },
+  });
+  const conflict = await handleClarificationApi(
+    discard({ posture: enabled, coordinator: conflicting }),
+  );
+  strictEqual(conflict.status, 409);
+
+  // The typed confirmation, echoed: the run reads back terminal, marked
+  // discarded.
+  const coordinator = fakeCoordinator();
+  const handled = await handleClarificationApi(discard({ posture: enabled, coordinator }));
+  strictEqual(handled.status, 200);
+  strictEqual(handled.json.state, "terminal");
+  ok(handled.json.discardedAt !== null);
+  deepStrictEqual(coordinator.calls, [
+    ["discardRunEvidence", { runId: "run_1", confirmation: "run_1" }],
+  ]);
+
+  // Malformed bodies are named 400s before the coordinator is consulted.
+  const noBody = await handleClarificationApi(
+    discard({ posture: enabled, coordinator: fakeCoordinator(), body: "" }),
+  );
+  strictEqual(noBody.status, 400);
+  const noConfirmation = await handleClarificationApi(
+    discard({
+      posture: enabled,
+      coordinator: fakeCoordinator(),
+      body: JSON.stringify({ confirmation: "" }),
+    }),
+  );
+  strictEqual(noConfirmation.status, 400);
+  deepStrictEqual(fakeCoordinator().calls, []);
 });
 
 test("the run route denies a dormant install and answers GET only", async () => {
