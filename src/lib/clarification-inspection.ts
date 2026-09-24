@@ -9,7 +9,10 @@ import type {
   ClarificationUsageTotals,
 } from "../schema";
 import type { ClarificationAttemptOrigin } from "../types";
-import { clarificationLeaseOwner } from "../types";
+// The explicit extension is load-bearing: the seam-side drift fence
+// imports this module under raw node (node --test), where relative ESM
+// imports must be extensioned.
+import { clarificationLeaseOwner } from "../types.ts";
 
 // The inspection display's projection (spec #221, ticket #237, Factory 11):
 // pure functions over the settled record contracts — a display projection,
@@ -148,7 +151,6 @@ export type TimelineSegment = {
   key: string;
   heading: string;
   entries: TimelineEntry[];
-  conversationReferenced: boolean;
 };
 
 export type Timeline = {
@@ -181,7 +183,9 @@ const entryFor = (
       sentence:
         event.scope === "run"
           ? `the run moved to ${event.state}`
-          : `attempt ${attemptNumbers.get(event.id) ?? "?"} moved to ${event.state}`,
+          : attemptNumbers.has(event.id)
+            ? `attempt ${attemptNumbers.get(event.id)} moved to ${event.state}`
+            : `an attempt moved to ${event.state}`,
       at: event.at,
       detail: detail.detail,
       ...(detail.detailTruncated ? { detailTruncated: true } : {}),
@@ -238,8 +242,8 @@ const entryFor = (
     case "attempt.reconciliation.resolved":
       sentence =
         typeof data.basis === "string"
-          ? `attempt ${n ?? "?"} reconciliation resolved to ${String(data.to)}, citing the evidence it inspected`
-          : `attempt ${n ?? "?"} reconciliation resolved to ${String(data.to)}`;
+          ? `${who} reconciliation resolved to ${String(data.to)}, citing the evidence it inspected`
+          : `${who} reconciliation resolved to ${String(data.to)}`;
       break;
     case "draft.saved":
       sentence = "a draft was saved — saving is not publication approval";
@@ -271,15 +275,18 @@ const segmentFor = (key: string, heading: string): TimelineSegment => ({
   key,
   heading,
   entries: [],
-  conversationReferenced: false,
 });
+
+// The attempt numbering the whole projection shares: record order, 1-based.
+const attemptNumbersFor = (
+  attempts: ClarificationRunResult["attempts"],
+): ReadonlyMap<string, number> =>
+  new Map(attempts.map((attempt, index) => [attempt.attemptId, index + 1]));
 
 export const timelineSegments = (
   section: Pick<ClarificationRunResult, "attempts" | "events" | "gap">,
 ): Timeline => {
-  const attemptNumbers = new Map(
-    section.attempts.map((attempt, index) => [attempt.attemptId, index + 1]),
-  );
+  const attemptNumbers = attemptNumbersFor(section.attempts);
   const runSegment = segmentFor("run", "run");
   const byAttempt = new Map(
     section.attempts.map((attempt, index) => {
@@ -309,7 +316,6 @@ export const timelineSegments = (
           : runSegment;
     }
     if (event.type === "conversation") {
-      segment.conversationReferenced = true;
       // One reference per segment, however many frames streamed.
       if (segment.entries.some((entry) => entry.reference)) continue;
       segment.entries.push({ cursor: envelope.cursor, sentence: "", reference: true });
@@ -346,7 +352,7 @@ export type ReturnCard = {
   runState: string;
   attemptState: string | null;
   ownership: Ownership;
-  lastTrustedEvent: { cursor: number; summary: string } | null;
+  lastTrustedEvent: { cursor: number; summary: string; at?: string } | null;
   missingDecision: string | null;
   primary: { label: string; action: "follow-live" | "review-timeline" };
 };
@@ -372,11 +378,17 @@ export const returnCard = (
           : null;
   if (reason === null) return null;
 
-  const attemptNumbers = new Map(
-    section.attempts.map((attempt, index) => [attempt.attemptId, index + 1]),
-  );
+  const attemptNumbers = attemptNumbersFor(section.attempts);
   const last = section.events.at(-1);
   const lastSummary = last ? entryFor(last, attemptNumbers) : null;
+  const lastTrustedEvent =
+    last && lastSummary
+      ? {
+          cursor: last.cursor,
+          summary: lastSummary.sentence,
+          ...(lastSummary.at !== undefined ? { at: lastSummary.at } : {}),
+        }
+      : null;
 
   const newestEscalation = section.escalations?.at(-1);
   const missingDecision =
@@ -405,8 +417,7 @@ export const returnCard = (
     runState: state,
     attemptState: section.attempts.at(-1)?.state ?? null,
     ownership: ownershipFor(section.lease ?? null),
-    lastTrustedEvent:
-      last && lastSummary ? { cursor: last.cursor, summary: lastSummary.sentence } : null,
+    lastTrustedEvent,
     missingDecision,
     primary,
   };
@@ -417,11 +428,9 @@ export const returnCard = (
 // in flight; the chip renders zero actions either way.
 export const runChipFor = (
   runs: readonly ClarificationRunSummary[],
-  issueNumber: number,
+  issueId: string,
 ): string | null => {
-  const candidates = runs.filter(
-    (run) => run.issueId === String(issueNumber) && run.state !== "terminal",
-  );
+  const candidates = runs.filter((run) => run.issueId === issueId && run.state !== "terminal");
   if (candidates.length === 0) return null;
   const newest = [...candidates].sort((a, b) =>
     a.createdAt === b.createdAt ? (a.runId < b.runId ? 1 : -1) : a.createdAt < b.createdAt ? 1 : -1,
@@ -430,15 +439,18 @@ export const runChipFor = (
 };
 
 // The discard gate, mirrored from the store's own law (store.mjs
-// DISCARDABLE_STATES): only the recovery states a stuck record can sit in
-// hold discardable retained evidence. The store rejects anything else
-// anyway — this mirror only decides whether the destructive control
-// renders.
-const DISCARDABLE_RUN_STATES: ReadonlySet<string> = new Set([
+// DISCARDABLE_STATES, now exported): only the recovery states a stuck
+// record can sit in hold discardable retained evidence. The store rejects
+// anything else anyway — this mirror only decides whether the destructive
+// control renders, and the drift fence in scripts/seam/clarification/
+// store.test.mjs pins the two lists to each other.
+export const DISCARDABLE_RUN_STATES: readonly string[] = [
   "unknown",
   "awaiting-human",
   "quarantined",
-]);
+];
+
+const discardableStates: ReadonlySet<string> = new Set(DISCARDABLE_RUN_STATES);
 
 export const discardable = (run: Pick<ClarificationRunSnapshot, "state">): boolean =>
-  DISCARDABLE_RUN_STATES.has(run.state);
+  discardableStates.has(run.state);

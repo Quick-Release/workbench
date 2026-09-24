@@ -132,9 +132,7 @@ export function InFlightPage({
                         record={record}
                         bucket={key}
                         caveats={deriveDisplayState(record, false).caveats}
-                        runState={
-                          runs ? runChipFor(runs, Number(workItemIdNumberText(record.id))) : null
-                        }
+                        runState={runs ? runChipFor(runs, workItemIdNumberText(record.id)) : null}
                       />
                     ))}
                   </ul>

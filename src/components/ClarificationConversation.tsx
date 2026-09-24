@@ -157,7 +157,10 @@ const axisLabel = (axis: StatusPanel["axis"]) => {
     case "conversation":
       return "Conversation";
     case "readiness":
-      return "Readiness";
+      // One dimension of CONTEXT.md's Readiness — brief completeness — is
+      // what the record holds post-start; the rest renders with the
+      // manifest. The label says which dimension is speaking.
+      return "Readiness — brief completeness";
     case "usage":
       return "Usage";
   }
@@ -509,6 +512,7 @@ export const ClarificationConversation = ({ issueNumber }: { issueNumber: number
             <p className="text-xs text-muted-foreground">
               last trusted event · cursor {card.lastTrustedEvent.cursor} —{" "}
               {card.lastTrustedEvent.summary}
+              {card.lastTrustedEvent.at ? ` · ${card.lastTrustedEvent.at}` : ""}
             </p>
           )}
           {card.missingDecision && <p className="text-xs">{card.missingDecision}</p>}

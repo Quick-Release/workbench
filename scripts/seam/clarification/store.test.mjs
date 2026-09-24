@@ -9,6 +9,7 @@ import {
   ATTEMPT_ORIGINS,
   APPROVAL_STATUSES,
   DEFAULT_LEASE_TTL_MS,
+  DISCARDABLE_STATES,
   EVENT_ENVELOPE_VERSION,
   LIFECYCLE_STATES,
   SCHEMA_VERSION,
@@ -2581,4 +2582,12 @@ test("a version-5 file upgrades to version 6 and gains the approvals table", asy
     );
     check.close();
   });
+});
+
+// The display layer mirrors the discard gate's law (ticket #237): the
+// mirror's list and the store's law are pinned to each other, so one
+// cannot move without the other following.
+test("the display layer's discardable-states mirror matches the store's law", async () => {
+  const inspection = await import("../../../src/lib/clarification-inspection.ts");
+  deepStrictEqual(inspection.DISCARDABLE_RUN_STATES, DISCARDABLE_STATES);
 });

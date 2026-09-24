@@ -119,8 +119,10 @@ export const RECONCILIATION_RESOLUTIONS = [
 
 // The run states whose retained evidence may be discarded: the recovery
 // states a stuck record can sit in. A live run is not a discard target, and
-// a terminal one has already closed.
-const DISCARDABLE_STATES = ["unknown", "awaiting-human", "quarantined"];
+// a terminal one has already closed. Exported so the display layer's mirror
+// (src/lib/clarification-inspection.ts DISCARDABLE_RUN_STATES) can be
+// drift-fenced against the law itself.
+export const DISCARDABLE_STATES = ["unknown", "awaiting-human", "quarantined"];
 
 export const DEFAULT_LEASE_TTL_MS = 30_000;
 

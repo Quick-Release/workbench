@@ -380,12 +380,11 @@ describe("timelineSegments — one timeline per run, segmented by attempt", () =
     // The streamed text never enters the timeline.
     expect(serialized).not.toContain("a streamed answer");
     const attemptSegment = timeline.segments[1];
-    strictEqual(attemptSegment.conversationReferenced, true);
     // Many frames, one reference.
     strictEqual(attemptSegment.entries.filter((entry) => entry.reference).length, 1);
 
     const quiet = timelineSegments(section());
-    strictEqual(quiet.segments[1].conversationReferenced, false);
+    strictEqual(quiet.segments[1].entries.length, 0);
   });
 
   it("makes an expired cursor's gap explicit as the divider, counting what is gone", () => {
@@ -528,6 +527,7 @@ describe("returnCard — checkpoint fields and exactly one primary action", () =
     strictEqual(card.ownership.state, "held");
     ok(card.lastTrustedEvent !== null);
     strictEqual(card.lastTrustedEvent.cursor, 5);
+    strictEqual(card.lastTrustedEvent.at, "2026-09-18T10:00:09.000Z");
     // The summary speaks the timeline's plain language, not the raw kind.
     expect(card.lastTrustedEvent.summary).toContain("run halted awaiting a human");
   });
@@ -550,13 +550,13 @@ describe("runChipFor and discardable — the In flight chip and the destructive 
           run({ runId: "run_1", createdAt: "2026-09-18T10:00:01.000Z" }),
           run({ runId: "run_2", state: "awaiting-human", createdAt: "2026-09-18T11:00:01.000Z" }),
         ],
-        230,
+        "230",
       ),
       "awaiting-human",
     );
     // A terminal latest run is finished — In flight shows live work only.
-    strictEqual(runChipFor([run({ state: "terminal" })], 230), null);
-    strictEqual(runChipFor([run()], 999), null);
+    strictEqual(runChipFor([run({ state: "terminal" })], "230"), null);
+    strictEqual(runChipFor([run()], "999"), null);
   });
 
   it("gates the discard to the recovery states the store calls discardable", () => {
