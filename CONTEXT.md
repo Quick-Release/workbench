@@ -7,7 +7,7 @@ A local dashboard that renders a host repo's planning and development work live 
 ### Product
 
 **Host repo**:
-The repository workbench is installed in and renders. A workbench install serves exactly one host repo.
+The repository workbench is installed in and renders. A workbench install serves exactly one host repo. A host repo adopts a Factory baseline; the install still serves only that one host repo (ADR 0024).
 _Avoid_: target repo, project (ambiguous)
 
 **Developer**:
@@ -25,6 +25,28 @@ _Avoid_: write API (understates reads), backend (implies hosting)
 **Planning state**:
 What the dashboard may act on: issues, triage states, blocker edges, maps, decision tickets, and — through the issue agent (ADR 0010) — issue runs. Externally started agent sessions remain observed, never acted on; owned clarification is a separately approved product boundary (ADR 0014).
 _Avoid_: project data (vague)
+
+### Factory
+
+**Factory baseline**:
+The versioned, centrally published set of opinions Workbench applies to host repos: workflow and triage vocabularies, skill set and pins, conventions docs, described gates and review rules, and default run, verification and delivery templates. A baseline is data; it never grants authority to act on a host repo.
+_Avoid_: standard (implies enforcement), preset (tool-specific), profile (taken by the Capability, Execution and Delivery profiles), template (implies a one-shot copy)
+
+**Baseline adoption**:
+A host repo's committed declaration of which Factory baseline, at which version, it follows and which deviations it declares. A property of the host repo, shared by every Developer working on it.
+_Avoid_: manifest (taken by the data-flow and pre-start manifests), lockfile
+
+**Declared deviation**:
+An opinion a host repo deliberately departs from, recorded in its Baseline adoption, within what the baseline allows for that kind of opinion. Gates cannot be deviated from this way.
+_Avoid_: exception, override (both suggest a gate can be waived)
+
+**Baseline drift**:
+An observed difference between a host repo's Baseline adoption and its actual tracker, skills, docs or gate state that no Declared deviation explains.
+_Avoid_: non-compliance (implies an enforcement Workbench does not have)
+
+**Conformance report**:
+The read-only result of comparing a host repo against its Baseline adoption, opinion by opinion: ready, missing, drifted, customised or unknown. Producing it never changes the host repo.
+_Avoid_: audit (implies authority), health (taken by engine health probes)
 
 ### Reporting
 
