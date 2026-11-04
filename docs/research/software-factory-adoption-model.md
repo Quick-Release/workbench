@@ -255,16 +255,162 @@ Candidate ADRs **[proposal]**:
 3. **"Gates are enforced by the platform; Workbench observes them."** Amends ADR 0011's consequences for multi-repo use: the ruleset is the distributed gate, Workbench's doctor checks it, and the human merge instruction stays procedural.
 4. **Possibly, later:** whether internal Telemetry gains a baseline-id/version and conformance-count dimension (an ADR 0001 amendment, numbers only), and whether a local multi-repo portfolio view is in scope — the "multi-repo ecosystem" fog in the skills-ecosystem chart.
 
-## Open questions for the owner
+## Open questions — suggested answers
 
-1. **Whose opinions?** Is there one company baseline, or should public users be able to publish and adopt their own (a baseline as a package or Git ref)? This decides whether step 1 stays inside Workbench or becomes a separate artefact.
-2. **Overrides.** Which opinions may a host deviate from (label names? skill set? phases?) and which may it not (merge gate, required checks)? The proposal suggests "conventions overridable and visible, gates not overridable", but that is a policy choice.
-3. **Is `workbench.config.json` committed?** It is gitignored in Workbench's own repo but holds non-secret host data (project name, repository URL, service ids). The adoption record must be committed; should it be the same file?
-4. **Enforcement appetite.** Is the org willing to manage GitHub organization rulesets (plan-dependent) and a shared reusable CI workflow, or should the baseline stay descriptive only?
-5. **How many repos, how soon?** Is a cross-repo view needed now (which would argue for step 7 early), or is "each repo is consistent with the baseline" enough for the next quarter?
-6. **Non-Node hosts.** Should the supported install for non-Node repos be machine-level (`npx`/global plus `WORKBENCH_SOURCE_ROOT`), with the adoption record pinning a minimum Workbench version?
-7. **The talk's direction.** Does the owner want Workbench to grow toward the talk's cloud factory (hosted control plane, cloud sandboxes, content-fed learning loops)? If yes, that is a product change requiring new decisions against ADRs 0001, 0005, 0013 and 0016 — not an adoption-model tweak — and #174 is its entry point.
-8. **Skill provenance.** Should the baseline pin `mattpocock/skills` (and `Effect-TS/skills`) at reviewed refs, or fork/vendor them into a company skills source or Claude Code marketplace?
+Each question below has a suggested answer **[proposal]**, the reasoning behind it, and what would change the answer. Facts about the org were checked on 2026-11-04 with `gh`:
+
+- **[fact]** `Quick-Release` is on the GitHub **Team** plan.
+- **[fact]** It has about 101 active repositories. By primary language: 35 PHP, 26 TypeScript, 14 JavaScript, 5 Astro, 5 MDX, and the rest Shell, HTML, CSS or none.
+- **[fact]** Exactly one host repo depends on the package today: `cesam-astro`, with `"@quick-release/workbench": "^0.2.1"` in `package.json`. It has no committed `workbench.config.json` at its root.
+
+These are suggestions for the owner to accept or reject. None of them is a decision.
+
+### 1. Whose opinions? — One company baseline, kept inside the Workbench package
+
+**Suggested answer.** Ship one baseline, `quick-release` (versioned with the package), as a module inside `@quick-release/workbench`. Design the `baseline: { id, version }` field so that `id` could later name another package or Git ref. Don't build that resolver now.
+
+**Why.**
+
+- There is one adopting host today, and one opinion owner.
+- A separate baseline package would add a second release train and a compatibility matrix before anyone needs one.
+- Public users (ADR 0013) get the company baseline as the default. They can deviate per opinion, which is question 2.
+- This matches step 1 of the migration table and the note's own "split only once a second baseline is real".
+
+**What would change it.** A second team, or a real public user, asking to publish their own opinions. That is the point to extract the module into `@quick-release/factory-baseline` and resolve `id` through npm or a Git ref, the way Renovate resolves `extends` presets.
+
+### 2. Overrides — conventions are overridable and visible; gates are not
+
+**Suggested answer.** Each opinion kind gets an override class, listed in the baseline itself:
+
+| Opinion kind                                                     | Override class                       | How a host deviates                                                                                                                           |
+| ---------------------------------------------------------------- | ------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| Label strings, triage role names                                 | **Renameable**                       | Map baseline role to host label in the adoption record. The role set itself is fixed, because the frontier and run logic depend on it.        |
+| Workflow phases                                                  | **Fixed**                            | None. Phases are part of the run model (ADRs 0007, 0010).                                                                                     |
+| Skill set                                                        | **Additive, with declared removals** | A host may add skills freely. Removing a baseline skill is a declared deviation with a reason. The doctor shows it, it doesn't flag drift.    |
+| Skill pins                                                       | **Pinned by baseline**               | A host may pin newer for a trial, as a declared deviation. Older than the baseline is drift.                                                  |
+| Conventions docs (`docs/agents/*`)                               | **Overridable**                      | Host edits are allowed. The doctor diffs them against the baseline template and reports "customised", not "drifted".                          |
+| Gates (protected `main`, required checks, human merge, ADR 0011) | **Not overridable**                  | None in the adoption record. An exception is made by changing the org ruleset's targeting (a custom property), which is visible at org level. |
+
+**Why.**
+
+- The run machinery (ADRs 0008, 0010, 0020–0023) depends on roles and phases, not on the exact label strings. So strings can move and the role set can't.
+- Gates are the one thing whose weakening has to be visible to someone other than the repo's own developer. Keeping them out of the adoption file means a repo can't quietly opt out of review.
+
+**What would change it.** A client project contractually needing a different review flow. That should be a separate baseline id, not an override.
+
+### 3. Is `workbench.config.json` committed? — No; put the adoption record in a separate, committed file
+
+**Suggested answer.** Keep `workbench.config.json` local and gitignored. Add a committed `.workbench/baseline.json` holding only `{ "baseline": { "id", "version" }, "deviations": [...], "minWorkbenchVersion" }`.
+
+**Why.**
+
+- **[fact]** The config mixes kinds of data. `workbench.config.example.json` has per-Developer settings (`sessions.enabled`, `clarification.provider` and `dataDestination`, `theme`) next to host data (`projectName`, `services[]` with ids and `tokenEnv` names).
+- Committing that file forces one Developer's opt-ins on everyone. That runs against the opt-in postures of Session capture and clarification (ADRs 0014, 0016).
+- A dedicated file is small, reviewable, and easy for bots and the doctor to parse. It's also the same role `.copier-answers.yml` plays.
+- `.workbench/` already exists as Workbench's directory in the host. Committing one file in it needs a gitignore negation (`.workbench/*` plus `!.workbench/baseline.json`), so `workbench init` should write that rule.
+
+**Follow-up.** Host-shared, non-secret fields such as `projectName` and `services[].id` could move into the committed file later. Keep that separate from this decision.
+
+**Related tension.** The note found that clarification state lives under `.workbench/` in the checkout, while Factory 07 wanted it outside the working tree. Committing `.workbench/baseline.json` makes that directory partly tracked. That is one more reason to move run state out to a machine-level store (for example `$XDG_STATE_HOME/workbench/<repo-id>/`) when Factory 07 is implemented.
+
+### 4. Enforcement appetite — start descriptive plus doctor; adopt org rulesets after a one-repo trial
+
+**Suggested answer.** In order:
+
+1. The baseline describes the gate set. The doctor checks each host's branch protection and rulesets through the API.
+2. Trial one org ruleset, targeted by a custom property such as `factory=quick-release`, on `workbench` and `cesam-astro`.
+3. Widen it once the trial passes.
+4. Hold the shared reusable CI workflow until there's a second Node host. There's nothing to share yet.
+
+**Why.**
+
+- **[fact]** GitHub's docs say rulesets are available "for customers on GitHub Team and GitHub Enterprise plans" ([about rulesets](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-rulesets/about-rulesets), [creating org rulesets](https://docs.github.com/en/organizations/managing-organization-settings/creating-rulesets-for-repositories-in-your-organization)).
+- **[fact]** But the same "about" page also says: "For organizations on the GitHub Enterprise plan, you can set up rulesets at the organization level to target multiple repositories." The docs conflict on whether one org ruleset can target many repos on Team.
+- **[fact]** Custom-property targeting is documented with no plan limit stated.
+- **[unverified]** Whether "require workflows to pass" is available on Team wasn't confirmed.
+- The `gh` token used here lacks `admin:org`, so the org's current rulesets couldn't be listed.
+- So the trial in step 2 is how to settle the plan question, rather than designing around a feature that may not exist on Team.
+
+**Fallback if org-level targeting turns out to be Enterprise-only.** Apply the same ruleset per repo with a small script (`gh api repos/{repo}/rulesets`) that the doctor verifies. It's less elegant but uses the same model.
+
+### 5. How many repos, how soon? — Consistency first; defer the cross-repo view
+
+**Suggested answer.**
+
+- Next quarter's target: every repo that adopts Workbench passes its doctor against the current baseline.
+- Don't build step 7, the portfolio view, yet.
+- Do add the cheap part of step 7 now: on internal installs, report the baseline id and version plus conformance counts as Telemetry. That's numbers only, within ADR 0001.
+
+**Why.**
+
+- **[fact]** One host has adopted Workbench, out of about 101 active repos.
+- A portfolio view of one repo answers nothing.
+- The Telemetry dimension gives a cross-repo picture ("which installs are on which baseline, how many checks fail") for almost no cost, and doesn't touch the single-host model.
+
+**What would change it.** Adoption passing about five hosts, or someone needing to ask "where is review backing up across repos". At that point, build the local read-only portfolio view.
+
+### 6. Non-Node hosts — Yes; make the machine-level install a first-class path
+
+**Suggested answer.**
+
+- For hosts without a `package.json`, support `npx @quick-release/workbench@<version>` or a global install.
+- `.workbench/baseline.json` carries `minWorkbenchVersion`. Workbench refuses to start below it, and warns when it's more than one minor version ahead.
+- Node hosts keep the dev dependency, for the lockfile pin and bot-driven upgrades.
+
+**Why.**
+
+- **[fact]** 35 of about 101 active repos are PHP (WordPress themes, plugins and services), and several more are Shell or HTML.
+- If the factory is meant for all projects, the non-Node path can't be second-class. #125 already requires it.
+- The version floor in the adoption record replaces the pin that a lockfile gives Node hosts.
+
+**Follow-up.** Renovate can't bump a version inside a custom JSON file without a regex manager. The baseline should ship a Renovate preset with that manager, so non-Node hosts get upgrade PRs too.
+
+### 7. The talk's direction — No cloud factory now; borrow the loop, not the hosting
+
+**Suggested answer.** Don't grow toward the talk's hosted control plane in this decision. Take three of its ideas that fit the local model:
+
+1. **The same loop everywhere, tuned per project.** That is the baseline plus the adoption record.
+2. **"Are these the right skills for my domain?"** That is per-host skill additions plus the doctor.
+3. **Factory improvement as reviewed changes.** That is baseline upgrades as PRs, and later skill-improvement proposals as PRs to the baseline.
+
+Keep #174 (remote runners) as the single entry point if hosted execution comes back on the table.
+
+**Why.**
+
+- Each part of the cloud version runs into an existing decision: ADR 0005 (localhost seam), ADR 0013 (public posture), ADR 0016 (credential boundaries), and ADR 0001's "numbers, never content".
+- Reopening all four is a product change. It deserves its own grilling, not a side effect of an adoption-model decision.
+
+**What would change it.** Needing unattended runs while no Developer machine is on, or runs in parallel beyond one machine (#173). Both are execution questions, and the baseline model works the same under either.
+
+### 8. Skill provenance — Pin upstream at reviewed refs now; fork only on divergence
+
+**Suggested answer.**
+
+- The baseline pins `mattpocock/skills` and `Effect-TS/skills` to reviewed commit SHAs, recorded in the baseline and in host `skills-lock.json` files.
+- Company-specific skills, such as the ones in this repo's `.claude/skills/`, go into a company skills source that the baseline also pins.
+- Fork an upstream skill only when it needs a local change that upstream won't accept.
+- Package everything as a Claude Code plugin marketplace only once a non-Claude agent is no longer part of the workflow. Codex and Pi also run here (see AGENTS.md and ADR 0018), so for now a format-neutral skills source fits better than a Claude-only marketplace.
+
+**Why.**
+
+- **[fact]** Today's install runs `skills@latest … --all` from upstream HEAD (`scripts/seam/routes/skills-api.mjs:27,32`). Hosts set up a week apart can get different skills.
+- Pinning fixes that at almost no cost.
+- Forking takes on maintenance and loses upstream fixes, so it should be reserved for real divergence.
+
+### Summary of suggested answers
+
+| #   | Question         | Suggestion                                                                          |
+| --- | ---------------- | ----------------------------------------------------------------------------------- |
+| 1   | Whose opinions   | One company baseline inside the package; `id` designed to allow external ones later |
+| 2   | Overrides        | Labels renameable, skills additive, docs customisable; phases and gates fixed       |
+| 3   | Committed config | Keep the config local; add a committed `.workbench/baseline.json`                   |
+| 4   | Enforcement      | Doctor first; trial an org ruleset on two repos; per-repo script as fallback        |
+| 5   | Scale            | Doctor-clean adopters next quarter; baseline Telemetry now; portfolio view later    |
+| 6   | Non-Node hosts   | First-class `npx`/global install with `minWorkbenchVersion`; Renovate regex preset  |
+| 7   | Talk's direction | Borrow the loop, not the cloud; #174 stays the entry point                          |
+| 8   | Skill provenance | Pin upstream SHAs; company skills source; fork only on divergence                   |
+
+If these are accepted, items 1, 2, 3 and 8 belong in candidate ADR 1, item 4 in candidate ADR 3, and item 5's Telemetry dimension in the ADR 0001 amendment.
 
 ## Sources
 
