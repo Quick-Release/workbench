@@ -1,6 +1,6 @@
 # Software factory adoption model — in-repo, repo-agnostic, or hybrid
 
-Status: research input, not a decision. No CONTEXT.md term or ADR changes with this note; the proposals in it need a human Resolution.
+Status: research input. On 2026-11-04 the owner accepted all eight suggested answers under "Open questions — suggested answers". They still have to be recorded as ADRs and CONTEXT.md terms; this note changes neither.
 
 Work item: none yet (owner question, 2026-11-04). Related: [#158](https://github.com/Quick-Release/workbench/issues/158) (AI software factory map), [#125](https://github.com/Quick-Release/workbench/issues/125) (Host Repo Doctor), [#173](https://github.com/Quick-Release/workbench/issues/173) (parallel runs), [#174](https://github.com/Quick-Release/workbench/issues/174) (remote runners).
 
@@ -263,7 +263,7 @@ Each question below has a suggested answer **[proposal]**, the reasoning behind 
 - **[fact]** It has about 101 active repositories. By primary language: 35 PHP, 26 TypeScript, 14 JavaScript, 5 Astro, 5 MDX, and the rest Shell, HTML, CSS or none.
 - **[fact]** Exactly one host repo depends on the package today: `cesam-astro`, with `"@quick-release/workbench": "^0.2.1"` in `package.json`. It has no committed `workbench.config.json` at its root.
 
-These are suggestions for the owner to accept or reject. None of them is a decision.
+The owner accepted all eight suggested answers on 2026-11-04. They take effect as decisions once they're recorded in the candidate ADRs above.
 
 ### 1. Whose opinions? — One company baseline, kept inside the Workbench package
 
