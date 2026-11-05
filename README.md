@@ -75,6 +75,16 @@ the version, writes the changelog, publishes the package through the configured
 registry (public npm after the public-access flip, with GitHub Packages as the
 fallback until then), pushes the `vX.Y.Z` tag, and creates the GitHub release.
 
+The release workflow opens the "Version Packages" PR as a GitHub App, so CI
+runs on it like on any other PR. A PR opened with the default `GITHUB_TOKEN`
+starts no workflows, and `main`'s required `CI / validate` check would then
+block the merge. The App needs **Contents** and **Pull requests**
+read-and-write permissions on this repository; store its App ID in the
+`RELEASE_APP_ID` Actions variable and its private key in the
+`RELEASE_APP_PRIVATE_KEY` Actions secret. Without them the workflow falls
+back to `GITHUB_TOKEN`, and the release PR needs closing and reopening to
+start CI.
+
 ## Run a standalone checkout
 
 Inside a clone of this repository:
