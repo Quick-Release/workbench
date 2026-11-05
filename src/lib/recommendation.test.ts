@@ -3,7 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 import { collectTrackerState } from "../../scripts/tracker/index.mjs";
 import type { BlockerEdgeRecord, TrackerMapRecord, WorkItemRecord } from "../types";
 import type { WorkflowStatePayload } from "../types";
-import { recommendNextAction, frontierStrip } from "./recommendation";
+import { nextStepForIssue, recommendNextAction, frontierStrip } from "./recommendation";
 
 export const item = (number: number, overrides: Partial<WorkItemRecord> = {}): WorkItemRecord => ({
   id: `GH-${number}`,
@@ -499,5 +499,95 @@ describe("read completeness from the collector to the recommendation", () => {
     expect(record?.blockersRead).toBeUndefined();
     expect(recommendNextAction(payload)?.bucket).toBe("implementation-frontier");
     expect(recommendNextAction(payload)?.issueId).toBe("GH-56");
+  });
+});
+
+describe("one item's next step", () => {
+  it("names the skill command for the bucket that claims this issue, not the snapshot's head", () => {
+    const snapshot = state([
+      item(65, { assignees: ["vvaz"], phase: "reviewing" }),
+      item(34, { phase: "ticketed", triageState: "ready-for-agent" }),
+    ]);
+    expect(recommendNextAction(snapshot)?.issueId).toBe("GH-65");
+
+    const step = nextStepForIssue(snapshot, "GH-34");
+    expect(step?.kind).toBe("action");
+    if (step?.kind !== "action") return;
+    expect(step.recommendation.command).toBe("/implement");
+    expect(step.recommendation.primary).toBe("/implement #34");
+    expect(step.recommendation.reason).toContain("implementation frontier");
+  });
+
+  it("speaks each bucket's own command — triage intake, the map frontier, and flow advance", () => {
+    const intake = nextStepForIssue(state([item(4, { triageState: "needs-triage" })]), "GH-4");
+    expect(intake).toMatchObject({ kind: "action", recommendation: { command: "/triage" } });
+
+    const decision = nextStepForIssue(
+      state([item(50, { kind: "prototype" })], [map(41, [50])]),
+      "GH-50",
+    );
+    expect(decision).toMatchObject({ kind: "action", recommendation: { command: "/prototype" } });
+
+    const specced = nextStepForIssue(
+      state([item(41, { phase: "specced" }), item(42)], [map(41, [42])]),
+      "GH-41",
+    );
+    expect(specced).toMatchObject({ kind: "action", recommendation: { command: "/to-tickets" } });
+  });
+
+  it("says what a blocked item waits on instead of a command", () => {
+    const step = nextStepForIssue(
+      state(
+        [item(7), item(42, { phase: "ticketed", triageState: "ready-for-agent" })],
+        [],
+        [edge(42, 7)],
+      ),
+      "GH-42",
+    );
+    expect(step).toEqual({
+      kind: "waiting",
+      reason: "blocked by GH-7 — close them before starting this one.",
+    });
+  });
+
+  it("reads the readiness filters back as the waiting line", () => {
+    const reasonFor = (record: WorkItemRecord) => {
+      const step = nextStepForIssue(state([record]), record.id);
+      return step?.kind === "waiting" ? step.reason : null;
+    };
+    expect(reasonFor(item(1, { phase: "shipped", triageState: "ready-for-agent" }))).toContain(
+      "shipped",
+    );
+    expect(reasonFor(item(2, { state: "closed" }))).toContain("closed");
+    expect(reasonFor(item(3, { triageState: "wontfix" }))).toContain("wontfix");
+    expect(reasonFor(item(4, { deferred: true, triageState: "ready-for-agent" }))).toContain(
+      "deferred",
+    );
+    expect(reasonFor(item(5, { triageState: "needs-info" }))).toContain("waiting on the reporter");
+    expect(reasonFor(item(6, { triageState: "ready-for-human" }))).toContain("waiting on a human");
+  });
+
+  it("admits the phases no signal advances rather than inventing a step", () => {
+    const grilling = nextStepForIssue(
+      state([item(41, { phase: "grilling", triageState: "ready-for-agent" })]),
+      "GH-41",
+    );
+    expect(grilling).toMatchObject({ kind: "waiting" });
+    if (grilling?.kind !== "waiting") return;
+    expect(grilling.reason).toContain("no machine-detectable next step from grilling");
+  });
+
+  it("reads claimed-but-not-started as waiting — an informational row is not an action", () => {
+    const step = nextStepForIssue(
+      state([item(64, { assignees: ["vvaz"], triageState: "ready-for-agent" })]),
+      "GH-64",
+    );
+    expect(step).toMatchObject({ kind: "waiting" });
+    if (step?.kind !== "waiting") return;
+    expect(step.reason).toContain("claimed, not started");
+  });
+
+  it("has nothing to say about an id the snapshot does not carry", () => {
+    expect(nextStepForIssue(state([item(1)]), "GH-999")).toBe(null);
   });
 });
