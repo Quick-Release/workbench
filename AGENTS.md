@@ -42,8 +42,8 @@ Examples:
 - Claude: `/data/agents/workspaces/claude/getquick/workbench/<task>`
 - Pi: `/data/agents/workspaces/pi/getquick/workbench/<task>`
 
-A worktree the agent host creates for you also counts: T3 Code's under
-`~/.t3/worktrees/workbench/` and Claude Code's `isolation: "worktree"`
+A worktree the agent host creates for you also counts: T3 Code's
+worktrees under `~/.t3/worktrees/workbench/` and Claude Code's `isolation: "worktree"`
 subagents. In that case keep the host's path and still name the branch
 `agent/<agent>/<task>`.
 
@@ -161,7 +161,7 @@ review — address or answer them, resolving them is not the gate.
 
 `gh pr edit` fails on this repository with a Projects (classic) GraphQL
 error. Change a PR's title or body with
-`gh api -X PATCH repos/Quick-Release/workbench/pulls/<n> -f title=… -F body=@<file>`.
+`gh api -X PATCH repos/Quick-Release/workbench/pulls/<n> -f title="<title>" -F body=@<file>`.
 
 When a human explicitly says to merge:
 
@@ -191,7 +191,7 @@ when you find one of your own branches already merged at the start of a task.
 
    ```sh
    git worktree remove <path>
-   git branch -D <branch>          # -D is safe here: step 2 proved the work is on main
+   git branch -D <branch>          # -D: squash/rebase merges leave these exact commits off main; step 2 proved the merged PR holds them
    git push origin --delete <branch>
    git worktree prune
    ```
