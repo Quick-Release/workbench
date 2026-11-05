@@ -1,5 +1,15 @@
 # @quick-release/workbench
 
+## 0.14.0
+
+### Minor Changes
+
+- c39f9c5: Issue detail panel: a Next step section that names the skill command advancing that one ticket — the recommendation table read for a single work item — with a copy button and its bucket reason. An item no bucket can act on says what it waits on instead.
+
+### Patch Changes
+
+- fed87aa: Install the Effect skills (`effect-ts`, `effect-v3-to-v4`) from `Effect-TS/skills` alongside the existing set, so agents working this Effect 4 codebase get the library's own conventions.
+
 ## 0.13.1
 
 ### Patch Changes
