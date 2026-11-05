@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ExternalLink, Network, X } from "lucide-react";
+import { Check, Copy, ExternalLink, Network, X } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -9,9 +9,15 @@ import { ClarificationDraftPanel } from "@/components/ClarificationDraftPanel";
 import { PhaseMoveSelect } from "@/components/PhaseMoveSelect";
 import { deriveDisplayState } from "@/lib/display-state";
 import { indexWorkItems, mapFor, openBlockers } from "@/lib/frontier";
+import { nextStepForIssue } from "@/lib/recommendation";
 import { workItemIdNumberText } from "@/lib/work-item-id.mjs";
 import { cn } from "@/lib/utils";
-import type { ClarificationStatusResult, PhaseMoveTarget, WorkflowStatePayload } from "../types";
+import type {
+  ClarificationStatusResult,
+  PhaseMoveTarget,
+  WorkflowStatePayload,
+  WorkItemRecord,
+} from "../types";
 
 export type IssuePanelAction =
   | { kind: "create"; title: string; body: string }
@@ -205,6 +211,7 @@ function IssueRecordSections({
         </div>
       </section>
 
+      <NextStepSection record={record} state={state} />
       {mode === "live" &&
         clarificationPosture?.posture === "enabled" && (
           // The clarification entry point (spec #221, ticket #222): visible
@@ -337,6 +344,61 @@ function IssueRecordSections({
         )}
       </section>
     </>
+  );
+}
+
+// The panel's next step: the recommendation table read for this one item
+// (recommendation.ts), rendered command-first like the Overview hero with its
+// bucket reason underneath. The command is copy bait for the terminal — no
+// dashboard control starts a skill session, so this section is identical in
+// live and static builds. An item no bucket can act on says what it waits on
+// instead, which is the phase move's cue: the move relabels, this advances.
+function NextStepSection({
+  record,
+  state,
+}: {
+  record: WorkItemRecord;
+  state: WorkflowStatePayload;
+}) {
+  const [copied, setCopied] = useState(false);
+  const step = nextStepForIssue(state, record.id);
+  if (!step) return null;
+
+  return (
+    <section data-slot="panel-next-step" className="flex flex-col gap-2">
+      <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase">Next step</p>
+      {step.kind === "action" ? (
+        <>
+          <div className="flex items-start gap-2">
+            <code data-slot="next-step-command" className={cn(commandClass, "flex-1")}>
+              {step.recommendation.primary}
+            </code>
+            <Button
+              type="button"
+              variant="outline"
+              size="xs"
+              aria-label={`Copy the next step for ${record.id}`}
+              onClick={() => {
+                void navigator.clipboard
+                  .writeText(step.recommendation.primary)
+                  .then(() => setCopied(true))
+                  .catch(() => setCopied(false));
+              }}
+            >
+              {copied ? <Check aria-hidden /> : <Copy aria-hidden />}
+              {copied ? "Copied" : "Copy"}
+            </Button>
+          </div>
+          <p data-slot="next-step-reason" className="text-xs text-muted-foreground">
+            {step.recommendation.reason}
+          </p>
+        </>
+      ) : (
+        <p data-slot="next-step-waiting" className="text-xs text-muted-foreground">
+          {step.reason}
+        </p>
+      )}
+    </section>
   );
 }
 

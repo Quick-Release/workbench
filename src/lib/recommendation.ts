@@ -6,7 +6,7 @@ import type {
 } from "../types";
 import { clientKindFor, compareByClientTier } from "./client-priority.mjs";
 import { deriveDisplayState } from "./display-state";
-import { frontier, frontierItemFromWorkItem } from "./frontier";
+import { frontier, frontierItemFromWorkItem, indexWorkItems, openBlockers } from "./frontier";
 import { inFlightBuckets } from "./in-flight";
 import { byMapOrderThenNumber, mapOrderIndex } from "./map-order";
 import { triageLanes } from "./triage";
@@ -282,6 +282,59 @@ export const recommendNextAction = (state: WorkflowStatePayload): Recommendation
     if (head) return head;
   }
   return null;
+};
+
+// One work item's next step: the same priority table read for a single issue
+// instead of the whole snapshot. The first bucket that claims the issue names
+// the skill command that advances it — the copy bait the detail panel renders,
+// exactly the grammar the Overview hero and the header chip already speak. A
+// bucket row without a command (claimed, not started) is not an action, so it
+// reads as waiting like every other item no bucket can act on.
+export type IssueNextStep =
+  | { kind: "action"; recommendation: Recommendation & { command: string } }
+  | { kind: "waiting"; reason: string };
+
+export const nextStepForIssue = (
+  state: WorkflowStatePayload,
+  issueId: string,
+): IssueNextStep | null => {
+  const record = state.workItems.find((item) => item.id === issueId);
+  if (!record) return null;
+  for (const bucket of BUCKETS) {
+    const row = bucket(state).find((recommendation) => recommendation.issueId === issueId);
+    if (!row) continue;
+    return row.command
+      ? { kind: "action", recommendation: { ...row, command: row.command } }
+      : { kind: "waiting", reason: row.reason };
+  }
+  return { kind: "waiting", reason: waitingReason(record, state) };
+};
+
+// Why no bucket claims this item — the readiness filters read back as one
+// sentence, in the order the table applies them. The last line is the honest
+// one: the table advances ticketed work, specced maps, and grabbable decision
+// tickets, and says so rather than inventing a step for the phases whose
+// completion is not machine-detectable.
+const waitingReason = (record: WorkItemRecord, state: WorkflowStatePayload): string => {
+  const blockers = openBlockers(record.id, state.blockerEdges, indexWorkItems(state.workItems));
+  const display = deriveDisplayState(record, blockers.open.length > 0);
+
+  if (display.state === "closed") return "closed — nothing left to advance.";
+  if (display.phase === "shipped") return "shipped — nothing left to advance.";
+  if (display.triageState === "wontfix") return "wontfix — refused, not parked.";
+  if (display.deferred) return "deferred — parked; undefer it to put it back on the flow.";
+  if (display.triageState === "needs-info") return "needs-info — waiting on the reporter.";
+  if (display.triageState === "ready-for-human")
+    return "ready-for-human — waiting on a human, not an agent.";
+  if (blockers.open.length > 0)
+    return `blocked by ${blockers.open.join(", ")} — close them before starting this one.`;
+  if (blockers.dangling.length > 0)
+    return `blocked by missing work: ${blockers.dangling.join(", ")} — fix the dangling reference.`;
+  if (display.phase === "ticketed" && display.triageState !== "ready-for-agent")
+    return "not ready-for-agent yet — triage it before an agent picks it up.";
+  return `no machine-detectable next step${
+    display.phase ? ` from ${display.phase}` : " — the item is not on the flow yet"
+  }: the priority table advances ticketed work, specced maps, and grabbable decision tickets.`;
 };
 
 // The repo-wide frontier strip: each map's grabbable head in map order, plus

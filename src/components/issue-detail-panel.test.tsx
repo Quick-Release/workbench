@@ -290,3 +290,33 @@ describe("create mode and unknown references", () => {
     expect(html).toContain('href="https://github.com/Quick-Release/workbench/issues/404"');
   });
 });
+
+describe("the panel's next step", () => {
+  it("renders the item's own skill command, copyable, with the bucket reason", () => {
+    const html = renderPanel({ issueId: "GH-8" });
+    expect(html).toContain('data-slot="panel-next-step"');
+    expect(html).toContain("Next step");
+    expect(html).toContain("/triage #8");
+    expect(html).toContain('aria-label="Copy the next step for GH-8"');
+    expect(html).toContain("triage intake");
+  });
+
+  it("says what an item waits on when no bucket can act on it", () => {
+    const html = renderPanel({ issueId: "GH-7" });
+    expect(html).toContain('data-slot="next-step-waiting"');
+    expect(html).toContain("waiting on the reporter");
+    expect(html).not.toContain('data-slot="next-step-command"');
+  });
+
+  it("names the blocker for a gated item rather than a command", () => {
+    const html = renderPanel({ issueId: "GH-42" });
+    expect(html).toContain('data-slot="next-step-waiting"');
+    expect(html).toContain("close them before starting this one");
+  });
+
+  it("keeps the next step in static builds — the command is copy bait either way", () => {
+    const html = renderPanel({ issueId: "GH-8", mode: "static" });
+    expect(html).toContain('data-slot="next-step-command"');
+    expect(html).toContain("/triage #8");
+  });
+});
