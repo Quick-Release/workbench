@@ -195,7 +195,7 @@ The engine that acts on a host-repo issue from the dashboard — currently openc
 _Avoid_: autonomous agent (overstates the fence), bot (misplaces the execution)
 
 **Agent run**:
-One execution of the issue agent against one issue, streamed as the same typed events as a review run and bounded like one — cancellable, time-limited, capped. A successful run ends in a draft PR; a failed run keeps its worktree for inspection.
+One execution of the issue agent against one issue, streamed as the same typed events as a review run and bounded like one — cancellable, time-limited, capped. Each run owns its own worktree and branch, which no other run may remove or reset. A successful run ends in a draft PR; a failed or cancelled run keeps its worktree as a Retained workspace until the Developer discards it (ADR 0027).
 _Avoid_: session (that is capture's noun), job, task (none of them stream or hold the single-run guarantee)
 
 ### Clarification
@@ -381,6 +381,10 @@ _Avoid_: path owner (a path is not an authority)
 **Retained workspace**:
 An Execution workspace deliberately preserved after failure or cancellation so its evidence can be inspected. Retention does not imply that the process is alive or that the workspace can be resumed.
 _Avoid_: recoverable workspace (retention does not promise recovery)
+
+**Discard**:
+The Developer's explicit, per-run removal of a Retained or Quarantined workspace. A retry, a timer or a later run never discards on the Developer's behalf.
+_Avoid_: cleanup (the automatic end-of-run removal after success), reset (implies reuse)
 
 **Quarantined workspace**:
 An Execution workspace whose process termination, ownership or cleanup state is uncertain. It cannot be reused or deleted until explicit reconciliation or discard establishes authority.
