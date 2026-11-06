@@ -29,13 +29,20 @@ import {
   runStarted,
   type ReviewRunState,
 } from "@/lib/review-run-state";
-import { ReviewRunHttpError, cancelReviewRun, streamReviewRun } from "@/lib/review-runs";
+import {
+  ReviewRunHttpError,
+  cancelReviewRun,
+  discardAgentRun,
+  fetchRetainedRuns,
+  streamReviewRun,
+} from "@/lib/review-runs";
 import { parseReviewHistory } from "@/schema";
 import {
   reviewEngines,
   type Engine,
   type PullRequestRecord,
   type ReviewEngine,
+  type RetainedAgentRun,
   type ReviewEngineHealth,
   type ReviewHistoryEntry,
 } from "@/types";
@@ -186,9 +193,35 @@ export function PullRequestsPage({
       // Unreachable server: the last known list stays on screen.
     }
   };
+  // The retained agent runs (GH-116): the run-owned worktrees this host
+  // repo keeps on disk. Fetched on load, after every run, and after every
+  // discard; null keeps the list hidden until the first answer.
+  const [retainedRuns, setRetainedRuns] = useState<readonly RetainedAgentRun[] | null>(null);
+  const [discardError, setDiscardError] = useState<string | null>(null);
+  const refreshRetained = async () => {
+    try {
+      setRetainedRuns(await fetchRetainedRuns());
+    } catch {
+      // Unreachable server or git failure: the last known list stays.
+    }
+  };
   useEffect(() => {
     void refreshHistory();
+    void refreshRetained();
   }, []);
+
+  const discardRun = (runId: string, confirmQuarantined: boolean) => {
+    setDiscardError(null);
+    void discardAgentRun()(runId, confirmQuarantined)
+      .catch((error) => {
+        setDiscardError(
+          error instanceof ReviewRunHttpError
+            ? (error.payload?.message ?? `discard failed with status ${error.status}`)
+            : "discard could not reach the server",
+        );
+      })
+      .finally(() => void refreshRetained());
+  };
 
   const cancelOnce = (
     engine: Engine,
@@ -273,8 +306,10 @@ export function PullRequestsPage({
         }
       } finally {
         // The run is over one way or another: the session history now has
-        // its outcome, whatever the panel shows.
+        // its outcome, whatever the panel shows — and a failed agent run
+        // has just become a retained worktree.
         void refreshHistory();
+        void refreshRetained();
       }
     })();
   };
@@ -404,6 +439,9 @@ export function PullRequestsPage({
         run={agentRun}
         onStart={runAgent}
         onCancel={cancelAgent}
+        retained={retainedRuns}
+        onDiscard={discardRun}
+        discardError={discardError}
       />
       <ReviewHistoryPanel
         history={runHistory}

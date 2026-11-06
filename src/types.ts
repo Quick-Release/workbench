@@ -568,6 +568,9 @@ import type {
   ReviewHealthSchema,
   ReviewHistoryEntrySchema,
   ReviewHistorySchema,
+  RetainedAgentRunSchema,
+  RetainedAgentRunsSchema,
+  AgentRunDiscardRequestSchema,
 } from "./schema.ts";
 
 // Every engine the runner can execute: the two review engines (a pull
@@ -593,6 +596,20 @@ export type ReviewCommentResult = Schema.Schema.Type<typeof ReviewCommentResultS
 export type ReviewHistoryEntry = Schema.Schema.Type<typeof ReviewHistoryEntrySchema>;
 
 export type ReviewHistory = Schema.Schema.Type<typeof ReviewHistorySchema>;
+
+// A run-owned issue-agent worktree (GH-116, ADR 0027): active while its
+// Git lock's PID is alive on this host, retained once the run has ended
+// without success, quarantined when a lock outlived its owner (a dead PID,
+// or a lock from another host) and a Discard needs a second confirmation.
+export const agentRunStates = ["active", "retained", "quarantined"] as const;
+
+export type AgentRunState = (typeof agentRunStates)[number];
+
+export type RetainedAgentRun = Schema.Schema.Type<typeof RetainedAgentRunSchema>;
+
+export type RetainedAgentRuns = Schema.Schema.Type<typeof RetainedAgentRunsSchema>;
+
+export type AgentRunDiscardRequest = Schema.Schema.Type<typeof AgentRunDiscardRequestSchema>;
 
 // Owned clarification's posture vocabulary (spec #221, ticket #222): the
 // ship-dark capability is either disabled (the block is absent or switched

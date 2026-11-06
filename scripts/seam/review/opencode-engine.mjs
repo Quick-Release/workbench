@@ -1,7 +1,17 @@
 import { spawnSync } from "node:child_process";
-import { accessSync, constants as fsConstants, rmSync } from "node:fs";
+import { accessSync, constants as fsConstants } from "node:fs";
 import { join } from "node:path";
-import { tmpdir as osTmpdir } from "node:os";
+import { hostname as osHostname } from "node:os";
+
+import { envWithoutGitContext } from "../../host/git-context.mjs";
+import {
+  defaultWorktreeRoot,
+  hostKeyFor,
+  lockReason,
+  newRunId,
+  runIdPattern,
+  runResources,
+} from "./agent-worktrees.mjs";
 
 // The opencode issue-agent engine (issue #40): the first engine that acts on
 // a host-repo issue instead of reviewing a pull request. It returns the same
@@ -118,65 +128,86 @@ const prBody = ({ issue, model }) =>
     `Please review carefully — an unattended local model produced this change.`,
   ].join("\n");
 
-// Cleanup is best-effort and outcome-aware: the runner always calls it, and
-// it removes the worktree only for a successful run — a failed run keeps its
-// worktree so the Developer can inspect what the agent actually did. The
-// directory backstop catches a git remove that gave up (both failures are
-// swallowed; cleanup must never break the run's ending).
-const worktreeCleanup = ({ worktreePath, branch, hostRepoRoot, cleanupSpawn }) => {
-  const remove = ({ command, args }) => {
+// Cleanup is best-effort and outcome-aware, and it names only this run's own
+// path and branch (GH-116, ADR 0027). The runner always calls it. Every
+// ending unlocks the worktree: the run is over, so its lock no longer guards
+// anything. A successful run then removes its worktree and its local branch;
+// the pushed remote branch stays for the draft PR. A failed or cancelled run
+// keeps both until the Developer discards them. Failures are swallowed:
+// cleanup must never break the run's ending.
+const worktreeCleanup = ({ path, branch, hostRepoRoot, cleanupSpawn }) => {
+  const git = (args) => {
     if (cleanupSpawn) {
-      cleanupSpawn({ command, args, cwd: hostRepoRoot });
+      cleanupSpawn({ command: "git", args, cwd: hostRepoRoot });
       return;
     }
     try {
-      spawnSync(command, args, { cwd: hostRepoRoot, encoding: "utf8", timeout: 30_000 });
+      spawnSync("git", args, {
+        cwd: hostRepoRoot,
+        env: envWithoutGitContext(),
+        encoding: "utf8",
+        timeout: 30_000,
+      });
     } catch {
       // best-effort
     }
   };
-  remove({ command: "git", args: ["worktree", "remove", "--force", worktreePath] });
-  if (!cleanupSpawn) {
-    try {
-      rmSync(worktreePath, { recursive: true, force: true });
-    } catch {
-      // best-effort
-    }
-  }
-  // The pushed branch lives on the remote for the draft PR; the local twin
-  // has served its purpose and would block a future retry's branch reset.
-  remove({ command: "git", args: ["branch", "-D", branch] });
+  return ({ ok }) => {
+    git(["worktree", "unlock", path]);
+    if (!ok) return;
+    git(["worktree", "remove", "--force", path]);
+    git(["branch", "-D", branch]);
+  };
 };
 
 export const plan = (request, deps = {}) => {
   const { issue, model, hostRepoRoot, baseBranch } = request;
-  const { env = process.env, tmpdir = osTmpdir, which, worktreePath, cleanupSpawn } = deps;
+  const {
+    env = process.env,
+    homedir,
+    which,
+    worktreeRoot,
+    hostKey,
+    runId = newRunId(),
+    pid = process.pid,
+    hostname = osHostname(),
+    cleanupSpawn,
+  } = deps;
   const binary = resolveBinary(env, which);
   if (!binary) return null;
+  if (!runIdPattern.test(runId)) throw new Error(`invalid run id: ${runId}`);
 
-  const path = worktreePath ?? join(tmpdir(), `workbench-issue-${issue}`);
-  const branch = `agent/issue-${issue}`;
+  // Each run owns a fresh path and branch named for its run id, under this
+  // host repo's key: no other run, process or host repo can name the same
+  // ones, so nothing is ever cleared or reset before the run starts.
+  const { path, branch } = runResources({
+    root: worktreeRoot ?? defaultWorktreeRoot(env, homedir),
+    hostKey: hostKey ?? hostKeyFor(hostRepoRoot),
+    issue,
+    runId,
+  });
   const inWorktree = { cwd: path };
 
   return {
+    runId,
     steps: [
       {
-        // A retry must start from a clean worktree (issue #40, story 15).
-        // This step clears a previous FAILED run's kept worktree — the only
-        // thing that could block the re-add — and does nothing on a first
-        // run; its expected failure is why it is best-effort.
-        name: "clear",
-        command: "git",
-        args: ["worktree", "remove", "--force", path],
-        cwd: hostRepoRoot,
-        bestEffort: true,
-      },
-      {
-        // -B resets a branch left behind by an earlier attempt instead of
-        // failing on it; the pushed remote branch is untouched until push.
+        // -b, never -B: an existing branch fails the run instead of being
+        // reset. The lock is Git's own ownership record while the run is
+        // active: another process cannot remove it with a single --force.
         name: "worktree",
         command: "git",
-        args: ["worktree", "add", path, "-B", branch, baseBranch],
+        args: [
+          "worktree",
+          "add",
+          "--lock",
+          "--reason",
+          lockReason({ runId, pid, hostname }),
+          path,
+          "-b",
+          branch,
+          baseBranch,
+        ],
         cwd: hostRepoRoot,
       },
       {
@@ -229,10 +260,7 @@ export const plan = (request, deps = {}) => {
         ...inWorktree,
       },
     ],
-    cleanup: ({ ok }) => {
-      if (!ok) return;
-      worktreeCleanup({ worktreePath: path, branch, hostRepoRoot, cleanupSpawn });
-    },
+    cleanup: worktreeCleanup({ path, branch, hostRepoRoot, cleanupSpawn }),
   };
 };
 

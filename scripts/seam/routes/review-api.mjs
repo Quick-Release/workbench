@@ -2,6 +2,9 @@ import { spawnSync } from "node:child_process";
 import { resolve } from "node:path";
 
 import {
+  parseAgentRunDiscardRequest,
+  parseAgentRunDiscardResult,
+  parseRetainedAgentRuns,
   parseReviewCancelRequest,
   parseReviewHealth,
   parseReviewHistory,
@@ -17,6 +20,7 @@ import { deriveWorkItem } from "../../tracker/labels.mjs";
 import { tokenFromGhCli } from "../../tracker/index.mjs";
 import { GITHUB_API } from "../../tracker/issues.mjs";
 import { createRunRegistry, reviewHealth, startReviewRun } from "../review/review-runner.mjs";
+import { discardRetainedRun, listRetainedRuns } from "../review/agent-worktrees.mjs";
 import { APP_DIRECTORY, loadWorkflowState } from "../workflow/snapshot.mjs";
 import { reviewRunOutcome } from "../../../src/lib/review-run-state.ts";
 
@@ -31,12 +35,14 @@ const HEALTH_ROUTE = /^\/api\/review\/health\/?$/;
 const RUN_ROUTE = /^\/api\/review\/?$/;
 const CANCEL_ROUTE = /^\/api\/review\/cancel\/?$/;
 const HISTORY_ROUTE = /^\/api\/review\/history\/?$/;
+const RETAINED_ROUTE = /^\/api\/review\/retained\/?$/;
+const DISCARD_ROUTE = /^\/api\/review\/discard\/?$/;
+
+const POST_ROUTES = [RUN_ROUTE, CANCEL_ROUTE, DISCARD_ROUTE];
+const GET_ROUTES = [HEALTH_ROUTE, HISTORY_ROUTE, RETAINED_ROUTE];
 
 export const isReviewApiRoute = (pathname) =>
-  HEALTH_ROUTE.test(pathname) ||
-  RUN_ROUTE.test(pathname) ||
-  CANCEL_ROUTE.test(pathname) ||
-  HISTORY_ROUTE.test(pathname);
+  [...POST_ROUTES, ...GET_ROUTES].some((route) => route.test(pathname));
 
 // The session run history (ticket #27): what the dev-server remembers about
 // the runs it has already finished. In-memory and per-server — a restart
@@ -379,6 +385,105 @@ export const handleReviewRunCancel = ({ body, host, origin, registry }) => {
   return { status: 200, json: { cancelled: true, engine: request.engine } };
 };
 
+// Retained issue-agent runs (GH-116, ADR 0027): the run-owned worktrees Git
+// lists for this host repo — active, retained, or quarantined — so the
+// Developer sees what is kept on disk and can discard it.
+export const handleRetainedRuns = ({ method, host, origin, listRuns }) => {
+  const gate = gateRejection({ host, origin });
+  if (gate) return gate;
+
+  if (method !== "GET") return methodMismatch("GET");
+
+  try {
+    return { status: 200, json: parseRetainedAgentRuns({ engine: "opencode", runs: listRuns() }) };
+  } catch (error) {
+    return {
+      status: 500,
+      json: { error: "list_failed", message: String(error?.message ?? error) },
+    };
+  }
+};
+
+// Discard: the body names an engine and a run id, never a path. The server
+// rebuilds the path, and only a worktree Git lists on its exact branch is
+// removed. A live lock refuses; a quarantined lock waits for the explicit
+// second confirmation. Remote branches are never deleted.
+export const handleAgentRunDiscard = ({ body, host, origin, discardRun }) => {
+  const gate = gateRejection({ host, origin });
+  if (gate) return gate;
+
+  let request;
+  try {
+    request = parseAgentRunDiscardRequest(body);
+  } catch {
+    return {
+      status: 400,
+      json: {
+        error: "invalid_request",
+        message: "engine and runId are required, and nothing else is accepted",
+      },
+    };
+  }
+
+  let result;
+  try {
+    result = discardRun({
+      runId: request.runId,
+      confirmQuarantined: request.confirmQuarantined === true,
+    });
+  } catch (error) {
+    return {
+      status: 500,
+      json: { error: "discard_failed", message: String(error?.message ?? error) },
+    };
+  }
+  const { runId } = request;
+  switch (result.status) {
+    case "discarded":
+      return {
+        status: 200,
+        json: parseAgentRunDiscardResult({
+          discarded: true,
+          engine: "opencode",
+          runId,
+          issue: result.run.issue,
+        }),
+      };
+    case "active":
+      return {
+        status: 409,
+        json: {
+          error: "run_active",
+          message: `agent run ${runId} is still running on this host; cancel it or wait for it to end`,
+        },
+      };
+    case "confirmation_required":
+      return {
+        status: 409,
+        json: {
+          error: "confirmation_required",
+          message: `agent run ${runId} is quarantined: its lock outlived its owner. Confirm to discard it anyway.`,
+        },
+      };
+    case "not_found":
+      return {
+        status: 404,
+        json: {
+          error: "run_not_found",
+          message: `no retained agent run ${runId} in this host repo`,
+        },
+      };
+    default:
+      return {
+        status: 500,
+        json: {
+          error: "discard_failed",
+          message: result.message || `discarding agent run ${runId} failed`,
+        },
+      };
+  }
+};
+
 export const reviewApiPlugin = ({
   probeHealth = () => reviewHealth(),
   startRun = startReviewRun,
@@ -386,6 +491,8 @@ export const reviewApiPlugin = ({
   history = createRunHistory(),
   resolveTarget,
   clientGate,
+  listRuns,
+  discardRun,
 } = {}) => ({
   name: "workbench-review-api",
   configureServer(server) {
@@ -406,26 +513,32 @@ export const reviewApiPlugin = ({
     // The bug gate rides every issue start; the default revalidates GitHub
     // live at the enforcement moment (ADR 0012). Tests override it.
     const defaultClientGateForHost = clientGate ?? defaultClientGate({ hostRoot });
+    // Retained runs belong to the host repo the runs execute in.
+    const listRunsForHost = listRuns ?? (() => listRetainedRuns({ hostRepoRoot: hostRoot }));
+    const discardRunForHost =
+      discardRun ?? ((request) => discardRetainedRun({ hostRepoRoot: hostRoot, ...request }));
     server.middlewares.use(
       guardedApi(async (request, response, next, url) => {
         // Route matching comes first: a request this middleware doesn't own
         // must pass through unread — draining its body would break whatever
         // sibling middleware owns it — and only the POST routes read JSON.
         if (!isReviewApiRoute(url.pathname)) return next();
-        // The run and cancel routes answer POST only; the history route
-        // answers GET only — anything else is a named 405 like the health
-        // route gives.
-        if (
-          request.method !== "POST" &&
-          (RUN_ROUTE.test(url.pathname) || CANCEL_ROUTE.test(url.pathname))
-        ) {
+        // The run, cancel and discard routes answer POST only; the history
+        // and retained-run routes answer GET only — anything else is a named
+        // 405 like the health route gives.
+        const isPost = POST_ROUTES.some((route) => route.test(url.pathname));
+        if (request.method !== "POST" && isPost) {
           return sendJson(response, 405, methodMismatch("POST").json);
         }
-        if (request.method !== "GET" && HISTORY_ROUTE.test(url.pathname)) {
+        if (
+          request.method !== "GET" &&
+          !HEALTH_ROUTE.test(url.pathname) &&
+          GET_ROUTES.some((route) => route.test(url.pathname))
+        ) {
           return sendJson(response, 405, methodMismatch("GET").json);
         }
         let body;
-        if (RUN_ROUTE.test(url.pathname) || CANCEL_ROUTE.test(url.pathname)) {
+        if (isPost) {
           const raw = await readBody(request);
           try {
             body = JSON.parse(raw || "{}");
@@ -462,13 +575,27 @@ export const reviewApiPlugin = ({
                   origin: request.headers.origin,
                   registry,
                 })
-              : handleReviewHistory({
-                  method: request.method,
-                  pathname: url.pathname,
-                  host: request.headers.host,
-                  origin: request.headers.origin,
-                  history,
-                });
+              : RETAINED_ROUTE.test(url.pathname)
+                ? handleRetainedRuns({
+                    method: request.method,
+                    host: request.headers.host,
+                    origin: request.headers.origin,
+                    listRuns: listRunsForHost,
+                  })
+                : DISCARD_ROUTE.test(url.pathname)
+                  ? handleAgentRunDiscard({
+                      body,
+                      host: request.headers.host,
+                      origin: request.headers.origin,
+                      discardRun: discardRunForHost,
+                    })
+                  : handleReviewHistory({
+                      method: request.method,
+                      pathname: url.pathname,
+                      host: request.headers.host,
+                      origin: request.headers.origin,
+                      history,
+                    });
         if (!handled) return next();
         if (handled.stream) {
           // The run travels as server-sent events: one JSON event per frame,

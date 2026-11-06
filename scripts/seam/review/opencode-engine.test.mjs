@@ -1,4 +1,4 @@
-import { deepStrictEqual, match, strictEqual } from "node:assert";
+import { deepStrictEqual, match, notStrictEqual, strictEqual } from "node:assert";
 import test from "node:test";
 
 import { defaultModel, opencodeEngine } from "./opencode-engine.mjs";
@@ -19,14 +19,25 @@ const planRequest = (overrides = {}) => ({
 });
 
 // A plan builder with every outside influence pinned: the binary resolves,
-// the worktree path is fixed, and the cleanup spawn records its argv.
+// the worktree root, host key, run id and lock owner are fixed, and the
+// cleanup spawn records its argv.
+const runId = "20261106-120000-a1b2c3";
+const worktree = "/state/worktrees/abc123def456/issue-40-20261106-120000-a1b2c3";
+const branch = "agent/issue-40-20261106-120000-a1b2c3";
+const pinnedRun = {
+  worktreeRoot: "/state/worktrees",
+  hostKey: "abc123def456",
+  runId,
+  pid: 4242,
+  hostname: "devbox",
+};
+
 const builtPlan = (requestOverrides = {}, depOverrides = {}) => {
   const cleanupCalls = [];
   const plan = opencodeEngine.plan(planRequest(requestOverrides), {
     env: {},
     which: () => "/usr/local/bin/opencode",
-    tmpdir: () => "/tmp",
-    worktreePath: "/tmp/workbench-issue-40-fixed",
+    ...pinnedRun,
     cleanupSpawn: ({ command, args, cwd }) => {
       cleanupCalls.push({ command, args, cwd });
       return { status: 0 };
@@ -38,34 +49,32 @@ const builtPlan = (requestOverrides = {}, depOverrides = {}) => {
 
 const stepByName = (plan, name) => plan.steps.find((step) => step.name === name);
 
-test("the plan choreographs clearing, worktree, agent, staging, commit, push, and draft PR", () => {
+test("the plan choreographs worktree, agent, staging, commit, push, and draft PR", () => {
   const { plan } = builtPlan();
   deepStrictEqual(
     plan.steps.map((step) => step.name),
-    ["clear", "worktree", "agent", "stage", "commit", "push", "pull-request"],
+    ["worktree", "agent", "stage", "commit", "push", "pull-request"],
+    "no step clears or resets anything before the run starts",
   );
+  strictEqual(plan.runId, runId);
 });
 
-test("the clearing step is best-effort so a first run and a retry both proceed", () => {
-  const { plan } = builtPlan();
-  const step = stepByName(plan, "clear");
-  strictEqual(step.bestEffort, true, "a missing leftover must not fail the run");
-  deepStrictEqual(step.args, ["worktree", "remove", "--force", "/tmp/workbench-issue-40-fixed"]);
-  deepStrictEqual(step.cwd, "/host/repo");
-});
-
-test("the worktree step forks the default branch on an agent/issue-<n> branch", () => {
+test("the worktree step creates a locked run-owned worktree on a new run branch", () => {
   const { plan } = builtPlan();
   const step = stepByName(plan, "worktree");
   deepStrictEqual(step.command, "git");
   deepStrictEqual(step.args, [
     "worktree",
     "add",
-    "/tmp/workbench-issue-40-fixed",
-    "-B",
-    "agent/issue-40",
+    "--lock",
+    "--reason",
+    "workbench run 20261106-120000-a1b2c3 pid 4242 host devbox",
+    worktree,
+    "-b",
+    branch,
     "origin/main",
   ]);
+  strictEqual(step.bestEffort, undefined, "an existing path or branch fails the run");
   strictEqual(step.cwd, "/host/repo", "the worktree is created from the host repo");
 });
 
@@ -73,7 +82,7 @@ test("the agent step runs the resolved opencode binary on the worktree with json
   const { plan } = builtPlan();
   const step = stepByName(plan, "agent");
   strictEqual(step.command, "/usr/local/bin/opencode");
-  strictEqual(step.cwd, "/tmp/workbench-issue-40-fixed");
+  strictEqual(step.cwd, worktree);
   strictEqual(step.args[0], "run");
   strictEqual(step.args[2], "--model");
   strictEqual(step.args[3], "ollama/qwen3-coder:30b");
@@ -105,8 +114,7 @@ test("the prompt template interpolates only the issue number", () => {
   const other = opencodeEngine.plan(planRequest({ issue: 41 }), {
     env: {},
     which: () => "opencode",
-    tmpdir: () => "/tmp",
-    worktreePath: "/tmp/workbench-issue-40-fixed",
+    ...pinnedRun,
     cleanupSpawn: () => ({ status: 0 }),
   });
   strictEqual(stepByName(other, "agent").args[1], prompt.replaceAll("40", "41"));
@@ -117,7 +125,7 @@ test("the commit step stages everything and attributes the producing CLI and mod
   const add = stepByName(plan, "stage");
   const commit = stepByName(plan, "commit");
   deepStrictEqual(add.args, ["add", "-A"]);
-  deepStrictEqual(add.cwd, "/tmp/workbench-issue-40-fixed");
+  deepStrictEqual(add.cwd, worktree);
   deepStrictEqual(commit.command, "git");
   strictEqual(commit.args[0], "commit");
   match(commit.args[2], /issue #40/);
@@ -128,8 +136,8 @@ test("the commit step stages everything and attributes the producing CLI and mod
 test("the push step publishes only the agent branch", () => {
   const { plan } = builtPlan();
   const step = stepByName(plan, "push");
-  deepStrictEqual(step.args, ["push", "-u", "origin", "agent/issue-40"]);
-  deepStrictEqual(step.cwd, "/tmp/workbench-issue-40-fixed");
+  deepStrictEqual(step.args, ["push", "-u", "origin", branch]);
+  deepStrictEqual(step.cwd, worktree);
 });
 
 test("the pull-request step opens a draft PR whose body fixes the issue and names its provenance", () => {
@@ -140,7 +148,7 @@ test("the pull-request step opens a draft PR whose body fixes the issue and name
   strictEqual(step.args[1], "create");
   deepStrictEqual(step.args[2], "--draft");
   const head = step.args[step.args.indexOf("--head") + 1];
-  strictEqual(head, "agent/issue-40");
+  strictEqual(head, branch);
   const title = step.args[step.args.indexOf("--title") + 1];
   const body = step.args[step.args.indexOf("--body") + 1];
   match(title, /#40/);
@@ -151,32 +159,50 @@ test("the pull-request step opens a draft PR whose body fixes the issue and name
   match(body, /review/i, "the PR asks for human review");
 });
 
-test("a successful run's cleanup removes the worktree and the local branch; a failed run's does not", () => {
+test("cleanup unlocks every ended run; only a successful one removes its worktree and branch", () => {
   const { plan, cleanupCalls } = builtPlan();
   plan.cleanup({ ok: true });
   deepStrictEqual(
     cleanupCalls,
     [
-      {
-        command: "git",
-        args: ["worktree", "remove", "--force", "/tmp/workbench-issue-40-fixed"],
-        cwd: "/host/repo",
-      },
-      {
-        command: "git",
-        args: ["branch", "-D", "agent/issue-40"],
-        cwd: "/host/repo",
-      },
+      { command: "git", args: ["worktree", "unlock", worktree], cwd: "/host/repo" },
+      { command: "git", args: ["worktree", "remove", "--force", worktree], cwd: "/host/repo" },
+      { command: "git", args: ["branch", "-D", branch], cwd: "/host/repo" },
     ],
     "the pushed branch's local twin is dropped, the PR keeps the remote one",
   );
 
   const { plan: failing, cleanupCalls: failingCalls } = builtPlan();
   failing.cleanup({ ok: false });
-  deepStrictEqual(failingCalls, [], "a failed run keeps its worktree for inspection");
+  deepStrictEqual(
+    failingCalls,
+    [{ command: "git", args: ["worktree", "unlock", worktree], cwd: "/host/repo" }],
+    "a failed run keeps its worktree and branch, unlocked, for inspection",
+  );
 });
 
-test("cleanup that fails is best-effort: it throws nothing and still tries the backstop removal", () => {
+test("no step or cleanup names another run's path or branch, or the old fixed names", () => {
+  const { plan: mine, cleanupCalls } = builtPlan();
+  const { plan: theirs } = builtPlan({}, { runId: "20261106-120001-ffffff" });
+  mine.cleanup({ ok: true });
+  const named = [
+    ...mine.steps.flatMap((step) => [step.cwd, ...step.args]),
+    ...cleanupCalls.flatMap((call) => call.args),
+  ];
+  const theirPath = stepByName(theirs, "agent").cwd;
+  const theirBranch = stepByName(theirs, "push").args.at(-1);
+  strictEqual(
+    named.some((arg) => arg.includes(theirPath)),
+    false,
+  );
+  strictEqual(named.includes(theirBranch), false);
+  strictEqual(
+    named.some((arg) => /workbench-issue-|^agent\/issue-40$/.test(arg)),
+    false,
+  );
+});
+
+test("cleanup that fails is best-effort: it throws nothing and still tries every removal", () => {
   const calls = [];
   const { plan } = builtPlan(
     {},
@@ -189,13 +215,14 @@ test("cleanup that fails is best-effort: it throws nothing and still tries the b
   );
   plan.cleanup({ ok: true });
   match(calls.join(" "), /worktree remove --force/, "the git removal was attempted");
+  match(calls.join(" "), /branch -D/, "the branch removal was attempted too");
 });
 
 test("an unresolvable opencode binary yields a null plan, not a doomed one", () => {
   const plan = opencodeEngine.plan(planRequest(), {
     env: {},
     which: () => null,
-    tmpdir: () => "/tmp",
+    ...pinnedRun,
     cleanupSpawn: () => ({ status: 0 }),
   });
   strictEqual(plan, null);
@@ -217,17 +244,36 @@ test("the env override pins the binary without consulting PATH", () => {
   deepStrictEqual(whichCalls, [], "an explicit pin never falls back to PATH");
 });
 
-test("the default worktree path is deterministic per issue, so retries start clean", () => {
+test("the default worktree lives under the durable per-user root, keyed by host and run", () => {
   const plan = opencodeEngine.plan(planRequest({ issue: 7 }), {
-    env: {},
+    env: { XDG_STATE_HOME: "/home/dev/.state" },
     which: () => "opencode",
-    tmpdir: () => "/var/folders/tmp",
+    hostKey: "abc123def456",
+    runId,
     cleanupSpawn: () => ({ status: 0 }),
   });
   const worktreeCwd = stepByName(plan, "agent").cwd;
-  strictEqual(worktreeCwd, "/var/folders/tmp/workbench-issue-7");
-  strictEqual(worktreeCwd, stepByName(plan, "worktree").args[2]);
-  strictEqual(stepByName(plan, "clear").args[3], worktreeCwd);
+  strictEqual(
+    worktreeCwd,
+    "/home/dev/.state/workbench/worktrees/abc123def456/issue-7-20261106-120000-a1b2c3",
+  );
+  strictEqual(stepByName(plan, "worktree").args[5], worktreeCwd);
+});
+
+test("every plan gets a fresh run id, so two plans never share a path or branch", () => {
+  const build = () =>
+    opencodeEngine.plan(planRequest(), {
+      env: { WORKBENCH_WORKTREE_ROOT: "/state" },
+      which: () => "opencode",
+      hostKey: "abc123def456",
+      cleanupSpawn: () => ({ status: 0 }),
+    });
+  const one = build();
+  const two = build();
+  match(one.runId, /^\d{8}-\d{6}-[0-9a-f]{6}$/);
+  notStrictEqual(one.runId, two.runId);
+  notStrictEqual(stepByName(one, "agent").cwd, stepByName(two, "agent").cwd);
+  notStrictEqual(stepByName(one, "push").args.at(-1), stepByName(two, "push").args.at(-1));
 });
 
 test("the agent step's timeout is generous by default and env-overridable", () => {
@@ -238,8 +284,7 @@ test("the agent step's timeout is generous by default and env-overridable", () =
   const overridden = opencodeEngine.plan(planRequest(), {
     env: { WORKBENCH_OPENCODE_TIMEOUT_MS: "60000" },
     which: () => "opencode",
-    tmpdir: () => "/tmp",
-    worktreePath: "/tmp/wt",
+    ...pinnedRun,
     cleanupSpawn: () => ({ status: 0 }),
   });
   strictEqual(stepByName(overridden, "agent").timeoutMs, 60_000);

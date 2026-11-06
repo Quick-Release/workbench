@@ -1,10 +1,11 @@
-import { Square } from "lucide-react";
+import { useState } from "react";
+import { Square, Trash2 } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import type { ReviewRunState } from "@/lib/review-run-state";
-import type { ReviewEngineHealth } from "@/types";
+import type { RetainedAgentRun, ReviewEngineHealth } from "@/types";
 
 // The issue-agent panel (issue #40): one card that takes an issue number and
 // a model, starts the agent, and renders the run's typed event stream — the
@@ -21,17 +22,132 @@ const exitVerdict = (run: ReviewRunState): string => {
   return `The agent run exited with code ${run.exit?.code ?? "unknown"}.`;
 };
 
+// The retained runs (GH-116, ADR 0027): every run-owned worktree Git lists
+// for this host repo. An active run cannot be discarded; a retained one is
+// discarded with one click; a quarantined one (its lock outlived its owner)
+// takes a second, explicit confirmation before the request carries
+// confirmQuarantined.
+const stateLabel: Record<RetainedAgentRun["state"], string> = {
+  active: "active",
+  retained: "retained",
+  quarantined: "quarantined",
+};
+
+function RetainedRuns({
+  runs,
+  onDiscard,
+  discardError,
+}: {
+  runs: readonly RetainedAgentRun[];
+  onDiscard: (runId: string, confirmQuarantined: boolean) => void;
+  discardError: string | null;
+}) {
+  const [confirming, setConfirming] = useState<string | null>(null);
+  return (
+    <div data-slot="issue-agent-retained" className="mt-4">
+      <p className="text-xs font-medium">Retained runs</p>
+      <p className="text-xs text-muted-foreground">
+        Failed and cancelled runs keep their worktree and local branch until you discard them.
+        Discarding never touches the pushed branch or its pull request.
+      </p>
+      {runs.length === 0 ? (
+        <p data-slot="issue-agent-retained-empty" className="mt-1 text-xs text-muted-foreground">
+          No retained runs.
+        </p>
+      ) : (
+        <ul className="mt-2 flex flex-col gap-2">
+          {runs.map((entry) => (
+            <li
+              key={entry.runId}
+              data-slot="issue-agent-retained-run"
+              data-run-state={entry.state}
+              className="flex flex-wrap items-center gap-2 text-xs"
+            >
+              <span>issue #{entry.issue}</span>
+              <span className="font-mono">{entry.runId}</span>
+              <Badge variant="outline">{stateLabel[entry.state]}</Badge>
+              <span className="w-full truncate font-mono text-muted-foreground" title={entry.path}>
+                {entry.path}
+              </span>
+              {entry.state === "quarantined" && confirming === entry.runId ? (
+                <>
+                  <span className="text-amber-600 dark:text-amber-400">
+                    Its lock outlived the process that made it. Discard anyway?
+                  </span>
+                  <Button
+                    type="button"
+                    data-slot="issue-agent-discard-confirm"
+                    variant="destructive"
+                    size="xs"
+                    onClick={() => {
+                      setConfirming(null);
+                      onDiscard(entry.runId, true);
+                    }}
+                  >
+                    Confirm discard
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="xs"
+                    onClick={() => setConfirming(null)}
+                  >
+                    Keep
+                  </Button>
+                </>
+              ) : (
+                <Button
+                  type="button"
+                  data-slot="issue-agent-discard"
+                  variant="outline"
+                  size="xs"
+                  disabled={entry.state === "active"}
+                  title={
+                    entry.state === "active"
+                      ? "this run is still going — cancel it or wait for it to end"
+                      : undefined
+                  }
+                  onClick={() =>
+                    entry.state === "quarantined"
+                      ? setConfirming(entry.runId)
+                      : onDiscard(entry.runId, false)
+                  }
+                >
+                  <Trash2 aria-hidden />
+                  Discard
+                </Button>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+      {discardError && (
+        <p data-slot="issue-agent-discard-error" className="mt-2 text-xs text-destructive">
+          {discardError}
+        </p>
+      )}
+    </div>
+  );
+}
+
 export function IssueAgentPanel({
   health,
   run,
   onStart,
   onCancel,
+  retained = null,
+  onDiscard = () => {},
+  discardError = null,
 }: {
   // The opencode engine's health verdict, or null while unknown.
   health: ReviewEngineHealth | null;
   run: ReviewRunState;
   onStart: (issue: number, model?: string) => void;
   onCancel: () => void;
+  // This host repo's run-owned worktrees, or null while not fetched.
+  retained?: readonly RetainedAgentRun[] | null;
+  onDiscard?: (runId: string, confirmQuarantined: boolean) => void;
+  discardError?: string | null;
 }) {
   const ready = health?.state === "ready";
   const models = ready && "models" in health ? health.models : [];
@@ -207,6 +323,9 @@ export function IssueAgentPanel({
               </p>
             )}
           </div>
+        )}
+        {retained && (
+          <RetainedRuns runs={retained} onDiscard={onDiscard} discardError={discardError} />
         )}
       </CardContent>
     </Card>

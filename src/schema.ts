@@ -8,6 +8,8 @@ import type {
   ReviewCommentResult,
   ReviewHealth,
   ReviewHistory,
+  RetainedAgentRuns,
+  AgentRunDiscardRequest,
   SkillClassification,
   SkillFlowEdge,
   SkillsStatus,
@@ -33,6 +35,7 @@ import {
   decisionSources,
   decisionStatuses,
   engines,
+  agentRunStates,
   noApprovalLine,
   noPublishingLine,
   reviewEngines,
@@ -817,6 +820,56 @@ export type ReviewCancelRequest = Schema.Schema.Type<typeof ReviewCancelRequestS
 
 export const parseReviewCancelRequest: (input: unknown) => ReviewCancelRequest =
   Schema.decodeUnknownSync(ReviewCancelRequestSchema, { onExcessProperty: "error" });
+
+// Retained issue-agent runs (GH-116, ADR 0027): the run-owned worktrees Git
+// lists for this host repo, and the Discard request that removes one. The
+// request names a run id only; the server rebuilds the path itself, so an
+// excess field (a client-sent path) is a rejection, not something ignored.
+export const agentRunIdPattern = /^\d{8}-\d{6}-[0-9a-f]{6}$/;
+
+export const RetainedAgentRunSchema = Schema.Struct({
+  issue: Schema.Number,
+  runId: Schema.String,
+  branch: Schema.String,
+  path: Schema.String,
+  state: Schema.Literals(agentRunStates),
+});
+
+export const RetainedAgentRunsSchema = Schema.Struct({
+  engine: Schema.Literal("opencode"),
+  runs: Schema.Array(RetainedAgentRunSchema),
+});
+
+export const parseRetainedAgentRuns: (input: unknown) => RetainedAgentRuns =
+  Schema.decodeUnknownSync(RetainedAgentRunsSchema, { onExcessProperty: "error" });
+
+export const AgentRunDiscardRequestSchema = Schema.Struct({
+  engine: Schema.Literal("opencode"),
+  runId: Schema.String,
+  confirmQuarantined: Schema.optional(Schema.Boolean),
+});
+
+export const parseAgentRunDiscardRequest: (input: unknown) => AgentRunDiscardRequest = (input) => {
+  const request = Schema.decodeUnknownSync(AgentRunDiscardRequestSchema, {
+    onExcessProperty: "error",
+  })(input);
+  if (!agentRunIdPattern.test(request.runId)) throw new Error("runId must be an agent run id");
+  return request;
+};
+
+export const AgentRunDiscardResultSchema = Schema.Struct({
+  discarded: Schema.Literal(true),
+  engine: Schema.Literal("opencode"),
+  runId: Schema.String,
+  issue: Schema.Number,
+});
+
+export const parseAgentRunDiscardResult: (
+  input: unknown,
+) => Schema.Schema.Type<typeof AgentRunDiscardResultSchema> = Schema.decodeUnknownSync(
+  AgentRunDiscardResultSchema,
+  { onExcessProperty: "error" },
+);
 
 // Owned clarification posture (spec #221, ticket #222): what the seam's
 // status route reports and every clarification action route gates on.

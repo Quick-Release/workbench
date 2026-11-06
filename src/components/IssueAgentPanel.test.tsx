@@ -145,3 +145,80 @@ describe("the issue-agent panel's start request (issue #40)", () => {
     container.remove();
   });
 });
+
+describe("the issue-agent panel's kept worktrees (GH-116)", () => {
+  const kept = (state: "active" | "retained" | "quarantined", suffix: string) => ({
+    issue: 7,
+    runId: `20261106-120000-${suffix}`,
+    branch: `agent/issue-7-20261106-120000-${suffix}`,
+    path: `/state/workbench/worktrees/abc123def456/issue-7-20261106-120000-${suffix}`,
+    state,
+  });
+
+  it("lists each run with its issue, run id, state and path, and hides until fetched", () => {
+    expect(renderPanel()).not.toContain('data-slot="issue-agent-retained"');
+    const html = renderToString(
+      <IssueAgentPanel
+        health={ready}
+        run={emptyReviewRun}
+        onStart={() => {}}
+        onCancel={() => {}}
+        retained={[kept("active", "aaaaaa"), kept("retained", "bbbbbb")]}
+      />,
+    ).replaceAll("<!-- -->", "");
+    expect(html).toContain('data-slot="issue-agent-retained"');
+    expect(html).toContain("20261106-120000-bbbbbb");
+    expect(html).toContain(
+      "/state/workbench/worktrees/abc123def456/issue-7-20261106-120000-bbbbbb",
+    );
+    expect(html).toContain("issue #7");
+    expect(html).toContain('data-run-state="active"');
+  });
+
+  it("discards a retained run in one click, refuses an active one, and confirms a quarantined one", async () => {
+    (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+    const onDiscard = vi.fn();
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    await act(async () => {
+      root.render(
+        <IssueAgentPanel
+          health={ready}
+          run={emptyReviewRun}
+          onStart={() => {}}
+          onCancel={() => {}}
+          retained={[
+            kept("active", "aaaaaa"),
+            kept("retained", "bbbbbb"),
+            kept("quarantined", "cccccc"),
+          ]}
+          onDiscard={onDiscard}
+        />,
+      );
+    });
+    const row = (state: string) =>
+      container.querySelector<HTMLElement>(`[data-run-state="${state}"]`);
+    const discardIn = (state: string) =>
+      row(state)?.querySelector<HTMLButtonElement>('[data-slot="issue-agent-discard"]');
+
+    expect(discardIn("active")?.disabled).toBe(true);
+
+    await act(async () => discardIn("retained")?.click());
+    expect(onDiscard.mock.calls).toEqual([["20261106-120000-bbbbbb", false]]);
+
+    await act(async () => discardIn("quarantined")?.click());
+    expect(onDiscard.mock.calls.length, "the first click only asks").toBe(1);
+    const confirm = row("quarantined")?.querySelector<HTMLButtonElement>(
+      '[data-slot="issue-agent-discard-confirm"]',
+    );
+    expect(confirm).toBeTruthy();
+    await act(async () => confirm?.click());
+    expect(onDiscard.mock.calls[1]).toEqual(["20261106-120000-cccccc", true]);
+
+    await act(async () => {
+      root.unmount();
+    });
+    container.remove();
+  });
+});
