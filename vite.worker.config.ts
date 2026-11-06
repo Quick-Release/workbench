@@ -23,31 +23,53 @@ const workerD1Migrations = await readD1Migrations(
   fileURLToPath(new URL("./worker/migrations", import.meta.url)),
 );
 
+// The worker suite runs as two workerd projects that differ only in the
+// agent's tick interval (#261). The default project leaves
+// DIGEST_TICK_INTERVAL_SECONDS unset, so the agent ticks at the production
+// daily default and no real tick fires between a test's requests. The tick
+// project sets it to one second: the SDK scheduler only fires rows past their
+// scheduled time, and the one-second interval makes a forced alarm
+// deterministically find the tick due. At that interval a real tick also
+// fires on its own within a second of arming, so only tick-driven tests
+// (*.tick.runtime.test.mjs) run there.
+const TICK_TESTS = "worker/*.tick.runtime.test.mjs";
+
+const workerProject = (
+  name: string,
+  bindings: Record<string, string>,
+  test: { include: string[]; exclude?: string[] },
+) => ({
+  plugins: [
+    cloudflareTest({
+      wrangler: { configPath: "./worker/wrangler.jsonc" },
+      miniflare: {
+        bindings: {
+          TELEMETRY_INGEST_TOKEN: "test-ingest-token",
+          TEST_MIGRATIONS: workerD1Migrations,
+          ...bindings,
+        },
+      },
+    }),
+  ],
+  test: { name, pool: "@cloudflare/vitest-pool-workers", ...test },
+});
+
 export default defineConfig({
   test: {
     projects: [
-      {
-        plugins: [
-          cloudflareTest({
-            wrangler: { configPath: "./worker/wrangler.jsonc" },
-            miniflare: {
-              bindings: {
-                TELEMETRY_INGEST_TOKEN: "test-ingest-token",
-                TEST_MIGRATIONS: workerD1Migrations,
-                // The agent's daily tick runs on the SDK scheduler, which
-                // only fires rows past their scheduled time; the one-second
-                // interval makes a forced alarm deterministically find it
-                // due (production defaults to 86,400 seconds).
-                DIGEST_TICK_INTERVAL_SECONDS: "1",
-              },
-            },
-          }),
-        ],
-        test: {
+      workerProject(
+        "worker",
+        {},
+        {
           include: ["worker/runtime.test.mjs", "worker/*.runtime.test.mjs"],
-          pool: "@cloudflare/vitest-pool-workers",
+          exclude: [TICK_TESTS],
         },
-      },
+      ),
+      workerProject(
+        "worker-tick",
+        { DIGEST_TICK_INTERVAL_SECONDS: "1" },
+        { include: [TICK_TESTS] },
+      ),
     ],
   },
 });

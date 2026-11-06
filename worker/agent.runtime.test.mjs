@@ -1,5 +1,7 @@
-import { applyD1Migrations, env, runDurableObjectAlarm, SELF } from "cloudflare:test";
+import { applyD1Migrations, env, SELF } from "cloudflare:test";
 import { beforeAll, expect, it } from "vitest";
+
+import { agentRoute, hoursAgo, requestDigest, submit } from "./agent.fixtures.mjs";
 
 // The agent route's HTTP contract (tickets #31, #32, and #33), driven inside
 // the real workerd runtime. The Agents SDK routes /agents/<agent>/<instance>
@@ -10,40 +12,16 @@ import { beforeAll, expect, it } from "vitest";
 // surface than the ingest API (ADR 0001). The digest itself is exercised
 // through the real ingest path: submissions go in via POST /submissions,
 // the agent reads them back through the same D1 binding production uses.
-// The daily tick is exercised through the runtime's alarm invocation: the
-// test binding runs the tick every second, so a forced alarm deterministically
-// finds it due.
+// This file's project runs the tick at the production daily interval, so no
+// real tick can fire between a test's requests however slow the runner is
+// (#261); the alarm-driven tick is exercised in agent.tick.runtime.test.mjs.
 
 const REPO = "git@github.com:acme/widgets.git";
-const AGENT_ROUTE = `/agents/submission-review-agent/${encodeURIComponent(REPO)}`;
+const AGENT_ROUTE = agentRoute(REPO);
 
 beforeAll(async () => {
   await applyD1Migrations(env.D1_DB, env.TEST_MIGRATIONS);
 });
-
-const hoursAgo = (hours) => new Date(Date.now() - hours * 3_600_000).toISOString();
-
-async function submit(repoRemote, sha, subject, submittedAt) {
-  const response = await SELF.fetch("https://example.com/submissions", {
-    method: "POST",
-    headers: { Authorization: "Bearer test-ingest-token" },
-    body: JSON.stringify({
-      repoRemote,
-      commitSha: sha,
-      subject,
-      body: "What and why.",
-      author: "Ada Lovelace",
-      submittedAt,
-    }),
-  });
-  expect(response.status).toBe(200);
-}
-
-async function requestDigest(route = AGENT_ROUTE) {
-  return SELF.fetch(`https://example.com${route}`, {
-    headers: { Authorization: "Bearer test-ingest-token" },
-  });
-}
 
 it("rejects the agent route without a token", async () => {
   const response = await SELF.fetch(`https://example.com${AGENT_ROUTE}`);
@@ -61,7 +39,7 @@ it("digests the requested repository's pending submissions on demand", async () 
     hoursAgo(2),
   );
 
-  const response = await requestDigest();
+  const response = await requestDigest(AGENT_ROUTE);
   expect(response.status).toBe(200);
   const body = await response.json();
   expect(body.ok).toBe(true);
@@ -76,7 +54,7 @@ it("digests the requested repository's pending submissions on demand", async () 
 });
 
 it("digests an empty repository to zeros", async () => {
-  const emptyRoute = `/agents/submission-review-agent/${encodeURIComponent("git@github.com:acme/empty.git")}`;
+  const emptyRoute = agentRoute("git@github.com:acme/empty.git");
   const response = await requestDigest(emptyRoute);
   expect(response.status).toBe(200);
   const body = await response.json();
@@ -90,7 +68,7 @@ it("recomputes on demand and reports the previous run", async () => {
   // A repo of its own: the digest is per repository, so the run history
   // asserted here cannot be disturbed by the other tests' submissions.
   const runRepo = "git@github.com:acme/digest-runs.git";
-  const runRoute = `/agents/submission-review-agent/${encodeURIComponent(runRepo)}`;
+  const runRoute = agentRoute(runRepo);
   await submit(runRepo, "d".repeat(40), "feat: before the first run", hoursAgo(1));
   const firstBody = await (await requestDigest(runRoute)).json();
   expect(firstBody.digest.total).toBe(1);
@@ -106,42 +84,13 @@ it("recomputes on demand and reports the previous run", async () => {
   expect(secondBody.previous.items.map((item) => item.sha)).not.toContain("e".repeat(40));
 });
 
-it("persists a digest on the scheduled tick without any request", async () => {
-  // A repo of its own, so no other test's digest runs can masquerade as
-  // this tick's. Waking the agent once through the authenticated route
-  // arms the schedule; the tick itself then runs alarm-driven, with no
-  // digest-serving request involved.
-  const tickRepo = "git@github.com:acme/tick-runs.git";
-  const tickRoute = `/agents/submission-review-agent/${encodeURIComponent(tickRepo)}`;
-  const tickStub = env.SubmissionReviewAgent.get(
-    env.SubmissionReviewAgent.idFromName(encodeURIComponent(tickRepo)),
-  );
-
-  await submit(tickRepo, "f0".repeat(20), "feat: before arming", hoursAgo(2));
-  const armedBody = await (await requestDigest(tickRoute)).json();
-  expect(armedBody.digest.total).toBe(1);
-
-  // Past the one-second test interval, the forced alarm finds the tick due
-  // and it persists the digest from the rows as they are now — a request
-  // to the agent route is never made.
-  await submit(tickRepo, "f1".repeat(20), "feat: before the tick", hoursAgo(1));
-  await new Promise((resolve) => setTimeout(resolve, 1_100));
-  expect(await runDurableObjectAlarm(tickStub)).toBe(true);
-
-  const nextBody = await (await requestDigest(tickRoute)).json();
-  expect(nextBody.digest.total).toBe(2);
-  // The only run persisted between the two requests was the tick's: its
-  // digest already counted the second submission.
-  expect(nextBody.previous.total).toBe(2);
-  expect(nextBody.previous.computedAt).not.toBe(armedBody.digest.computedAt);
-});
-
 it("recomputes on demand after a missed tick", async () => {
   // The scheduler is an optimization, never a correctness dependency: with
   // the schedule armed but the tick not fired, the on-demand request still
-  // computes from the current pending rows.
+  // computes from the current pending rows. At this project's daily
+  // interval the armed tick cannot come due mid-test, so it is truly missed.
   const missedRepo = "git@github.com:acme/missed-ticks.git";
-  const missedRoute = `/agents/submission-review-agent/${encodeURIComponent(missedRepo)}`;
+  const missedRoute = agentRoute(missedRepo);
   await submit(missedRepo, "f2".repeat(20), "feat: at arming", hoursAgo(2));
   const armedBody = await (await requestDigest(missedRoute)).json();
   expect(armedBody.digest.total).toBe(1);
@@ -155,7 +104,7 @@ it("recomputes on demand after a missed tick", async () => {
 it("answers 405 for non-GET methods on the digest route", async () => {
   // Computing and persisting a digest is a read: a POST must not trigger a
   // run, so the route answers method-not-allowed instead.
-  const methodRepo = `/agents/submission-review-agent/${encodeURIComponent("git@github.com:acme/methods.git")}`;
+  const methodRepo = agentRoute("git@github.com:acme/methods.git");
   const response = await SELF.fetch(`https://example.com${methodRepo}`, {
     method: "POST",
     headers: { Authorization: "Bearer test-ingest-token" },
@@ -181,7 +130,7 @@ it("serializes concurrent digest runs into one previous-run chain", async () => 
   // runs must land one at a time: exactly the first has no predecessor, and
   // every later run's previous is the run just before it.
   const raceRepo = "git@github.com:acme/race-serialization.git";
-  const raceRoute = `/agents/submission-review-agent/${encodeURIComponent(raceRepo)}`;
+  const raceRoute = agentRoute(raceRepo);
   await submit(raceRepo, "f4".repeat(20), "feat: one pending row", hoursAgo(1));
 
   const bodies = await Promise.all(

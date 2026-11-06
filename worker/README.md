@@ -25,7 +25,7 @@ HTTP seam in workerd (`*.runtime.test.mjs`).
   scheduler with one daily tick (#33) that persists the digest with no
   request; the interval defaults to 86,400 seconds and is overridable with
   the `DIGEST_TICK_INTERVAL_SECONDS` variable (the workerd suite drives it
-  at one second).
+  at one second, only for the tick tests in `*.tick.runtime.test.mjs`).
 - `/llm/anthropic/*` — the session-capture proxy (ticket #35): forwards
   the request to the provider origin with the client's credential swapped
   for the provider key, relays the response untouched (streamed as it
