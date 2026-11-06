@@ -209,11 +209,16 @@ export OLLAMA_CONTEXT_LENGTH=32768   # before `ollama serve` — the 4096
 ```
 
 An agent run is unattended but fenced: it executes in a fresh git worktree
+of its own, on its own `agent/issue-<n>-<run-id>` branch,
 under a workbench-provided permission config that denies everything outside
 the worktree and denies publishing outright (`git push`, `gh pr create`); the
-run ends in a draft pull request, which is the human gate. A failed run keeps
-its worktree for inspection; a successful one cleans it up. Environment
-overrides: `WORKBENCH_OPENCODE_BIN` (pin the CLI binary),
+run ends in a draft pull request, which is the human gate. A failed or
+cancelled run keeps its worktree and local branch for inspection until you
+discard it from the issue-agent panel; a successful one cleans it up, and a
+retry always starts a new run. Worktrees live under
+`$XDG_STATE_HOME/workbench/worktrees/` (default
+`~/.local/state/workbench/worktrees/`), one directory per host repo.
+Environment overrides: `WORKBENCH_WORKTREE_ROOT` (where run worktrees live), `WORKBENCH_OPENCODE_BIN` (pin the CLI binary),
 `WORKBENCH_OPENCODE_MODEL` (default model), `WORKBENCH_OPENCODE_TIMEOUT_MS`
 (the agent step's time bound), and `OLLAMA_HOST` (where Ollama listens).
 

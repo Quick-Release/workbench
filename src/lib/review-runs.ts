@@ -1,5 +1,10 @@
-import { parseReviewRunEvent, type ReviewRunEvent } from "@/schema";
-import { startDenialReasons, type Engine, type StartDenialReason } from "@/types";
+import { parseRetainedAgentRuns, parseReviewRunEvent, type ReviewRunEvent } from "@/schema";
+import {
+  startDenialReasons,
+  type Engine,
+  type RetainedAgentRun,
+  type StartDenialReason,
+} from "@/types";
 
 // The run client (ticket #26; issue #40): the browser half of the execution
 // seam. A run starts as a POST whose response body is the runner's event
@@ -38,6 +43,14 @@ export class ReviewRunHttpError extends Error {
     return refs ? `${payload.message} Blocking: ${refs}.` : (payload.message ?? null);
   }
 }
+
+// A refused request's typed payload (best-effort: a malformed one only
+// degrades the message) becomes the one error every seam call throws.
+const throwIfRejected = async (response: Response): Promise<void> => {
+  if (response.ok) return;
+  const payload = (await response.json().catch(() => null)) as ReviewRunRejection | null;
+  throw new ReviewRunHttpError(response.status, payload);
+};
 
 export const streamReviewRun = async function* ({
   engine,
@@ -120,4 +133,30 @@ export const cancelReviewRun =
       } | null;
       throw new ReviewRunHttpError(response.status, payload);
     }
+  };
+
+// Retained issue-agent runs (GH-116, ADR 0027): the list is a GET; a discard
+// names the run id only — the server rebuilds the path — and carries the
+// quarantine confirmation only when the Developer gave it.
+export const fetchRetainedRuns = async (
+  fetchImpl: typeof fetch = fetch,
+): Promise<readonly RetainedAgentRun[]> => {
+  const response = await fetchImpl("/api/review/retained");
+  await throwIfRejected(response);
+  return parseRetainedAgentRuns(await response.json()).runs;
+};
+
+export const discardAgentRun =
+  (fetchImpl: typeof fetch = fetch) =>
+  async (runId: string, confirmQuarantined: boolean): Promise<void> => {
+    const response = await fetchImpl("/api/review/discard", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        engine: "opencode",
+        runId,
+        ...(confirmQuarantined ? { confirmQuarantined: true } : {}),
+      }),
+    });
+    await throwIfRejected(response);
   };

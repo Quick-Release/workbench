@@ -777,15 +777,7 @@ test("the opencode engine's real plan reaches the runner's step loop", async () 
   // The registration seam: the entry the runner registers builds the engine's
   // own plan (argv pinned by the engine's tests) and executes it here with a
   // pinned binary so the test stays hermetic.
-  const children = [
-    fakeChild(),
-    fakeChild(),
-    fakeChild(),
-    fakeChild(),
-    fakeChild(),
-    fakeChild(),
-    fakeChild(),
-  ];
+  const children = [fakeChild(), fakeChild(), fakeChild(), fakeChild(), fakeChild(), fakeChild()];
   const { spawn, calls } = spawnEach(children);
   const run = startReviewRun({
     engine: "opencode",
@@ -804,9 +796,9 @@ test("the opencode engine's real plan reaches the runner's step loop", async () 
   strictEqual(events.at(-1).code, 0);
   deepStrictEqual(
     calls.map((call) => call.command),
-    ["git", "git", "/opt/pinned/opencode", "git", "git", "git", "gh"],
+    ["git", "/opt/pinned/opencode", "git", "git", "git", "gh"],
   );
-  strictEqual(calls[2].env.OPENCODE_CONFIG_CONTENT.length > 0, true, "the agent rides the fence");
+  strictEqual(calls[1].env.OPENCODE_CONFIG_CONTENT.length > 0, true, "the agent rides the fence");
 });
 
 test("the registered opencode entry resolves the binary through the engine", () => {
@@ -818,8 +810,8 @@ test("the registered opencode entry resolves the binary through the engine", () 
     { issue: 40, hostRepoRoot: "/h", baseBranch: "origin/main" },
     { WORKBENCH_OPENCODE_BIN: "/opt/x" },
   );
-  strictEqual(plan.steps.length, 7);
-  strictEqual(plan.steps[2].command, "/opt/x");
+  strictEqual(plan.steps.length, 6);
+  strictEqual(plan.steps[1].command, "/opt/x");
 });
 
 test("the opencode entry fills the default model from the environment", () => {
@@ -827,11 +819,11 @@ test("the opencode entry fills the default model from the environment", () => {
     { issue: 40, hostRepoRoot: "/h", baseBranch: "origin/main" },
     { WORKBENCH_OPENCODE_BIN: "/opt/x", WORKBENCH_OPENCODE_MODEL: "ollama/llama3.2:latest" },
   );
-  const pinnedArgs = envPinned.steps[2].args;
+  const pinnedArgs = envPinned.steps[1].args;
   strictEqual(pinnedArgs[pinnedArgs.indexOf("--model") + 1], "ollama/llama3.2:latest");
   const fallbackArgs = opencodeRunCommand(
     { issue: 40, hostRepoRoot: "/h", baseBranch: "origin/main" },
     { WORKBENCH_OPENCODE_BIN: "/opt/x" },
-  ).steps[2].args;
+  ).steps[1].args;
   strictEqual(fallbackArgs[fallbackArgs.indexOf("--model") + 1], "ollama/qwen3-coder:30b");
 });

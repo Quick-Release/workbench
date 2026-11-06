@@ -1048,3 +1048,150 @@ test("the default gate fails closed when the snapshot is unavailable", async () 
   await rejects(() => gate.resolveIssueRecord({ issue: 7 }), /ENOENT|does not exist|not found/i);
   await rejects(() => gate.loadClientPolicyState(), /ENOENT|does not exist|not found/i);
 });
+
+// --- Retained issue-agent runs and Discard (GH-116, ADR 0027) ---
+
+import { handleAgentRunDiscard, handleRetainedRuns } from "./review-api.mjs";
+
+const retainedRun = {
+  issue: 7,
+  runId: "20261106-120000-a1b2c3",
+  branch: "agent/issue-7-20261106-120000-a1b2c3",
+  path: "/state/workbench/worktrees/abc123def456/issue-7-20261106-120000-a1b2c3",
+  state: "retained",
+};
+
+test("the retained-run list answers this host repo's run-owned worktrees", () => {
+  const response = handleRetainedRuns({
+    method: "GET",
+    ...loopback,
+    listRuns: () => [
+      retainedRun,
+      { ...retainedRun, runId: "20261106-120001-ffffff", state: "quarantined" },
+    ],
+  });
+  strictEqual(response.status, 200);
+  deepStrictEqual(response.json.engine, "opencode");
+  deepStrictEqual(
+    response.json.runs.map((run) => run.state),
+    ["retained", "quarantined"],
+  );
+});
+
+test("the retained-run list is gate-checked, GET-only, and a git failure is a named 500", () => {
+  strictEqual(
+    handleRetainedRuns({ method: "GET", host: "evil.example", listRuns: () => [] }).status,
+    403,
+  );
+  strictEqual(handleRetainedRuns({ method: "POST", ...loopback, listRuns: () => [] }).status, 405);
+  const failed = handleRetainedRuns({
+    method: "GET",
+    ...loopback,
+    listRuns: () => {
+      throw new Error("not a git repository");
+    },
+  });
+  strictEqual(failed.status, 500);
+  strictEqual(failed.json.error, "list_failed");
+});
+
+const discardWith = (body, answer = { status: "discarded", run: retainedRun }) => {
+  const calls = [];
+  const response = handleAgentRunDiscard({
+    body,
+    ...loopback,
+    discardRun: (request) => {
+      calls.push(request);
+      return answer;
+    },
+  });
+  return { response, calls };
+};
+
+test("discard names a run id only; the server never receives a client path", () => {
+  const { response, calls } = discardWith({ engine: "opencode", runId: retainedRun.runId });
+  strictEqual(response.status, 200);
+  deepStrictEqual(response.json, {
+    discarded: true,
+    engine: "opencode",
+    runId: retainedRun.runId,
+    issue: 7,
+  });
+  deepStrictEqual(calls, [{ runId: retainedRun.runId, confirmQuarantined: false }]);
+
+  for (const body of [
+    { engine: "opencode", runId: retainedRun.runId, path: "/home/dev/project" },
+    { engine: "opencode", runId: "../../etc" },
+    { engine: "opencode", runId: "/tmp/workbench-issue-7" },
+    { engine: "coderabbit", runId: retainedRun.runId },
+    { engine: "opencode" },
+  ]) {
+    const rejected = discardWith(body);
+    strictEqual(rejected.response.status, 400, JSON.stringify(body));
+    strictEqual(rejected.response.json.error, "invalid_request");
+    deepStrictEqual(rejected.calls, [], "nothing is attempted for a rejected request");
+  }
+});
+
+test("discard maps each ownership answer onto a typed response", () => {
+  const body = { engine: "opencode", runId: retainedRun.runId };
+  const cases = [
+    [{ status: "not_found" }, 404, "run_not_found"],
+    [{ status: "active", run: retainedRun }, 409, "run_active"],
+    [{ status: "confirmation_required", run: retainedRun }, 409, "confirmation_required"],
+    [{ status: "failed", run: retainedRun, message: "boom" }, 500, "discard_failed"],
+  ];
+  for (const [answer, status, error] of cases) {
+    const { response } = discardWith(body, answer);
+    strictEqual(response.status, status, answer.status);
+    strictEqual(response.json.error, error);
+  }
+});
+
+test("a quarantined discard forwards the explicit confirmation", () => {
+  const { calls } = discardWith({
+    engine: "opencode",
+    runId: retainedRun.runId,
+    confirmQuarantined: true,
+  });
+  deepStrictEqual(calls, [{ runId: retainedRun.runId, confirmQuarantined: true }]);
+});
+
+test("discard sits behind the same request gate", () => {
+  const response = handleAgentRunDiscard({
+    body: { engine: "opencode", runId: retainedRun.runId },
+    host: "localhost:4051",
+    origin: "https://evil.example",
+    discardRun: () => {
+      throw new Error("must not run");
+    },
+  });
+  strictEqual(response.status, 403);
+});
+
+test("the retained and discard routes answer through the middleware with their methods", async () => {
+  let captured;
+  reviewApiPlugin({ listRuns: () => [retainedRun] }).configureServer({
+    config: { root: "/host/repo" },
+    middlewares: { use: (fn) => (captured = fn) },
+  });
+  const drive = async (url, method) => {
+    const response = {
+      statusCode: 0,
+      body: undefined,
+      setHeader() {},
+      end(chunk) {
+        response.body = chunk;
+      },
+    };
+    await captured({ url, method, headers: { host: "localhost:4051" }, on() {} }, response, () => {
+      throw new Error("next must not run for a handled route");
+    });
+    return response;
+  };
+  const listed = await drive("/api/review/retained", "GET");
+  strictEqual(listed.statusCode, 200);
+  deepStrictEqual(JSON.parse(listed.body).runs, [retainedRun]);
+  strictEqual((await drive("/api/review/retained", "POST")).statusCode, 405);
+  strictEqual((await drive("/api/review/discard", "GET")).statusCode, 405);
+});

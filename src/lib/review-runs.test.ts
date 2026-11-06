@@ -3,7 +3,13 @@ import { vi } from "vite-plus/test";
 import { deepStrictEqual, strictEqual } from "node:assert";
 import { describe, expect, it } from "vite-plus/test";
 
-import { ReviewRunHttpError, cancelReviewRun, streamReviewRun } from "./review-runs";
+import {
+  ReviewRunHttpError,
+  cancelReviewRun,
+  discardAgentRun,
+  fetchRetainedRuns,
+  streamReviewRun,
+} from "./review-runs";
 
 // The review-run client (ticket #26): the SSE frame parser and the two
 // POSTs, with the network boundary stubbed — only engine + pr ever travel,
@@ -147,5 +153,44 @@ describe("ReviewRunHttpError denials (GH-136)", () => {
       }).denialMessage(),
     ).toBeNull();
     expect(new ReviewRunHttpError(500, null).denialMessage()).toBeNull();
+  });
+});
+
+describe("retained agent runs (GH-116)", () => {
+  it("a discard sends the run id only, with the confirmation only when given", async () => {
+    const bodies: unknown[] = [];
+    const fetchImpl = (async (_url: string, init?: RequestInit) => {
+      bodies.push(JSON.parse(String(init?.body)));
+      return new Response("{}", { status: 200 });
+    }) as typeof fetch;
+    await discardAgentRun(fetchImpl)("20261106-120000-a1b2c3", false);
+    await discardAgentRun(fetchImpl)("20261106-120000-a1b2c3", true);
+    expect(bodies).toEqual([
+      { engine: "opencode", runId: "20261106-120000-a1b2c3" },
+      { engine: "opencode", runId: "20261106-120000-a1b2c3", confirmQuarantined: true },
+    ]);
+  });
+
+  it("a refused discard surfaces the server's typed message", async () => {
+    const fetchImpl = (async () =>
+      new Response(JSON.stringify({ error: "run_active", message: "still running" }), {
+        status: 409,
+      })) as typeof fetch;
+    await expect(discardAgentRun(fetchImpl)("20261106-120000-a1b2c3", false)).rejects.toThrow(
+      "still running",
+    );
+  });
+
+  it("the retained list is validated at the seam", async () => {
+    const run = {
+      issue: 7,
+      runId: "20261106-120000-a1b2c3",
+      branch: "agent/issue-7-20261106-120000-a1b2c3",
+      path: "/state/x",
+      state: "quarantined",
+    };
+    const fetchImpl = (async () =>
+      new Response(JSON.stringify({ engine: "opencode", runs: [run] }))) as typeof fetch;
+    expect(await fetchRetainedRuns(fetchImpl)).toEqual([run]);
   });
 });
