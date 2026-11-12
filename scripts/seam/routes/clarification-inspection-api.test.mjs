@@ -237,6 +237,8 @@ test("run action rejections keep their typed statuses", async () => {
     ["manifest_stale", 409],
     ["busy", 409],
     ["run_not_found", 404],
+    ["publication_uncertain", 409],
+    ["dispatch_unrecorded", 502],
   ];
   for (const [code, statusCode] of cases) {
     const answer = await handleClarificationApi(

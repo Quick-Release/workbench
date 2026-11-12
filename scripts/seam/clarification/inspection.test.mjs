@@ -66,16 +66,26 @@ const liveSession = () => {
 
 const withInspection = async (fn, { trackerFails = false, denyStart = false } = {}) => {
   const directory = await mkdtemp(join(tmpdir(), "workbench-clarification-inspection-"));
+  // One clock for store and coordinator; tests that need a lease to lapse
+  // advance it explicitly — never a real sleep.
+  let now = Date.parse("2026-09-18T00:00:00Z");
+  const clock = () => new Date(now).toISOString().replace(".000Z", "Z");
+  const advance = (ms) => {
+    now += ms;
+  };
   const store = openClarificationStore({
     hostRepo: "example/project",
     databasePath: join(directory, "runs.sqlite"),
-    clock: () => "2026-09-18T00:00:00Z",
+    clock,
   });
   const { tracker, calls } = recordingTracker({ fail: trackerFails });
   const sessions = [];
   const sessionPort = {
     deny: denyStart,
+    // A test hook run inside the handshake, before it acks or denies.
+    during: null,
     start: async () => {
+      if (sessionPort.during) await sessionPort.during();
       if (sessionPort.deny)
         throw Object.assign(new Error("no runtime here"), { code: "runtime_unconfigured" });
       const session = liveSession();
@@ -85,14 +95,14 @@ const withInspection = async (fn, { trackerFails = false, denyStart = false } = 
   };
   const coordinator = createClarificationCoordinator({
     store,
-    clock: () => "2026-09-18T00:00:00Z",
+    clock,
     tracker,
     sessions: sessionPort,
     provider: "openai-codex-oauth",
     dataDestination: "https://api.openai.com",
   });
   try {
-    return await fn({ coordinator, store, trackerCalls: calls, sessions, sessionPort });
+    return await fn({ coordinator, store, trackerCalls: calls, sessions, sessionPort, advance });
   } finally {
     store.close();
     await rm(directory, { recursive: true, force: true });
@@ -392,4 +402,160 @@ test("run inspection and every run action only ever read the tracker", async () 
     },
     { denyStart: true },
   );
+});
+
+// --- Review defects on the run actions (ticket #237 follow-up). ---
+
+const LEASE_TTL_PAST = 31_000;
+
+test("concurrent retries on a parked run dispatch exactly one fresh attempt", async () => {
+  await withInspection(
+    async ({ coordinator, store, sessionPort, sessions }) => {
+      const runId = await deniedStart(coordinator);
+      sessionPort.deny = false;
+      const retry = (requestId) =>
+        coordinator.runAction({
+          runId,
+          requestId,
+          action: { kind: "retry", revision: REVISION },
+        });
+      const results = await Promise.allSettled([retry("retry-a"), retry("retry-b")]);
+      strictEqual(results.filter((r) => r.status === "fulfilled").length, 1);
+      const refused = results.find((r) => r.status === "rejected");
+      strictEqual(refused.reason.code, "busy");
+      strictEqual(sessions.length, 1);
+      strictEqual(store.listAttempts(runId).filter((a) => a.state === "active").length, 1);
+    },
+    { denyStart: true },
+  );
+});
+
+// The crash window: an approval was consumed and no publication outcome was
+// ever recorded — the write may have landed. Neither cancel nor retry may
+// open a path to a second approval on top of it.
+const spendApprovalWithoutOutcome = (store, runId, attemptId) => {
+  const { lease } = store.acquireLease({ runId, owner: "crashed-publisher" });
+  const { approval } = store.recordApproval({
+    attemptId,
+    binding: { bodyDigest: "sha-256:x" },
+    leaseToken: lease.token,
+  });
+  store.consumeApproval({ nonce: approval.nonce, leaseToken: lease.token });
+  return lease.token;
+};
+
+test("cancel refuses while a consumed approval has no publication outcome", async () => {
+  await withInspection(async ({ coordinator, store, advance }) => {
+    const { run, attempt } = await start(coordinator);
+    advance(LEASE_TTL_PAST);
+    spendApprovalWithoutOutcome(store, run.runId, attempt.attemptId);
+    await rejects(
+      () =>
+        coordinator.runAction({
+          runId: run.runId,
+          requestId: "c1",
+          action: { kind: "cancel-attempt", attemptId: attempt.attemptId },
+        }),
+      { code: "publication_uncertain" },
+    );
+    strictEqual(store.getAttempt(attempt.attemptId).state, "active");
+  });
+});
+
+test("retry refuses while any attempt holds a consumed approval without an outcome", async () => {
+  await withInspection(async ({ coordinator, store, advance, sessions }) => {
+    const { run, attempt } = await start(coordinator);
+    advance(LEASE_TTL_PAST);
+    const token = spendApprovalWithoutOutcome(store, run.runId, attempt.attemptId);
+    // The record a cancel would have left before the guard existed.
+    store.updateAttemptState({ attemptId: attempt.attemptId, to: "terminal", leaseToken: token });
+    store.updateRunState({ runId: run.runId, to: "awaiting-human", leaseToken: token });
+    advance(LEASE_TTL_PAST);
+    await rejects(
+      () =>
+        coordinator.runAction({
+          runId: run.runId,
+          requestId: "retry-1",
+          action: { kind: "retry", revision: REVISION },
+        }),
+      { code: "publication_uncertain" },
+    );
+    strictEqual(store.listAttempts(run.runId).length, 1);
+    strictEqual(sessions.length, 1);
+  });
+});
+
+test("retry disposes the live session of the parked attempt it supersedes", async () => {
+  await withInspection(async ({ coordinator, store, sessions }) => {
+    const { run, attempt } = await start(coordinator);
+    coordinator.recordOutcome({
+      runId: run.runId,
+      attemptId: attempt.attemptId,
+      outcome: { kind: "provider-failure", reason: "quota" },
+    });
+    strictEqual(store.getAttempt(attempt.attemptId).state, "awaiting-human");
+    await coordinator.runAction({
+      runId: run.runId,
+      requestId: "retry-1",
+      action: { kind: "retry", revision: REVISION },
+    });
+    strictEqual(sessions[0].disposed, 1);
+    strictEqual(sessions[1].disposed, 0);
+    strictEqual(
+      coordinator.conversationState({ runId: run.runId, attemptId: attempt.attemptId }).available,
+      false,
+    );
+  });
+});
+
+test("discard disposes every live session on the run", async () => {
+  await withInspection(async ({ coordinator, sessions }) => {
+    const { run, attempt } = await start(coordinator);
+    coordinator.recordProcessDeath({ runId: run.runId, attemptId: attempt.attemptId, exit: null });
+    await coordinator.runAction({
+      runId: run.runId,
+      requestId: "d1",
+      action: { kind: "discard-evidence", confirmation: run.runId },
+    });
+    strictEqual(sessions[0].disposed, 1);
+    strictEqual(
+      coordinator.conversationState({ runId: run.runId, attemptId: attempt.attemptId }).available,
+      false,
+    );
+  });
+});
+
+test("a denial after a handshake longer than the lease is still a recorded start denial", async () => {
+  await withInspection(
+    async ({ coordinator, store, sessionPort, advance }) => {
+      sessionPort.during = async () => advance(LEASE_TTL_PAST);
+      await rejects(() => start(coordinator), { code: "start_denied" });
+      const { runId } = await coordinator.runForIssue({ issueNumber: 230 });
+      strictEqual(store.listAttempts(runId)[0].state, "terminal");
+      strictEqual(store.getRun(runId).state, "awaiting-human");
+    },
+    { denyStart: true },
+  );
+});
+
+test("an acked session whose dispatch mark cannot be recorded is disposed, never left running", async () => {
+  await withInspection(async ({ coordinator, store, sessionPort, sessions, advance }) => {
+    // During the handshake the lease lapses and another controller takes
+    // it: the mark cannot travel under this process's lease.
+    sessionPort.during = async () => {
+      advance(LEASE_TTL_PAST);
+      const { runId } = store.listRuns()[0];
+      store.acquireLease({ runId, owner: "another-controller" });
+    };
+    await rejects(() => start(coordinator), { code: "dispatch_unrecorded" });
+    strictEqual(sessions[0].disposed, 1);
+    const { runId } = await coordinator.runForIssue({ issueNumber: 230 });
+    const [attempt] = store.listAttempts(runId);
+    strictEqual(attempt.dispatchedAt, undefined);
+    strictEqual(attempt.state, "unknown");
+    strictEqual(
+      coordinator.conversationState({ runId, attemptId: attempt.attemptId }).available,
+      false,
+    );
+  });
 });

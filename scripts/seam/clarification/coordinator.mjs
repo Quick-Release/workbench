@@ -1031,6 +1031,40 @@ export const createClarificationCoordinator = ({
   // The one side effect, behind durable intent (the start's, and a manual
   // retry's — ticket #237): the managed session dispatch for an attempt
   // that is already durable under the live lease `token`.
+  // Ends a live session this process drives: out of the control map first,
+  // so no command can reach it again, then disposed. Disposal failure is the
+  // runtime's own evidence; the caller's record still stands.
+  const disposeLive = async (attemptId) => {
+    const live = liveSessions.get(attemptId);
+    if (live === undefined) return;
+    liveSessions.delete(attemptId);
+    try {
+      await live.session.dispose?.();
+    } catch {
+      // Already out of this process's control map.
+    }
+  };
+
+  // The crash window guard shared by cancel and retry (ticket #237 review):
+  // an approval consumed on any attempt of the run with no publication
+  // outcome recorded is an uncertain write. Cancelling that attempt or
+  // opening a fresh one would let a new approval publish on top of a write
+  // nobody can rule out — reconciliation answers first.
+  const refuseUncertainPublication = (runId) => {
+    for (const attempt of store.listAttempts(runId)) {
+      const approval = store.latestApproval?.(attempt.attemptId) ?? null;
+      if (
+        approval !== null &&
+        approval.status === "consumed" &&
+        !PUBLICATION_OUTCOME_KINDS.includes(store.getAttempt(attempt.attemptId)?.result?.kind)
+      )
+        throw clarificationError(
+          "publication_uncertain",
+          `attempt "${attempt.attemptId}" spent approval ${approval.nonce} and no publication outcome was recorded — the issue body may already be written; reconcile before cancelling or retrying`,
+        );
+    }
+  };
+
   const dispatchSession = async ({ run, attempt, issueNumber, token }) => {
     // A denial here is known failure evidence, recorded under
     // the live lease — the attempt closes terminal, the run parks
@@ -1044,11 +1078,15 @@ export const createClarificationCoordinator = ({
         issueNumber,
       });
       // The one live handle: commands drive this session, fenced by the
-      // lease the start holds — and its frames pump into the ledger.
+      // lease the start holds. Its frames pump into the ledger only once
+      // the dispatch mark below is durable.
       liveSessions.set(attempt.attemptId, { session, leaseToken: token });
-      pumpAttempt({ runId: run.runId, attemptId: attempt.attemptId, session });
     } catch (error) {
       const code = error?.code ?? "unknown";
+      // A handshake may outlast the lease's TTL: the denial's evidence
+      // travels under the start's lease renewed — or re-armed when it lapsed
+      // and nobody else took it — never under a raw token that expired.
+      const leaseToken = holdLease({ runId: run.runId, attemptId: attempt.attemptId }, token);
       store.recordAttemptResult({
         attemptId: attempt.attemptId,
         result: {
@@ -1057,20 +1095,20 @@ export const createClarificationCoordinator = ({
           message: redactSecrets(String(error?.message ?? error)),
           deniedAt: clock(),
         },
-        leaseToken: token,
+        leaseToken,
       });
       store.appendEvent({
         runId: run.runId,
         kind: "attempt.start-denied",
         data: { attemptId: attempt.attemptId, code },
-        leaseToken: token,
+        leaseToken,
       });
       store.updateAttemptState({
         attemptId: attempt.attemptId,
         to: "terminal",
-        leaseToken: token,
+        leaseToken,
       });
-      store.updateRunState({ runId: run.runId, to: "awaiting-human", leaseToken: token });
+      store.updateRunState({ runId: run.runId, to: "awaiting-human", leaseToken });
       publishEvent({
         runId: run.runId,
         event: {
@@ -1097,14 +1135,36 @@ export const createClarificationCoordinator = ({
     // The mark travels under the start's lease, renewed — or re-armed
     // when it lapsed during the handshake and nobody else holds it.
     const session = liveSessions.get(attempt.attemptId)?.session;
-    store.markAttemptDispatched({
-      attemptId: attempt.attemptId,
-      evidence: {
-        signal: "session-started",
-        ...(typeof session?.sessionId === "string" ? { sessionId: session.sessionId } : {}),
-      },
-      leaseToken: holdLease({ runId: run.runId, attemptId: attempt.attemptId }, token),
-    });
+    try {
+      store.markAttemptDispatched({
+        attemptId: attempt.attemptId,
+        evidence: {
+          signal: "session-started",
+          ...(typeof session?.sessionId === "string" ? { sessionId: session.sessionId } : {}),
+        },
+        leaseToken: holdLease({ runId: run.runId, attemptId: attempt.attemptId }, token),
+      });
+    } catch (error) {
+      // No session runs without its dispatch mark (ticket #237 review): the
+      // acked runtime is disposed and leaves the control map, and the loss
+      // is recorded the lease-free way — the dispatch window may have
+      // opened, so the outcome is Unknown, never a start denial.
+      await disposeLive(attempt.attemptId);
+      try {
+        store.recordProcessDeath({ runId: run.runId, attemptId: attempt.attemptId, exit: null });
+        wakeAfterStore(run.runId);
+      } catch {
+        // The record moved on under another writer; the typed error stands.
+      }
+      throw clarificationError(
+        "dispatch_unrecorded",
+        `the managed session for issue ${issueNumber} started, but its dispatch mark could not be recorded (${
+          error?.code ?? "unknown"
+        }) — the session was stopped and the attempt is Unknown until reconciled`,
+        { runId: run.runId, attemptId: attempt.attemptId },
+      );
+    }
+    pumpAttempt({ runId: run.runId, attemptId: attempt.attemptId, session });
     publishEvent({
       runId: run.runId,
       event: {
@@ -2001,17 +2061,10 @@ export const createClarificationCoordinator = ({
               "attempt_not_active",
               `attempt "${attempt.attemptId}" is ${attempt.state} — only an active or parked attempt can be cancelled; uncertainty is reconciled, never cancelled away`,
             );
+          refuseUncertainPublication(runId);
           const live = liveSessions.get(attempt.attemptId);
-          if (live !== undefined) {
-            liveSessions.delete(attempt.attemptId);
-            heldLeases.set(runId, live.leaseToken);
-            try {
-              await live.session.dispose?.();
-            } catch {
-              // The cancellation outcome below is the record; a runtime that
-              // refuses to stop is the stream's own failure evidence.
-            }
-          }
+          if (live !== undefined) heldLeases.set(runId, live.leaseToken);
+          await disposeLive(attempt.attemptId);
           // An active attempt's outcome IS the cancellation; a parked one
           // already carries its outcome evidence, which a cancel never
           // rewrites — it only closes the attempt.
@@ -2067,6 +2120,9 @@ export const createClarificationCoordinator = ({
         case "discard-evidence": {
           if (run.discardedAt) return answer("discard-evidence", false);
           store.discardRunEvidence({ runId, confirmation: action.confirmation });
+          // A discarded run's ledger takes no events: any runtime still
+          // driven for it stops now, instead of spending until its pump dies.
+          for (const { attemptId } of store.listAttempts(runId)) await disposeLive(attemptId);
           heldLeases.delete(runId);
           wakeAfterStore(runId);
           return answer("discard-evidence", true);
@@ -2077,81 +2133,90 @@ export const createClarificationCoordinator = ({
         // a parked attempt superseded, the managed session dispatched
         // behind the durable intent. Only a run parked for the human (or
         // active with nothing live) retries; uncertainty reconciles first.
-        case "retry": {
-          const prior = store.listAttempts(runId).find((a) => a.requestId === requestId);
-          if (prior) return answer("retry", false, { attemptId: prior.attemptId });
-          if (run.state !== "awaiting-human" && run.state !== "active")
-            throw clarificationError(
-              "run_not_active",
-              `run "${runId}" is ${run.state} — reconcile it before a fresh attempt`,
-            );
-          const attempts = store.listAttempts(runId);
-          if (attempts.some((a) => !["terminal", "awaiting-human"].includes(a.state)))
-            throw clarificationError(
-              "busy",
-              `run "${runId}" has an attempt in flight — stop or cancel it before a fresh attempt`,
-            );
-          const issueNumber = Number(run.issueId);
-          if (!Number.isInteger(issueNumber) || issueNumber <= 0)
-            throw clarificationError(
-              "invalid_request",
-              `the run's issue id "${run.issueId}" is not an issue number`,
-            );
-          const revision = action.revision;
-          if (
-            !revision ||
-            typeof revision.updatedAt !== "string" ||
-            typeof revision.bodyHash !== "string"
-          )
-            throw clarificationError(
-              "invalid_request",
-              "a retry presents the re-rendered manifest's pinned issue revision",
-            );
-          const collected = await requireCollectedContext(issueNumber);
-          if (!revisionMatches(revision, collected.revision))
-            throw clarificationError(
-              "manifest_stale",
-              `issue ${issueNumber} moved past the revision the manifest showed — a fresh manifest is required before retrying`,
-            );
-          const token = ensureLease({ runId, attemptId: undefined });
-          for (const parked of attempts.filter((a) => a.state === "awaiting-human")) {
-            store.updateAttemptState({
-              attemptId: parked.attemptId,
-              to: "terminal",
+        case "retry":
+          // One retry at a time per issue, like a start: racing retries
+          // serialize, and the loser re-reads the record the winner wrote —
+          // a typed busy rejection, never a second dispatch.
+          return serializedFor(run.issueId, async () => {
+            const fresh = store.getRun(runId);
+            const prior = store.listAttempts(runId).find((a) => a.requestId === requestId);
+            if (prior) return answer("retry", false, { attemptId: prior.attemptId });
+            if (fresh.state !== "awaiting-human" && fresh.state !== "active")
+              throw clarificationError(
+                "run_not_active",
+                `run "${runId}" is ${fresh.state} — reconcile it before a fresh attempt`,
+              );
+            const attempts = store.listAttempts(runId);
+            if (attempts.some((a) => !["terminal", "awaiting-human"].includes(a.state)))
+              throw clarificationError(
+                "busy",
+                `run "${runId}" has an attempt in flight — stop or cancel it before a fresh attempt`,
+              );
+            const issueNumber = Number(fresh.issueId);
+            if (!Number.isInteger(issueNumber) || issueNumber <= 0)
+              throw clarificationError(
+                "invalid_request",
+                `the run's issue id "${fresh.issueId}" is not an issue number`,
+              );
+            const revision = action.revision;
+            if (
+              !revision ||
+              typeof revision.updatedAt !== "string" ||
+              typeof revision.bodyHash !== "string"
+            )
+              throw clarificationError(
+                "invalid_request",
+                "a retry presents the re-rendered manifest's pinned issue revision",
+              );
+            const collected = await requireCollectedContext(issueNumber);
+            if (!revisionMatches(revision, collected.revision))
+              throw clarificationError(
+                "manifest_stale",
+                `issue ${issueNumber} moved past the revision the manifest showed — a fresh manifest is required before retrying`,
+              );
+            refuseUncertainPublication(runId);
+            const token = ensureLease({ runId, attemptId: undefined });
+            for (const parked of attempts.filter((a) => a.state === "awaiting-human")) {
+              // A superseded attempt's runtime stops with it: one live
+              // execution per run, never an orphan still pumping and spending.
+              await disposeLive(parked.attemptId);
+              store.updateAttemptState({
+                attemptId: parked.attemptId,
+                to: "terminal",
+                leaseToken: token,
+              });
+              store.appendEvent({
+                runId,
+                kind: "attempt.superseded",
+                data: { attemptId: parked.attemptId, requestId },
+                leaseToken: token,
+              });
+            }
+            if (fresh.state === "awaiting-human")
+              store.updateRunState({ runId, to: "active", leaseToken: token });
+            const { attempt } = store.createAttempt({
+              runId,
+              requestId,
+              intent: {
+                kind: "clarification-start",
+                issueNumber,
+                revision,
+                provider,
+                dataDestination,
+              },
+              origin: "manual",
               leaseToken: token,
             });
             store.appendEvent({
               runId,
-              kind: "attempt.superseded",
-              data: { attemptId: parked.attemptId, requestId },
+              kind: "attempt.recorded",
+              data: { attemptId: attempt.attemptId, issueNumber, revision, requestId, retry: true },
               leaseToken: token,
             });
-          }
-          if (run.state === "awaiting-human")
-            store.updateRunState({ runId, to: "active", leaseToken: token });
-          const { attempt } = store.createAttempt({
-            runId,
-            requestId,
-            intent: {
-              kind: "clarification-start",
-              issueNumber,
-              revision,
-              provider,
-              dataDestination,
-            },
-            origin: "manual",
-            leaseToken: token,
+            wakeAfterStore(runId);
+            await dispatchSession({ run: store.getRun(runId), attempt, issueNumber, token });
+            return answer("retry", true, { attemptId: attempt.attemptId });
           });
-          store.appendEvent({
-            runId,
-            kind: "attempt.recorded",
-            data: { attemptId: attempt.attemptId, issueNumber, revision, requestId, retry: true },
-            leaseToken: token,
-          });
-          wakeAfterStore(runId);
-          await dispatchSession({ run: store.getRun(runId), attempt, issueNumber, token });
-          return answer("retry", true, { attemptId: attempt.attemptId });
-        }
 
         default:
           throw clarificationError(

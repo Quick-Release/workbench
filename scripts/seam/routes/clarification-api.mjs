@@ -159,6 +159,7 @@ const coordinatorRejection = (error) => {
     case "conversation_unavailable":
       return { status: 503, json: { error: error.code, message } };
     case "start_denied":
+    case "dispatch_unrecorded":
       return {
         status: 502,
         json: {

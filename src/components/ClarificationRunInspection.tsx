@@ -512,7 +512,12 @@ export const ClarificationRunSection = ({
               // A denial still leaves the durable record behind: reload so
               // the run section renders it.
               await model.reload();
-              if (isError(answer) && answer.error !== "start_denied") return answer.message;
+              if (
+                isError(answer) &&
+                answer.error !== "start_denied" &&
+                answer.error !== "dispatch_unrecorded"
+              )
+                return answer.message;
               setApproving(false);
               return null;
             }}
