@@ -47,6 +47,16 @@
 // handoff that names the next human decision. The outcome result, the
 // lifecycle move it drives, and its operational event commit as one store
 // transaction, so evidence and record cannot disagree.
+//
+// Secret-bearing content (ticket #238, ADR 0016) stops where it is found
+// and stays local: a runtime frame carrying a credential shape stops the
+// run — the live session leaves this process's control map and is
+// disposed, the attempt closes terminal with the detected kinds as its
+// evidence, the run parks awaiting-human — and the ledger keeps the frame
+// with the secret's bytes redacted. A Developer input, a draft save, or a
+// publication body carrying one is a typed refusal before anything is
+// recorded, dispatched, or written. The scan is defense in depth, never
+// proof of absence.
 
 import { noApprovalLine, noPublishingLine } from "../../../src/types.ts";
 import {
@@ -62,6 +72,7 @@ import {
   validateClarificationDraft,
 } from "./draft.mjs";
 import { NO_DRAFT_GAP } from "./context-packet.mjs";
+import { redactSecrets, secretKindsIn } from "./secrets.mjs";
 import { EVENT_ENVELOPE_VERSION } from "./store.mjs";
 import {
   FAILURE_SIGNATURE_HALT,
@@ -90,6 +101,9 @@ const EGRESS_STATEMENT =
 const BUDGET_LINE =
   "provider-reported usage is recorded verbatim; estimates and unknown " +
   "subscription availability stay labeled and never silently convert";
+
+// The attempt results a spent publication approval leaves behind.
+const PUBLICATION_OUTCOME_KINDS = ["published", "publication-failed", "publication-unknown"];
 
 export const clarificationError = (code, message, extra = {}) =>
   Object.assign(new Error(message), { code, ...extra });
@@ -186,7 +200,31 @@ export const createClarificationCoordinator = ({
         "context_unavailable",
         `the tracker context for issue ${issueNumber} is incomplete — the manifest and start withhold rather than guess`,
       );
+    // Repository identity (ticket #238): a read that answers for another
+    // repository or another issue — a transferred issue, a crossed port —
+    // is not this issue's evidence, and nothing may be approved or started
+    // on it.
+    if (
+      collected.issue.number !== issueNumber ||
+      (hostRepo !== undefined && collected.repo !== hostRepo)
+    )
+      throw clarificationError(
+        "context_identity_mismatch",
+        `the tracker answered for ${collected.repo ?? "an unnamed repository"}#${collected.issue.number}, not ${hostRepo ?? "this host repo"}#${issueNumber} — evidence for another identity is never this issue's`,
+      );
     return collected;
+  };
+
+  // The typed refusal for secret-bearing content on a path that would
+  // carry it off this machine: nothing is recorded, dispatched, or written.
+  const refuseSecretBearing = (value, what) => {
+    const kinds = secretKindsIn(value);
+    if (kinds.length > 0)
+      throw clarificationError(
+        "secret_bearing_content",
+        `${what} carries secret-bearing content (${kinds.join(", ")}) — it stays local and goes no further`,
+        { kinds },
+      );
   };
 
   // One start at a time per issue, in process: racing submissions
@@ -532,6 +570,7 @@ export const createClarificationCoordinator = ({
     if (typeof attemptId !== "string" || attemptId === "")
       throw clarificationError("invalid_request", "a draft save names an attempt id");
     const validated = validateClarificationDraft(draft);
+    refuseSecretBearing(validated, "the Clarification draft");
     const run = store.getRun(runId);
     if (!run)
       throw clarificationError(
@@ -721,6 +760,24 @@ export const createClarificationCoordinator = ({
           "no Clarification draft is saved on this attempt — nothing has been proposed to approve",
         );
       const body = publicationBodyFor(saved.draft);
+      refuseSecretBearing(body, "the publication body");
+      // The crash window (ticket #238): an approval already spent on this
+      // attempt whose outcome never landed is an uncertain write — the
+      // command that spent it died between the nonce and the record. A
+      // fresh approval would publish again on top of a write nobody can
+      // rule out; reconciliation answers first.
+      // (A spent approval whose outcome DID land closed the attempt, and
+      // the store refuses a new approval on it as not active.)
+      const prior = store.latestApproval?.(attemptId) ?? null;
+      if (
+        prior !== null &&
+        prior.status === "consumed" &&
+        !PUBLICATION_OUTCOME_KINDS.includes(store.getAttempt(attemptId)?.result?.kind)
+      )
+        throw clarificationError(
+          "publication_uncertain",
+          `attempt "${attemptId}" already spent approval ${prior.nonce} and no outcome was ever recorded — the write may have landed; reconcile the attempt before anything is published again`,
+        );
       if (bodyDigestFor(body) !== bodyDigest)
         throw clarificationError(
           "approval_stale",
@@ -776,8 +833,14 @@ export const createClarificationCoordinator = ({
         freshContextDigest: contextDigestFor(preWrite),
       });
       if (!verdict.ok) {
+        // The gate's verdict is the refusal; the lease must not turn it into
+        // another one. An approval that died of old age outlived the
+        // command's lease too (its window is far longer), so the marking
+        // re-arms this process's lease first — the typed verdict below is
+        // what the Developer is told, never a lease expiry.
+        const blockToken = holdLease({ runId, attemptId }, leaseToken);
         try {
-          store.markApprovalStale({ nonce: approval.nonce, leaseToken });
+          store.markApprovalStale({ nonce: approval.nonce, leaseToken: blockToken });
         } catch (error) {
           // A concurrent consumption beat the marking: the approval is
           // already dead, which is the marking's whole purpose.
@@ -786,7 +849,7 @@ export const createClarificationCoordinator = ({
         recordEvent(runId, {
           kind: "publication.blocked",
           data: { attemptId, requestId, nonce: approval.nonce, reason: verdict.code },
-          leaseToken,
+          leaseToken: blockToken,
         });
         throw clarificationError(verdict.code, verdict.message);
       }
@@ -948,20 +1011,63 @@ export const createClarificationCoordinator = ({
   // stream ends. A session whose port cannot stream records everything
   // else; the runtime's own history still reads back. A pump that dies with
   // its stream records that too — the silence would claim a live runtime.
+  // Secret-bearing output stops the run (ticket #238, ADR 0016): the live
+  // handle leaves the control map first, so no command can reach the
+  // runtime again; the runtime is disposed; then the stop's evidence — the
+  // detected kinds and the frame's cursor, never the bytes — commits as the
+  // attempt's terminal outcome and the run parks awaiting-human for the
+  // human's decision (rotate, discard, or start fresh).
+  const stopOnSecret = async ({ runId, attemptId, cursor, kinds }) => {
+    const live = liveSessions.get(attemptId);
+    liveSessions.delete(attemptId);
+    // Disposal begins at once (the adapter ends the session and kills the
+    // child synchronously); its cleanup is awaited after the record.
+    let disposed;
+    try {
+      disposed = live?.session.dispose?.();
+    } catch {
+      // A runtime that cannot be disposed is already out of this process's
+      // control map; the record below still stops the run.
+    }
+    const leaseToken = holdLease({ runId, attemptId }, live?.leaseToken);
+    store.recordAttemptOutcome({
+      attemptId,
+      to: "terminal",
+      result: { kind: "secret-detected", kinds, cursor, detectedAt: clock() },
+      event: { kind: "attempt.secret-detected", data: { attemptId, kinds, cursor } },
+      leaseToken,
+    });
+    store.updateRunState({ runId, to: "awaiting-human", leaseToken });
+    publishEvent({
+      runId,
+      event: { type: "lifecycle", scope: "attempt", id: attemptId, state: "terminal", at: clock() },
+    });
+    await Promise.resolve(disposed).catch(() => {});
+  };
+
   const pumpAttempt = ({ runId, attemptId, session }) => {
     if (typeof session?.subscribe !== "function") return;
     void (async () => {
       try {
         for await (const frame of session.subscribe(0)) {
           if (frame === null || typeof frame !== "object" || Array.isArray(frame)) continue;
+          const kinds = secretKindsIn(frame.event);
           publishEvent({
             runId,
             event: {
               type: "conversation",
               attemptId,
-              session: { cursor: frame.cursor, envelope: frame.envelope, event: frame.event },
+              session: {
+                cursor: frame.cursor,
+                envelope: frame.envelope,
+                event: kinds.length > 0 ? redactSecrets(frame.event) : frame.event,
+              },
             },
           });
+          if (kinds.length > 0) {
+            await stopOnSecret({ runId, attemptId, cursor: frame.cursor, kinds });
+            return;
+          }
         }
       } catch (error) {
         publishEvent({
@@ -1177,7 +1283,7 @@ export const createClarificationCoordinator = ({
             result: {
               kind: "start-denied",
               code,
-              message: String(error?.message ?? error),
+              message: redactSecrets(String(error?.message ?? error)),
               deniedAt: clock(),
             },
             leaseToken: token,
@@ -1206,9 +1312,9 @@ export const createClarificationCoordinator = ({
           });
           throw clarificationError(
             "start_denied",
-            `the managed session for issue ${issueNumber} was denied before it could start: ${
-              error?.message ?? error
-            }`,
+            `the managed session for issue ${issueNumber} was denied before it could start: ${redactSecrets(
+              String(error?.message ?? error),
+            )}`,
             { runId: run.runId, attemptId: attempt.attemptId },
           );
         }
@@ -1493,6 +1599,7 @@ export const createClarificationCoordinator = ({
     sendPrompt({ runId, attemptId, requestId, text }) {
       if (typeof text !== "string" || text.trim() === "")
         throw clarificationError("invalid_request", "a prompt needs a non-empty text");
+      refuseSecretBearing(text, "the conversation input");
       return dispatchTurnCommand(
         { runId, attemptId, requestId, kind: "conversation.prompt", data: { text } },
         (session) => session.sendPrompt(text),
@@ -1504,6 +1611,7 @@ export const createClarificationCoordinator = ({
     steer({ runId, attemptId, requestId, text }) {
       if (typeof text !== "string" || text.trim() === "")
         throw clarificationError("invalid_request", "a steer needs a non-empty text");
+      refuseSecretBearing(text, "the conversation input");
       return dispatchTurnCommand(
         { runId, attemptId, requestId, kind: "conversation.steer", data: { text } },
         (session) => session.steer(text),
@@ -1514,6 +1622,7 @@ export const createClarificationCoordinator = ({
     queueFollowUp({ runId, attemptId, requestId, text }) {
       if (typeof text !== "string" || text.trim() === "")
         throw clarificationError("invalid_request", "a follow-up needs a non-empty text");
+      refuseSecretBearing(text, "the conversation input");
       return dispatchTurnCommand(
         { runId, attemptId, requestId, kind: "conversation.follow-up-queued", data: { text } },
         (session) => session.queueFollowUp(text),
@@ -1579,6 +1688,7 @@ export const createClarificationCoordinator = ({
         throw clarificationError("invalid_request", "a dialog answer names the dialog");
       if (value === undefined)
         throw clarificationError("invalid_request", "a dialog answer carries a value");
+      refuseSecretBearing(value, "the dialog answer");
       return dispatchRecordedCommand(
         {
           runId,

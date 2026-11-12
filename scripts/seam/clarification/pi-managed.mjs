@@ -69,6 +69,44 @@ export const SUPPORTED_PROTOCOLS = ["1"];
 // revision whenever the runtime pin is.
 export const RETRY_DISABLED_ARGS = ["--no-retry"];
 
+// The pinned switches that keep the managed runtime on Workbench's reviewed
+// resource set (ADR 0016, ADR 0018, ticket #238): no automatic discovery of
+// project or user extensions, skills, prompt templates, context files, or
+// MCP servers; no project-local trust; no tools at all — the clarification
+// profile's reads travel through Workbench-owned channels, not runtime
+// tools — and no startup network operations. Untrusted repository content
+// cannot become authority by sitting where the runtime would look for it.
+// Reviewed against the pinned runtime revision whenever the pin is.
+export const DISCOVERY_DISABLED_ARGS = [
+  "--no-extensions",
+  "--no-skills",
+  "--no-prompt-templates",
+  "--no-context-files",
+  "--no-mcp",
+  "--no-approve",
+  "--no-tools",
+  "--offline",
+];
+
+// The runtime switches that would widen the capability profile — load an
+// extension, skill, prompt template or MCP config, re-enable tools, or trust
+// project-local files. Base args carrying any of them are a typed refusal
+// before anything spawns: the profile is immutable, whoever composes it.
+export const PROFILE_WIDENING_ARGS = [
+  "-e",
+  "--extension",
+  "--skill",
+  "--prompt-template",
+  "-t",
+  "--tools",
+  "-nbt",
+  "--no-builtin-tools",
+  "-a",
+  "--approve",
+  "--mcp-config",
+  "--mcp-project-servers",
+];
+
 // The session's own words for where it stands — never a claim about
 // processes.
 export const SESSION_STATES = ["ready", "waiting-for-input", "awaiting-human", "ended"];
@@ -159,11 +197,28 @@ export const startManagedSession = ({
       "the adapter needs schedule and cancel timeout ports for the bounded dialog timeout",
     );
 
+  if (!Array.isArray(baseArgs) || baseArgs.some((arg) => typeof arg !== "string"))
+    throw adapterError("invalid_adapter", "the runtime's base args are a list of strings");
+  const widening = baseArgs.filter((arg) => PROFILE_WIDENING_ARGS.includes(arg.split("=")[0]));
+  if (widening.length > 0)
+    throw adapterError(
+      "capability_expansion_denied",
+      `the base args ${widening.join(", ")} would widen the immutable capability profile — nothing is spawned`,
+    );
+
   const id = sanitizeSessionId(sessionId);
   const sessionDirectory = join(sessionRoot, id);
   const sessionFile = join(sessionDirectory, "session.jsonl");
   const writerClaimPath = `${sessionFile}.writer`;
-  const argv = [...baseArgs, "--mode", "rpc", ...RETRY_DISABLED_ARGS, "--session", sessionFile];
+  const argv = [
+    ...baseArgs,
+    "--mode",
+    "rpc",
+    ...RETRY_DISABLED_ARGS,
+    ...DISCOVERY_DISABLED_ARGS,
+    "--session",
+    sessionFile,
+  ];
 
   return (async () => {
     // The single-writer claim: an exclusive create, so a second coordinator
@@ -742,6 +797,26 @@ export const startManagedSession = ({
       // The full retained evidence with the latest cursor.
       observe() {
         return { events: [...buffer], latestCursor: cursor };
+      },
+
+      // The coordinator's streaming port: every retained envelope after
+      // `fromCursor`, then each new one as it is observed, ending when the
+      // session ends. The same envelopes observe() and reconnect() serve —
+      // one buffer, no second copy of the evidence.
+      async *subscribe(fromCursor = 0) {
+        let last = fromCursor;
+        while (true) {
+          const pending = buffer.filter((envelope) => envelope.cursor > last);
+          if (pending.length === 0) {
+            if (ended) return;
+            await waitForEvent();
+            continue;
+          }
+          for (const envelope of pending) {
+            last = envelope.cursor;
+            yield envelope;
+          }
+        }
       },
 
       // Reattach a viewer: the retained events after `afterCursor`, or an

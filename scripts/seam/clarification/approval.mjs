@@ -190,6 +190,9 @@ export const publishIssueBodyViaRest = async ({
   try {
     response = await fetchImpl(url, {
       method: "PATCH",
+      // Never followed (ticket #238): a redirected write would carry the
+      // credential and the body to an origin nobody approved.
+      redirect: "manual",
       headers: {
         Accept: "application/vnd.github+json",
         "X-GitHub-Api-Version": API_VERSION,
@@ -201,6 +204,15 @@ export const publishIssueBodyViaRest = async ({
     throw new Error(`the issue-body write could not be delivered (${String(error)})`);
   }
   if (response.ok) return { delivered: true };
+  // A redirect is the tracker declining to apply the write at this URL —
+  // a definite refusal, and the redirect target is never contacted.
+  if (response.status >= 300 && response.status < 400)
+    throw Object.assign(
+      new Error(
+        `the tracker answered the issue-body write with a redirect (HTTP ${response.status}) — it is never followed`,
+      ),
+      { code: "publication-write-refused", status: response.status },
+    );
   if (response.status >= 400 && response.status < 500) {
     throw Object.assign(
       new Error(`the tracker refused the issue-body write (HTTP ${response.status})`),
