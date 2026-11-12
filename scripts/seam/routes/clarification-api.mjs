@@ -133,12 +133,15 @@ const coordinatorRejection = (error) => {
     case "approval_expired":
     case "no_draft":
     case "attempt_not_active":
+    case "publication_uncertain":
+    case "secret_bearing_content":
       return { status: 409, json: { error: error.code, message } };
     case "invalid_cursor":
     case "invalid_request":
     case "invalid_draft":
       return { status: 400, json: { error: "invalid_request", message } };
     case "context_unavailable":
+    case "context_identity_mismatch":
     case "conversation_unavailable":
       return { status: 503, json: { error: error.code, message } };
     case "start_denied":

@@ -1790,7 +1790,14 @@ test("a draft on an unknown run, or an attempt of another run, is a typed not-fo
         (error) => error.code === "attempt_not_found",
       );
     },
-    { tracker: fakeTracker(issueRead), sessions: liveSessions() },
+    {
+      // The read answers for the issue asked about — the coordinator
+      // refuses evidence for another identity (ticket #238).
+      tracker: fakeTracker(({ issueNumber }) =>
+        collectedIssue({ issue: { ...issueRead.issue, number: issueNumber } }),
+      ),
+      sessions: liveSessions(),
+    },
   );
 });
 

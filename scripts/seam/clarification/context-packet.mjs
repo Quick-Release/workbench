@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { readFile, realpath } from "node:fs/promises";
+import { readFile, realpath, stat } from "node:fs/promises";
 import { join, sep } from "node:path";
 
 // The clarification context collector (spec #221, ticket #229, ADR 0017):
@@ -82,8 +82,13 @@ const issueUrl = (apiBase, repo, path = "", params = {}) => {
 // repositories read only through the host's token, which stays inside this
 // adapter and never travels further (ADR 0016's credential boundary).
 const API_VERSION = "2022-11-28";
+// Redirects are never followed (ticket #238): the tracker origin is fixed,
+// and a 3xx — a transferred issue, a hostile proxy — would carry the read,
+// and possibly the credential, to an origin nobody approved. A redirect is
+// a non-ok answer and the read fails closed with its coverage warning.
 const readJson = async (fetchImpl, url, token) => {
   const response = await fetchImpl(url, {
+    redirect: "manual",
     headers: {
       Accept: "application/vnd.github+json",
       "X-GitHub-Api-Version": API_VERSION,
@@ -230,9 +235,13 @@ export const repositoryContextFor = async ({ root, clock }) => {
   const canonicalRoot = await realpath(root);
   const manifestPath = join(canonicalRoot, "package.json");
 
-  let raw;
+  // Resolve, contain, then read (ticket #238): the escape check runs before
+  // a single byte is read, so a manifest symlinked outside the root — to a
+  // secret, a directory, a FIFO that would block forever — is refused
+  // without being opened, and only a regular file is ever read.
+  let canonicalManifest;
   try {
-    raw = await readFile(manifestPath, "utf8");
+    canonicalManifest = await realpath(manifestPath);
   } catch (error) {
     if (error?.code === "ENOENT")
       return {
@@ -244,16 +253,26 @@ export const repositoryContextFor = async ({ root, clock }) => {
       };
     throw packetError(
       "repository_read_failed",
-      `the repository manifest could not be read (${error instanceof Error ? error.message : "read failed"})`,
+      `the repository manifest could not be resolved (${error instanceof Error ? error.message : "resolve failed"})`,
     );
   }
-
-  const canonicalManifest = await realpath(manifestPath);
   if (!canonicalManifest.startsWith(canonicalRoot + sep))
     throw packetError(
       "symlink_escape",
       `the declared manifest at ${manifestPath} resolves to ${canonicalManifest}, outside the repository root — canonical reads never follow a symlink escape`,
     );
+
+  let raw;
+  try {
+    if (!(await stat(canonicalManifest)).isFile())
+      throw new Error("the manifest is not a regular file");
+    raw = await readFile(canonicalManifest, "utf8");
+  } catch (error) {
+    throw packetError(
+      "repository_read_failed",
+      `the repository manifest could not be read (${error instanceof Error ? error.message : "read failed"})`,
+    );
+  }
 
   let manifest;
   try {
