@@ -1253,6 +1253,56 @@ describe("Factory 07 injection: cleanup races", () => {
     return started;
   };
 
+  it("a discard racing a late writer: nothing lands on the discarded record", async () => {
+    await withRig(async ({ controller, clock, sessions }) => {
+      const { coordinator, store } = controller();
+      const { run, attempt } = await quarantined(coordinator);
+      const [session] = sessions.sessions;
+      coordinator.discardRunEvidence({ runId: run.runId, confirmation: run.runId });
+      deepStrictEqual(ledger(store, run.runId), []);
+
+      // The runtime the record lost track of still emits; its pump and any
+      // fenced writer with a still-live token race the discard. Neither may
+      // resurrect evidence (or reuse the purged cursors) on the record.
+      const unhandled = await collectingUnhandled(async () => {
+        session.emit({ type: "message_update", text: "late frame" });
+        await settle();
+      });
+      deepStrictEqual(unhandled, []);
+      throws(
+        () =>
+          coordinator.publish({
+            runId: run.runId,
+            event: { type: "operational", kind: "late", data: {}, at: "t" },
+          }),
+        (error) => error.code === "run_discarded",
+      );
+      // A writer that legitimately acquired a fresh generation after the
+      // start's lease ran out — the strongest late writer there is.
+      clock.tick(DEFAULT_LEASE_TTL_MS + 1);
+      const { lease } = store.acquireLease({ runId: run.runId, owner: "late-writer" });
+      throws(
+        () =>
+          store.appendEvent({ runId: run.runId, kind: "late", data: {}, leaseToken: lease.token }),
+        (error) => error.code === "run_discarded",
+      );
+      throws(
+        () =>
+          store.recordAttemptOutcome({
+            attemptId: attempt.attemptId,
+            to: "terminal",
+            result: { kind: "published" },
+            event: { kind: "publication.succeeded", data: {} },
+            leaseToken: lease.token,
+          }),
+        (error) => error.code === "run_discarded",
+      );
+      deepStrictEqual(store.readEvents({ runId: run.runId, afterCursor: 0 }).events, []);
+      strictEqual(store.getAttempt(attempt.attemptId).state, "quarantined");
+      strictEqual(store.getRun(run.runId).state, "terminal");
+    });
+  });
+
   it("discard and reconciliation race to one winner; the loser is typed", async () => {
     await withRig(async ({ controller }) => {
       const a = controller();
