@@ -583,6 +583,22 @@ export const openClarificationStore = ({
     notFoundCode: "attempt_not_found",
   });
 
+  // A discarded run's ledger is closed for good (ticket #239's cleanup
+  // race): the discard purged the evidence, so the per-run cursor would
+  // restart at 1 — a late frame from a runtime the record lost track of, or
+  // a writer holding a still-live token, would otherwise resurrect evidence
+  // on a destroyed record under cursors a viewer already saw. Every append
+  // path refuses typed, inside the caller's transaction, so a fenced
+  // outcome that carries its event rolls back whole.
+  const refuseDiscarded = (runId) => {
+    const row = ownRun(runId);
+    if (row !== undefined && row.discarded_at !== null && row.discarded_at !== undefined)
+      throw storeError(
+        "run_discarded",
+        `run "${runId}"'s retained evidence was discarded at ${row.discarded_at} — its ledger takes no further events`,
+      );
+  };
+
   // Append inside an open transaction: the per-run cursor is the ledger's
   // own, allocation and insert commit atomically with the caller's write,
   // and the bound trims the oldest rows — which is what makes an old cursor
@@ -593,6 +609,7 @@ export const openClarificationStore = ({
   // some store-level transitions must carry, like a resolved-terminal
   // attempt ending its stream) under the same durability.
   const appendEventObjectInTx = ({ runId, event, at }) => {
+    refuseDiscarded(runId);
     const cursor =
       (database
         .prepare("SELECT MAX(seq) AS max_seq FROM events WHERE run_id = ? AND host_repo = ?")
@@ -1690,6 +1707,7 @@ export const openClarificationStore = ({
       const now = clock();
       database.exec("BEGIN");
       try {
+        refuseDiscarded(runId);
         const persisted = events.map((event) => {
           // Earlier inserts of this same batch are already visible inside
           // the transaction, so the per-row MAX is the whole sequence.
