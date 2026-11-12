@@ -1,4 +1,4 @@
-import { deepStrictEqual, match, strictEqual } from "node:assert";
+import { deepStrictEqual, match, ok, strictEqual } from "node:assert";
 import test from "node:test";
 
 import { clarificationRuntimeLoader, hostRepoSlug } from "./runtime.mjs";
@@ -94,6 +94,31 @@ test("the runtime loader opens the durable store once, at the host repo's own pa
   ]);
 
   // The store opens once and stays open — records outlive requests.
-  await loader();
+  const again = await loader();
   deepStrictEqual(opened.length, 1);
+  // So does the coordinator (ticket #237): the leases it holds and the live
+  // sessions it drives are controller state a request must not drop.
+  strictEqual(again.coordinator, runtime.coordinator);
+});
+
+test("a changed declared provider composes a fresh coordinator over the same store", async () => {
+  let provider = "openai-codex-oauth";
+  const loader = clarificationRuntimeLoader({
+    hostRoot: "/tmp/host-repo",
+    loadConfig: async () => ({
+      repositoryUrl: "https://github.com/Quick-Release/workbench",
+      clarification: {
+        enabled: true,
+        provider,
+        dataDestination: "https://api.openai.com",
+        problems: [],
+      },
+    }),
+    openStore: (args) => ({ hostRepo: args.hostRepo, close() {}, createRun() {} }),
+    token: async () => "",
+  });
+  const first = await loader();
+  provider = "another-provider";
+  const second = await loader();
+  ok(first.coordinator !== second.coordinator);
 });

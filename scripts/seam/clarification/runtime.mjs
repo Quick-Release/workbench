@@ -54,6 +54,7 @@ export const clarificationRuntimeLoader = ({
   fetchImpl = fetch,
 } = {}) => {
   let store;
+  let coordinator;
   const readContext = async (slug, issueNumber) => {
     if (!slug)
       throw clarificationError(
@@ -121,9 +122,18 @@ export const clarificationRuntimeLoader = ({
       await mkdir(dirname(databasePath), { recursive: true });
       store = { hostRepo: slug, database: openStore({ hostRepo: slug, databasePath }) };
     }
-    return {
-      posture,
-      coordinator: createClarificationCoordinator({
+    // One coordinator per open store and declared posture (ticket #237):
+    // its in-memory controller state — the live sessions it drives and the
+    // leases it holds — must outlive a request, or the next request's
+    // fenced write collides with this process's own unexpired lease. A
+    // config edit to provider or destination composes a fresh one.
+    const key = `${slug}\n${config.clarification.provider}\n${config.clarification.dataDestination}`;
+    if (coordinator?.store === store && coordinator.key === key)
+      return { posture, coordinator: coordinator.instance };
+    coordinator = {
+      store,
+      key,
+      instance: createClarificationCoordinator({
         store: store.database,
         tracker: {
           readContext: ({ issueNumber }) => readContext(slug, issueNumber),
@@ -143,5 +153,6 @@ export const clarificationRuntimeLoader = ({
         hostRepo: slug,
       }),
     };
+    return { posture, coordinator: coordinator.instance };
   };
 };

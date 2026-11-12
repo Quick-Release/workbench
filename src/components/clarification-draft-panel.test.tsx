@@ -324,6 +324,47 @@ describe("the clarification draft surface", () => {
     });
     container.remove();
   });
+
+  it("publishes only through its own fresh approval of the exact visible diff", async () => {
+    const withDigest = { ...draftView, publicationBodyDigest: "sha-256:shown" };
+    const fetchMock = vi.fn(async (url: string, _init?: RequestInit) => {
+      if (url.includes("/run?issue=")) return ok(runSection)();
+      if (url.endsWith("/draft")) return ok(withDigest)();
+      if (url.endsWith("/publication"))
+        return ok({
+          published: true,
+          outcome: "published",
+          approval: { nonce: "n1", status: "consumed", expiresAt: "t" },
+        })();
+      throw new Error(`unexpected fetch ${url}`);
+    });
+    const { container, root } = await mount(fetchMock);
+    const publications = () =>
+      fetchMock.mock.calls.filter(([url]) => String(url).endsWith("/publication"));
+
+    // The first click only renders what the approval binds to.
+    const open = container.querySelector("button[aria-label='approve and update issue']");
+    await act(async () => {
+      open?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    });
+    strictEqual(publications().length, 0);
+    expect(container.querySelector("[data-slot='clarification-publish']")?.textContent).toContain(
+      "authorizes nothing else",
+    );
+    const approveButton = container.querySelector("button[aria-label='approve this exact diff']");
+    await act(async () => {
+      approveButton?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    });
+    strictEqual(publications().length, 1);
+    const body = JSON.parse(String((publications()[0] as [string, RequestInit])[1].body));
+    expect(body.bodyDigest).toBe("sha-256:shown");
+    expect(body.revision).toEqual(draftView.issue.revision);
+    expect(container.textContent).toContain("proven by read-back");
+    await act(async () => {
+      root.unmount();
+    });
+    container.remove();
+  });
 });
 
 const deepEqualish = (actual: unknown, expected: unknown) => {

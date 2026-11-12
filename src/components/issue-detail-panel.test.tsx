@@ -235,12 +235,14 @@ describe("the clarification entry point (spec #221, ticket #222)", () => {
     message: "owned clarification is enabled, but its runtime is not part of this build yet",
   };
 
-  it("renders the entry point honestly unavailable when the posture is enabled", () => {
+  it("renders the entry point with the runtime's honest status when the posture is enabled", () => {
     const html = renderPanel({ issueId: "GH-7", clarificationPosture: enabledPosture });
     expect(html).toContain('data-slot="panel-clarification"');
     expect(html).toContain("not part of this build");
-    const button = html.match(/<button[^>]*aria-label="Clarify GH-7"[^>]*>/)?.[0] ?? "";
-    expect(button).toContain("disabled");
+    // The run section (ticket #237) owns the start: it renders the
+    // manifest first, so the server render shows only the section looking
+    // for the issue's run — never a pretend-enabled start.
+    expect(html).toContain('data-slot="clarification-run-section"');
   });
 
   it("renders nothing when the posture is absent, disabled, or invalid", () => {

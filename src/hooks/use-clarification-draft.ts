@@ -1,6 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { parseClarificationDraftView, parseClarificationRunResult } from "../schema";
+import {
+  parseClarificationDraftView,
+  parseClarificationPublicationResult,
+  parseClarificationRunResult,
+  type ClarificationPublicationResult,
+} from "../schema";
+import { rememberOwnRequest } from "../lib/clarification-viewer";
 import type { ClarificationDraftDocument, ClarificationDraftView } from "../types";
 import type { ClarificationCommandError } from "./use-clarification-conversation";
 
@@ -98,5 +104,46 @@ export const useClarificationDraft = (issueNumber: number | null) => {
     [],
   );
 
-  return { view, absent, failure, reload: load, save };
+  // The one publication (ticket #234), wired as the action matrix's fresh
+  // approval (ticket #237): the request presents exactly what the view
+  // displayed — the diff's digest and the revision it was rendered against
+  // — so a draft edited after viewing can never ride this approval.
+  const approve = useCallback(
+    async (
+      shown: ClarificationDraftView,
+      requestId: string,
+    ): Promise<ClarificationPublicationResult | ClarificationCommandError> => {
+      if (!shown.issue || !shown.publicationBodyDigest)
+        return { error: "no_diff", message: "there is no visible diff to approve" };
+      rememberOwnRequest(requestId);
+      try {
+        const response = await fetch(
+          `/api/clarification/runs/${shown.runId}/attempts/${shown.attemptId}/publication`,
+          {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              requestId,
+              revision: shown.issue.revision,
+              bodyDigest: shown.publicationBodyDigest,
+            }),
+          },
+        );
+        const body: unknown = (await response.json()) as unknown;
+        if (!response.ok) {
+          const typed = body as { error?: string; message?: string };
+          return {
+            error: typed.error ?? "publication_failed",
+            message: typed.message ?? `the publication answered ${response.status}`,
+          };
+        }
+        return parseClarificationPublicationResult(body);
+      } catch {
+        return { error: "unreachable", message: "the clarification seam is unreachable" };
+      }
+    },
+    [],
+  );
+
+  return { view, absent, failure, reload: load, save, approve };
 };

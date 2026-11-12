@@ -558,7 +558,10 @@ import type {
   ClarificationConversationStateSchema,
   ClarificationDraftDocumentSchema,
   ClarificationDraftViewSchema,
+  ClarificationInspectionResultSchema,
   ClarificationManifestResultSchema,
+  ClarificationRunActionResultSchema,
+  ClarificationRunListResultSchema,
   ClarificationRunResultSchema,
   ClarificationStartResultSchema,
   ClarificationStatusResultSchema,
@@ -691,6 +694,42 @@ export const clarificationUsageLineKinds = ["reported", "estimated", "unknown"] 
 
 export type ClarificationUsageLineKind = (typeof clarificationUsageLineKinds)[number];
 
+// The readiness vocabulary (ADR 0017, spec #221 user story 17): five
+// independent axes, each answering one of four verdicts — never a score,
+// never a merged word. Mirrored from the context packet's own lists; the
+// inspection read validates against this mirror.
+export const clarificationReadinessVerdicts = [
+  "ready",
+  "needs-information",
+  "unsupported",
+  "unknown",
+] as const;
+
+export type ClarificationReadinessVerdict = (typeof clarificationReadinessVerdicts)[number];
+
+export const clarificationReadinessAxes = [
+  "tracker-eligibility",
+  "brief-completeness",
+  "host-capability",
+  "research-sufficiency",
+  "authorization",
+] as const;
+
+export type ClarificationReadinessAxis = (typeof clarificationReadinessAxes)[number];
+
+// The run-level actions of the inspection action matrix (spec #221, ticket
+// #237, Factory 11): cancel an attempt and retain evidence are two-step
+// confirms, discard is the single typed-confirmed destructive act, and
+// retry is a fresh attempt on a re-rendered manifest — fresh approval.
+export const clarificationRunActionKinds = [
+  "cancel-attempt",
+  "retain-evidence",
+  "discard-evidence",
+  "retry",
+] as const;
+
+export type ClarificationRunActionKind = (typeof clarificationRunActionKinds)[number];
+
 // Who created an attempt: the Developer's manual acts, or the one
 // coordinator-created retry that durable non-dispatch evidence permits.
 // The durable store owns the vocabulary; this mirror validates the wire.
@@ -776,3 +815,15 @@ export type ClarificationDraftDocument = Schema.Schema.Type<
 >;
 
 export type ClarificationDraftView = Schema.Schema.Type<typeof ClarificationDraftViewSchema>;
+
+export type ClarificationInspectionResult = Schema.Schema.Type<
+  typeof ClarificationInspectionResultSchema
+>;
+
+export type ClarificationRunListResult = Schema.Schema.Type<
+  typeof ClarificationRunListResultSchema
+>;
+
+export type ClarificationRunActionResult = Schema.Schema.Type<
+  typeof ClarificationRunActionResultSchema
+>;
