@@ -130,6 +130,14 @@ const fakeStore = (overrides = {}, log = []) => {
       calls.push(["getSnapshot", { runId }]);
       return null;
     },
+    renewLease: (args) => {
+      calls.push(["renewLease", args]);
+      return { lease: { token: args.token } };
+    },
+    markAttemptDispatched: (args) => {
+      calls.push(["markAttemptDispatched", args]);
+      return attempts.find((a) => a.attemptId === args.attemptId) ?? null;
+    },
     ...overrides,
   };
   return store;
@@ -214,8 +222,9 @@ test("start makes the run and attempt durable before the managed session dispatc
 
   // Durability ordering: the run record, the lease, and the attempt (with
   // its dispatch intent) are all committed before the one side effect —
-  // the managed session start — happens last. The attempt going active is
-  // published only after that, from the durable record.
+  // the managed session start — happens last. Its ack lands as the durable
+  // dispatch mark under the renewed lease (ticket #239), and the attempt
+  // going active is published only after that, from the durable record.
   const kinds = log.map(([kind]) => kind);
   deepStrictEqual(kinds, [
     "listRuns",
@@ -225,6 +234,8 @@ test("start makes the run and attempt durable before the managed session dispatc
     "createAttempt",
     "appendEvent",
     "sessions.start",
+    "renewLease",
+    "markAttemptDispatched",
     "appendEvents",
   ]);
   strictEqual(store.calls[4][1].intent.issueNumber, 230);
@@ -1178,6 +1189,7 @@ test("a prompt while a turn is live is a typed refusal with the refusal as evide
     deepStrictEqual(kinds, [
       "run.started",
       "attempt.recorded",
+      "attempt.dispatched",
       "conversation.prompt",
       "conversation.prompt",
       "conversation.prompt-refused",
@@ -1235,6 +1247,7 @@ test("steer and queue are explicit, distinct acts with their own evidence", asyn
     deepStrictEqual(kinds, [
       "run.started",
       "attempt.recorded",
+      "attempt.dispatched",
       "conversation.prompt",
       "conversation.steer",
       "conversation.follow-up-queued",
@@ -1531,8 +1544,9 @@ test("command evidence wakes live viewers the moment it is durable", async () =>
       if (!done) frames.push(value);
       return done;
     };
-    // Drain the start's replay: run.started, attempt.recorded, active.
-    for (let i = 0; i < 3; i += 1) await read();
+    // Drain the start's replay: run.started, attempt.recorded,
+    // attempt.dispatched, active.
+    for (let i = 0; i < 4; i += 1) await read();
 
     // The stream is waiting; a fenced command write must reach it without
     // any publication event riding along.
@@ -2194,8 +2208,51 @@ test("a quota outcome parks awaiting-human, folds its usage, and the record surf
   });
 });
 
+// A recorded attempt whose managed session never acked its start: no live
+// handle, no dispatch mark — the only record a start denial can honestly
+// close (an acked start carries the dispatch mark, ticket #239). The
+// recording controller's lease has lapsed, so the coordinator re-arms its
+// own generation, as it does across any real gap.
+const withUnackedAttempt = async (fn) => {
+  const directory = await mkdtemp(join(tmpdir(), "workbench-clarification-unacked-"));
+  let now = Date.parse("2026-09-18T00:00:00Z");
+  const clock = () => new Date(now).toISOString();
+  const store = openClarificationStore({
+    hostRepo: "example/project",
+    databasePath: join(directory, "runs.sqlite"),
+    clock,
+  });
+  const coordinator = createClarificationCoordinator({
+    store,
+    clock,
+    tracker: fakeTracker(collectedIssue()),
+    sessions: fakeSessions(),
+  });
+  try {
+    const { run } = store.createRun({ issueId: "230", requestId: "start-req-1" });
+    const { lease } = store.acquireLease({ runId: run.runId, owner: "a-prior-controller" });
+    const { attempt } = store.createAttempt({
+      runId: run.runId,
+      requestId: "start-req-1",
+      intent: { kind: "clarification-start" },
+      leaseToken: lease.token,
+    });
+    // Each lapse moves past a lease window: without a live session handle
+    // the coordinator keeps no token between commands, so every command
+    // here re-arms a fresh generation of its own.
+    const lapse = () => {
+      now += 60_000;
+    };
+    lapse();
+    return await fn({ coordinator, store, run, attempt, lapse });
+  } finally {
+    store.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+};
+
 test("a start-denied attempt grounds the one coordinator retry, exactly once", async () => {
-  await withLiveConversation(async ({ coordinator, store, run, attempt }) => {
+  await withUnackedAttempt(async ({ coordinator, store, run, attempt, lapse }) => {
     // A runtime the port denies before it could start: the known-failure
     // evidence of a start denial.
     coordinator.recordOutcome({
@@ -2208,6 +2265,7 @@ test("a start-denied attempt grounds the one coordinator retry, exactly once", a
     strictEqual(outcome.kind, "start-denied");
     strictEqual(outcome.classification, "known-failure");
 
+    lapse();
     const { attempt: retry, created } = coordinator.requestCoordinatorRetry({
       runId: run.runId,
       fromAttemptId: attempt.attemptId,
@@ -2219,6 +2277,7 @@ test("a start-denied attempt grounds the one coordinator retry, exactly once", a
 
     // Exactly once: a second coordinator retry on this run is the schema's
     // typed refusal, not a second attempt.
+    lapse();
     throws(
       () =>
         coordinator.requestCoordinatorRetry({

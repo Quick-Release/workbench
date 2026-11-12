@@ -1227,6 +1227,22 @@ export const createClarificationCoordinator = ({
             { runId: run.runId, attemptId: attempt.attemptId },
           );
         }
+        // The handshake acked: the runtime is ready and the dispatch window
+        // is open, so the record carries the dispatch mark from here on —
+        // "no dispatch occurred" can never be proven for this attempt again,
+        // and no later outcome (even one claiming a start denial) can open
+        // the one coordinator retry onto a second execution (ticket #239).
+        // The mark travels under the start's lease, renewed — or re-armed
+        // when it lapsed during the handshake and nobody else holds it.
+        const session = liveSessions.get(attempt.attemptId)?.session;
+        store.markAttemptDispatched({
+          attemptId: attempt.attemptId,
+          evidence: {
+            signal: "session-started",
+            ...(typeof session?.sessionId === "string" ? { sessionId: session.sessionId } : {}),
+          },
+          leaseToken: holdLease({ runId: run.runId, attemptId: attempt.attemptId }, token),
+        });
         publishEvent({
           runId: run.runId,
           event: {

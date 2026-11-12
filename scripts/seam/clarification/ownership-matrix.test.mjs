@@ -694,6 +694,36 @@ describe("Factory 07 injection: dispatch crash points", () => {
     });
   });
 
+  it("after the ack: the dispatch is durable evidence that forbids the one coordinator retry", async () => {
+    await withRig(async ({ controller, sessions }) => {
+      const { coordinator, store } = controller();
+      const { run, attempt } = await coordinator.start(startArgs("start-1"));
+      // The handshake acked: the runtime is ready, the dispatch window open.
+      ok(store.getAttempt(attempt.attemptId).dispatchedAt);
+      ok(ledger(store, run.runId).includes("attempt.dispatched"));
+
+      // Even an outcome that claims a start denial cannot reopen the retry:
+      // the record proves the window opened, so non-dispatch is unprovable.
+      coordinator.recordOutcome({
+        runId: run.runId,
+        attemptId: attempt.attemptId,
+        outcome: { kind: "start-denied", code: "runtime_ended" },
+      });
+      throws(
+        () =>
+          coordinator.requestCoordinatorRetry({
+            runId: run.runId,
+            fromAttemptId: attempt.attemptId,
+            requestId: "retry-1",
+            intent: {},
+          }),
+        (error) => error.code === "retry_not_eligible",
+      );
+      strictEqual(store.listAttempts(run.runId).length, 1);
+      strictEqual(sessions.starts.length, 1);
+    });
+  });
+
   it("a prompt crash before its durable intent never reaches the runtime", async () => {
     await withRig(async ({ controller, sessions }) => {
       const { coordinator, faults, store } = controller();
