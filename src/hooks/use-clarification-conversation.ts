@@ -6,6 +6,7 @@ import {
   parseClarificationRunResult,
   type ClarificationConversationCommand,
 } from "../schema";
+import { rememberOwnRequest } from "../lib/clarification-viewer";
 import type {
   ClarificationConversationCommandResult,
   ClarificationConversationState,
@@ -33,6 +34,10 @@ export const useClarificationConversation = (issueNumber: number | null) => {
   // section's attempts change, so the effect below can key on it.
   const [streamAttempt, setStreamAttempt] = useState<string | null>(null);
   const runIdRef = useRef<string | null>(null);
+  // Whether this viewer follows the live stream (ticket #237): detach stops
+  // watching — the run keeps going, nothing is cancelled — and reconnect
+  // re-reads the snapshot plus the events after the cursor.
+  const [following, setFollowing] = useState(true);
 
   const load = useCallback(async () => {
     if (issueNumber === null) return;
@@ -83,7 +88,7 @@ export const useClarificationConversation = (issueNumber: number | null) => {
   // Live observation: one SSE subscription per followed attempt. A frame is
   // only a hint that the ledger moved — the refetch is the read.
   useEffect(() => {
-    if (streamAttempt === null || runIdRef.current === null) return;
+    if (!following || streamAttempt === null || runIdRef.current === null) return;
     const runId = runIdRef.current;
     let source: EventSource;
     try {
@@ -99,7 +104,13 @@ export const useClarificationConversation = (issueNumber: number | null) => {
     return () => {
       source.close();
     };
-  }, [streamAttempt, load]);
+  }, [following, streamAttempt, load]);
+
+  const detach = useCallback(() => setFollowing(false), []);
+  const reconnect = useCallback(async () => {
+    setFollowing(true);
+    await load();
+  }, [load]);
 
   // The caller names the request id — one id per user submission, kept
   // stable across retries until the seam definitively answers. That is the
@@ -112,6 +123,7 @@ export const useClarificationConversation = (issueNumber: number | null) => {
       command: ClarificationConversationCommand,
       requestId: string,
     ): Promise<ClarificationConversationCommandResult | ClarificationCommandError> => {
+      rememberOwnRequest(requestId);
       try {
         const response = await fetch(
           `/api/clarification/runs/${runId}/attempts/${attemptId}/commands`,
@@ -137,5 +149,15 @@ export const useClarificationConversation = (issueNumber: number | null) => {
     [],
   );
 
-  return { section, conversationState, absent, failure, reload: load, sendCommand };
+  return {
+    section,
+    conversationState,
+    absent,
+    failure,
+    reload: load,
+    sendCommand,
+    following,
+    detach,
+    reconnect,
+  };
 };

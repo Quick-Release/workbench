@@ -4,7 +4,10 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import type { DisplayCaveat } from "@/lib/display-state";
 import { deriveDisplayState } from "@/lib/display-state";
+import { runChipFor, toneClass } from "@/lib/clarification-inspection";
 import { inFlightBuckets } from "@/lib/in-flight";
+import { cn } from "@/lib/utils";
+import { workItemIdNumberText } from "@/lib/work-item-id.mjs";
 import type { WorkItemRecord } from "@/types";
 
 type InFlightBucketKey = "reviewing" | "implementing" | "notStarted";
@@ -13,13 +16,18 @@ type InFlightRowProps = {
   record: WorkItemRecord;
   bucket: InFlightBucketKey;
   caveats: readonly DisplayCaveat[];
+  // The issue's latest clarification run state, when it has one (ticket
+  // #237): a chip in the run lifecycle's own word, with zero actions — the
+  // issue panel is where anything actionable lives.
+  runState?: string | null;
 };
 
 // One in-flight row: the claimed work item, informational only. The issue
 // id links out to GitHub as the secondary link; the view itself offers no
 // actions — claimed-but-not-started rows wear the informational marking
 // until session spawning lands (ticket #62).
-export function InFlightRow({ record, bucket, caveats }: InFlightRowProps) {
+export function InFlightRow({ record, bucket, caveats, runState = null }: InFlightRowProps) {
+  const chip = runState === null ? null : runChipFor(runState);
   return (
     <li
       data-slot="in-flight-row"
@@ -42,6 +50,18 @@ export function InFlightRow({ record, bucket, caveats }: InFlightRowProps) {
           <Badge variant="outline">{record.triageState}</Badge>
         )}
         {bucket === "notStarted" && <Badge variant="outline">informational</Badge>}
+        {chip && (
+          <span
+            data-slot="in-flight-run-chip"
+            data-tone={chip.tone}
+            className={cn(
+              "rounded-md border px-1.5 py-0.5 font-mono text-xs",
+              toneClass[chip.tone],
+            )}
+          >
+            {chip.label}
+          </span>
+        )}
         {record.assignees.length > 0 && (
           <span className="font-mono text-xs text-muted-foreground">
             {record.assignees.map((assignee) => `@${assignee}`).join(" ")}
@@ -73,8 +93,15 @@ const BUCKETS: readonly { key: InFlightBucketKey; label: string; blurb: string }
 // The in-flight view (ticket #62): the in-flight bucket (in-flight.ts) in
 // priority order, straight from the display-state derivation through the
 // workflow read endpoint. Informational only — nothing here recommends or
-// acts.
-export function InFlightPage({ workItems }: { workItems: readonly WorkItemRecord[] }) {
+// acts. Run-status chips (ticket #237) ride alongside the phase badge and
+// never replace it: bucket membership is the phase's, the chip is the run's.
+export function InFlightPage({
+  workItems,
+  runStates = null,
+}: {
+  workItems: readonly WorkItemRecord[];
+  runStates?: ReadonlyMap<string, string> | null;
+}) {
   const buckets = inFlightBuckets(workItems);
   const total = buckets.reviewing.length + buckets.implementing.length + buckets.notStarted.length;
 
@@ -109,6 +136,7 @@ export function InFlightPage({ workItems }: { workItems: readonly WorkItemRecord
                         record={record}
                         bucket={key}
                         caveats={deriveDisplayState(record, false).caveats}
+                        runState={runStates?.get(workItemIdNumberText(record.id)) ?? null}
                       />
                     ))}
                   </ul>

@@ -128,7 +128,13 @@ const ProvenanceEditor = ({
 );
 
 export const ClarificationDraftPanel = ({ issueNumber }: { issueNumber: number }) => {
-  const { view, absent, failure, save } = useClarificationDraft(issueNumber);
+  const { view, absent, failure, save, approve, reload } = useClarificationDraft(issueNumber);
+  const [confirmingPublish, setConfirmingPublish] = useState(false);
+  const [publishing, setPublishing] = useState(false);
+  const [publication, setPublication] = useState<string | null>(null);
+  // One request id per approval: kept across an unreachable seam so the
+  // retry dedups, spent the moment the seam answers.
+  const [approvalId, setApprovalId] = useState(() => globalThis.crypto.randomUUID());
   const [doc, setDoc] = useState<ClarificationDraftDocument>(emptyDraft);
   const [exclusionLines, setExclusionLines] = useState("");
   const [acceptanceLines, setAcceptanceLines] = useState("");
@@ -167,6 +173,26 @@ export const ClarificationDraftPanel = ({ issueNumber }: { issueNumber: number }
     exclusions: linesOf(exclusionLines),
     acceptance: linesOf(acceptanceLines),
   });
+  const onApprove = async () => {
+    setPublishing(true);
+    const result = await approve(view, approvalId);
+    setPublishing(false);
+    setConfirmingPublish(false);
+    if ("error" in result) {
+      setPublication(result.message);
+      if (result.error === "unreachable") return;
+    } else {
+      setPublication(
+        result.outcome === "publication-unknown"
+          ? "unknown — the write may have landed; reconcile before anything retries"
+          : result.published
+            ? "published — the issue body was updated once and proven by read-back"
+            : `not published${result.reason ? ` — ${result.reason}` : ""}`,
+      );
+    }
+    setApprovalId(globalThis.crypto.randomUUID());
+    void reload();
+  };
   const onSave = async () => {
     setSaving(true);
     const result = await save(compose());
@@ -463,6 +489,51 @@ export const ClarificationDraftPanel = ({ issueNumber }: { issueNumber: number }
         {saveError && <span className="text-xs text-red-600">{saveError}</span>}
       </div>
       {view.savedAt && <p className="text-xs text-muted-foreground">saved · {view.savedAt}</p>}
+
+      {view.diff &&
+        !view.diff.unchanged &&
+        view.issue &&
+        view.publicationBodyDigest && (
+          // The fresh approval (ticket #237's action matrix): publishing is its
+          // own explicit act on the exact diff shown above — never implied by
+          // a save, a start, or a retry.
+          <div data-slot="clarification-publish" className="flex flex-col gap-1 border-t pt-2">
+            {confirmingPublish ? (
+              <>
+                <p className="text-xs">
+                  This approves exactly the diff above, once, against the issue revision{" "}
+                  <span className="font-mono">{view.issue.revision.updatedAt}</span>. It writes the
+                  issue body and authorizes nothing else.
+                </p>
+                <div className="flex flex-wrap items-center gap-1">
+                  <Button
+                    size="sm"
+                    disabled={publishing}
+                    aria-label="approve this exact diff"
+                    onClick={() => void onApprove()}
+                  >
+                    Approve this exact diff
+                  </Button>
+                  <Button size="sm" variant="ghost" onClick={() => setConfirmingPublish(false)}>
+                    not now
+                  </Button>
+                </div>
+              </>
+            ) : (
+              <div>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  aria-label="approve and update issue"
+                  onClick={() => setConfirmingPublish(true)}
+                >
+                  Approve and update issue
+                </Button>
+              </div>
+            )}
+            {publication && <p className="text-xs text-muted-foreground">{publication}</p>}
+          </div>
+        )}
     </div>
   );
 };

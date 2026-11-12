@@ -86,4 +86,36 @@ describe("the in-flight view", () => {
     const html = renderPage([]);
     expect(html).toContain("Nothing is in flight");
   });
+
+  it("renders run-status chips in the lifecycle's word, with zero actions and the phase intact", () => {
+    const html = renderToString(
+      <InFlightPage
+        workItems={[
+          item(230, { title: "Clarifying", assignees: ["vvaz"], phase: "implementing" }),
+          item(231, { title: "Uncertain", assignees: ["vvaz"], phase: "reviewing" }),
+          item(232, { title: "No run", assignees: ["vvaz"], phase: "implementing" }),
+        ]}
+        runStates={
+          new Map([
+            ["230", "awaiting-human"],
+            ["231", "unknown"],
+          ])
+        }
+      />,
+    );
+    expect(html.match(/data-slot="in-flight-run-chip"/g)?.length).toBe(2);
+    expect(html).toContain("clarification awaiting-human");
+    expect(html).toContain("clarification unknown");
+    // Unknown is the word with its own tone — never green, never a spinner.
+    expect(html).toMatch(/data-tone="unknown"[^>]*>clarification unknown/);
+    expect(html).not.toMatch(/green|animate-spin/);
+    // Zero actions: no button, no select, no link to act on the run.
+    expect(html).not.toContain("<button");
+    expect(html).not.toContain("native-select");
+    // The phase badges stay GitHub's; the chip rides beside them.
+    expect(html).toContain(">implementing<");
+    expect(html).toContain(">reviewing<");
+    // Bucket membership is untouched by run state.
+    expect(html.indexOf("Uncertain")).toBeLessThan(html.indexOf("Clarifying"));
+  });
 });

@@ -1,8 +1,8 @@
 import { useState } from "react";
 
 import { useClarificationConversation } from "../hooks/use-clarification-conversation";
+import { turnInFlight } from "../lib/clarification-inspection";
 import type { ClarificationEventEnvelope } from "../schema";
-import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 
 // The managed conversation surface (spec #221, ticket #232): the
@@ -10,8 +10,9 @@ import { Button } from "./ui/button";
 // activity from the run's durable ledger, the Developer's prompt/steer/
 // queue as explicit distinct acts, stop-turn as a two-step confirm that
 // clears the queue first, runtime dialogs as answerable typed questions,
-// unsupported widgets as the capability list, and an operational timeline
-// that references the conversation without duplicating it. Provider and
+// and unsupported widgets as the capability list. The operational timeline
+// lives in the run inspection (ticket #237) and references this
+// conversation without duplicating it; no run lifecycle word renders here. Provider and
 // data destination stay visible at the top: what this conversation is
 // authorized to touch is always on the record.
 
@@ -48,31 +49,11 @@ const pendingQueue = (events: Ledger) => {
   );
 };
 
-// Whether a turn is live, from the evidence: a prompt whose settlement or
-// stop has not been observed yet. A prompt the runtime never accepted
-// (its acceptance failed) freed the floor when it failed.
-const turnInFlight = (events: Ledger) => {
-  let live = false;
-  for (const { event } of events) {
-    if (event.type === "operational" && event.kind === "conversation.prompt") live = true;
-    if (event.type === "operational" && event.kind === "conversation.turn-stopped") live = false;
-    if (event.type === "operational" && event.kind === "conversation.prompt-failed") live = false;
-    if (event.type === "conversation") {
-      const frame = event.session.event as { type?: unknown };
-      if (frame.type === "agent_settled") live = false;
-    }
-  }
-  return live;
-};
-
 const eventRow = (envelope: ClarificationEventEnvelope) => {
   const { event } = envelope;
-  if (event.type === "lifecycle")
-    return (
-      <p key={envelope.cursor} className="text-xs text-muted-foreground italic">
-        attempt moved to {event.state}
-      </p>
-    );
+  // Lifecycle moves are the run's axis, not the conversation's: they render
+  // on the run inspection's timeline, never here.
+  if (event.type === "lifecycle") return null;
   if (event.type === "operational") {
     const frame = conversationOperationalRow(event.kind, event.data as Record<string, unknown>);
     if (frame === null) return null;
@@ -202,9 +183,21 @@ const DialogAnswer = ({
   );
 };
 
-export const ClarificationConversation = ({ issueNumber }: { issueNumber: number }) => {
-  const { section, conversationState, absent, failure, reload, sendCommand } =
-    useClarificationConversation(issueNumber);
+export type ClarificationConversationModel = ReturnType<typeof useClarificationConversation>;
+
+// The standalone surface: its own read of the issue's run. The issue panel
+// shares one read between this view and the run inspection instead
+// (ClarificationRunSection), so detach and reconnect move one stream.
+export const ClarificationConversation = ({ issueNumber }: { issueNumber: number }) => (
+  <ClarificationConversationView model={useClarificationConversation(issueNumber)} />
+);
+
+export const ClarificationConversationView = ({
+  model,
+}: {
+  model: ClarificationConversationModel;
+}) => {
+  const { section, conversationState, absent, failure, reload, sendCommand } = model;
   const [draft, setDraft] = useState("");
   const [confirmingStop, setConfirmingStop] = useState(false);
   const [commandError, setCommandError] = useState<string | null>(null);
@@ -240,7 +233,7 @@ export const ClarificationConversation = ({ issueNumber }: { issueNumber: number
     typeof dispatchIntent?.dataDestination === "string"
       ? dispatchIntent.dataDestination
       : "unknown destination";
-  const model = typeof dispatchIntent?.model === "string" ? dispatchIntent.model : null;
+  const modelName = typeof dispatchIntent?.model === "string" ? dispatchIntent.model : null;
 
   const dispatch = async (
     command:
@@ -284,18 +277,12 @@ export const ClarificationConversation = ({ issueNumber }: { issueNumber: number
     setConfirmingStop(false);
   };
 
-  const timeline = events.filter(
-    ({ event }) =>
-      event.type === "lifecycle" ||
-      (event.type === "operational" && !event.kind.startsWith("conversation.")),
-  );
-
   return (
     <div data-slot="clarification-conversation" className="flex flex-col gap-2">
       <div className="flex flex-wrap items-center gap-2">
-        <Badge variant="outline">{section.run.state}</Badge>
+        <span className="text-xs font-medium text-muted-foreground">Conversation</span>
         <span className="text-xs text-muted-foreground">provider · {provider}</span>
-        {model && <span className="text-xs text-muted-foreground">model · {model}</span>}
+        {modelName && <span className="text-xs text-muted-foreground">model · {modelName}</span>}
         <span className="text-xs text-muted-foreground">destination · {destination}</span>
       </div>
 
@@ -418,34 +405,9 @@ export const ClarificationConversation = ({ issueNumber }: { issueNumber: number
         </div>
       </div>
 
-      <div data-slot="clarification-timeline" className="flex flex-col gap-1 border-t pt-2">
-        <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
-          Run timeline
-        </p>
-        {timeline.length === 0 ? (
-          <p className="text-xs text-muted-foreground">nothing operational has happened yet</p>
-        ) : (
-          timeline.map((frame) => {
-            const { event } = frame;
-            // Conversations never appear here — the timeline references the
-            // stream above, it does not repeat it.
-            if (event.type === "conversation") return null;
-            return (
-              <p
-                key={event.type === "operational" ? event.kind : `${event.type}-${event.id}`}
-                className="text-xs text-muted-foreground"
-              >
-                {event.type === "operational"
-                  ? event.kind.replaceAll(".", " · ")
-                  : `attempt ${event.state}`}
-              </p>
-            );
-          })
-        )}
-        <p className="text-xs text-muted-foreground italic">
-          the conversation streams above — this timeline references it, never repeats it
-        </p>
-      </div>
+      <p className="text-xs text-muted-foreground italic">
+        the run&apos;s operational timeline references this conversation — it never repeats it
+      </p>
     </div>
   );
 };

@@ -90,6 +90,24 @@ export declare const handleClarificationDraft: (input: {
 }) => Promise<ApiResponse>;
 export declare const handleClarificationObservation: (input: ObservationRequest) => HandlerResponse;
 export declare const handleClarificationEvents: (input: ObservationRequest) => HandlerResponse;
+export declare const handleClarificationRuns: (input: ObservationRequest) => ApiResponse;
+export declare const handleClarificationInspection: (input: {
+  method: string | undefined;
+  pathname: string;
+  host: string | undefined;
+  origin: string | undefined;
+  posture?: ClarificationPosture | undefined;
+  coordinator: unknown;
+}) => Promise<ApiResponse>;
+export declare const handleClarificationRunAction: (input: {
+  method: string | undefined;
+  pathname: string;
+  host: string | undefined;
+  origin: string | undefined;
+  body: string | undefined;
+  posture: ClarificationPosture;
+  coordinator: unknown;
+}) => Promise<ApiResponse>;
 export declare const handleClarificationApi: (input: {
   method: string | undefined;
   pathname: string;
