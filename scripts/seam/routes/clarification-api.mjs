@@ -6,10 +6,14 @@ import {
   parseClarificationConversationState,
   parseClarificationDraftDocument,
   parseClarificationDraftView,
+  parseClarificationInspectionResult,
   parseClarificationManifestResult,
   parseClarificationObservationResult,
   parseClarificationPublicationRequest,
   parseClarificationPublicationResult,
+  parseClarificationRunActionRequest,
+  parseClarificationRunActionResult,
+  parseClarificationRunListResult,
   parseClarificationRunResult,
   parseClarificationStartRequest,
   parseClarificationStartResult,
@@ -57,6 +61,9 @@ const CONVERSATION_ROUTE =
 const DRAFT_ROUTE = /^\/api\/clarification\/runs\/([^/]+)\/attempts\/([^/]+)\/draft\/?$/;
 const PUBLICATION_ROUTE =
   /^\/api\/clarification\/runs\/([^/]+)\/attempts\/([^/]+)\/publication\/?$/;
+const RUNS_ROUTE = /^\/api\/clarification\/runs\/?$/;
+const INSPECTION_ROUTE = /^\/api\/clarification\/runs\/([^/]+)\/inspection\/?$/;
+const ACTIONS_ROUTE = /^\/api\/clarification\/runs\/([^/]+)\/actions\/?$/;
 
 export const isClarificationApiRoute = (pathname) =>
   STATUS_ROUTE.test(pathname) ||
@@ -68,7 +75,10 @@ export const isClarificationApiRoute = (pathname) =>
   COMMANDS_ROUTE.test(pathname) ||
   CONVERSATION_ROUTE.test(pathname) ||
   DRAFT_ROUTE.test(pathname) ||
-  PUBLICATION_ROUTE.test(pathname);
+  PUBLICATION_ROUTE.test(pathname) ||
+  RUNS_ROUTE.test(pathname) ||
+  INSPECTION_ROUTE.test(pathname) ||
+  ACTIONS_ROUTE.test(pathname);
 
 const NOT_AVAILABLE_MESSAGE =
   "owned clarification is enabled — starts are recorded durably, but the managed conversation runtime is not wired on this install yet";
@@ -133,15 +143,23 @@ const coordinatorRejection = (error) => {
     case "approval_expired":
     case "no_draft":
     case "attempt_not_active":
+    case "publication_uncertain":
+    case "secret_bearing_content":
+    case "run_not_active":
+    case "illegal_transition":
       return { status: 409, json: { error: error.code, message } };
+    case "discard_unconfirmed":
+      return { status: 400, json: { error: error.code, message } };
     case "invalid_cursor":
     case "invalid_request":
     case "invalid_draft":
       return { status: 400, json: { error: "invalid_request", message } };
     case "context_unavailable":
+    case "context_identity_mismatch":
     case "conversation_unavailable":
       return { status: 503, json: { error: error.code, message } };
     case "start_denied":
+    case "dispatch_unrecorded":
       return {
         status: 502,
         json: {
@@ -669,6 +687,111 @@ export const handleClarificationPublication = async ({
   }
 };
 
+// The inspection reads and run actions (spec #221, ticket #237, Factory
+// 11). The run list and the inspection read are posture-free like every
+// read — run records stay inspectable on every install, even a disabled
+// one. The run actions are writes the capability owns, so a disabled or
+// invalid install answers its typed denial before the body is read.
+const unavailableResponse = () => ({
+  status: 501,
+  json: { error: "clarification_unavailable", message: NOT_AVAILABLE_MESSAGE },
+});
+
+export const handleClarificationRuns = ({ method, pathname, host, origin, coordinator }) => {
+  if (!RUNS_ROUTE.test(pathname)) return null;
+
+  const gate = gateRejection({ host, origin });
+  if (gate) return gate;
+
+  if (method !== "GET") return methodMismatch("GET");
+  if (!coordinator) return unavailableResponse();
+
+  try {
+    return { status: 200, json: parseClarificationRunListResult(coordinator.listRunStates()) };
+  } catch (error) {
+    return coordinatorRejection(error);
+  }
+};
+
+export const handleClarificationInspection = async ({
+  method,
+  pathname,
+  host,
+  origin,
+  posture,
+  coordinator,
+}) => {
+  const match = INSPECTION_ROUTE.exec(pathname);
+  if (!match) return null;
+
+  const gate = gateRejection({ host, origin });
+  if (gate) return gate;
+
+  if (method !== "GET") return methodMismatch("GET");
+  if (!coordinator) return unavailableResponse();
+
+  try {
+    return {
+      status: 200,
+      json: parseClarificationInspectionResult(
+        await coordinator.inspection({ runId: match[1], posture: posture ?? null }),
+      ),
+    };
+  } catch (error) {
+    return coordinatorRejection(error);
+  }
+};
+
+export const handleClarificationRunAction = async ({
+  method,
+  pathname,
+  host,
+  origin,
+  body,
+  posture,
+  coordinator,
+}) => {
+  const match = ACTIONS_ROUTE.exec(pathname);
+  if (!match) return null;
+
+  const gate = gateRejection({ host, origin });
+  if (gate) return gate;
+
+  if (method !== "POST") return methodMismatch("POST");
+
+  const denial = postureDenial(posture);
+  if (denial) return denial;
+  if (!coordinator) return unavailableResponse();
+
+  let raw;
+  try {
+    raw = JSON.parse(body ?? "");
+  } catch {
+    return invalidRequest("request body is not valid JSON");
+  }
+  let parsed;
+  try {
+    parsed = parseClarificationRunActionRequest(raw);
+  } catch (error) {
+    return invalidRequest(String(error?.message ?? error));
+  }
+
+  try {
+    return {
+      status: 200,
+      json: parseClarificationRunActionResult(
+        await coordinator.runAction({
+          runId: match[1],
+          requestId: parsed.requestId,
+          action: parsed.action,
+        }),
+      ),
+    };
+  } catch (error) {
+    return coordinatorRejection(error);
+  }
+};
+
 export const handleClarificationApi = async (deps) =>
   (await handleClarificationStatus(deps)) ??
   (await handleClarificationManifest(deps)) ??
@@ -679,7 +802,10 @@ export const handleClarificationApi = async (deps) =>
   (await handleClarificationConversationCommand(deps)) ??
   handleClarificationConversationState(deps) ??
   (await handleClarificationDraft(deps)) ??
-  (await handleClarificationPublication(deps));
+  (await handleClarificationPublication(deps)) ??
+  handleClarificationRuns(deps) ??
+  (await handleClarificationInspection(deps)) ??
+  (await handleClarificationRunAction(deps));
 
 // Turns the host's config block into the posture, with the unreadable-config
 // case as its own invalid posture — a config that cannot be read at all is
@@ -711,7 +837,11 @@ export const clarificationApiPlugin = () => ({
     server.middlewares.use(
       guardedApi(async (request, response, next, url) => {
         if (!isClarificationApiRoute(url.pathname)) return next();
-        const body = request.method === "POST" ? await readBody(request) : undefined;
+        // POST and PUT carry bodies: the draft save is a PUT (ticket #233).
+        const body =
+          request.method === "POST" || request.method === "PUT"
+            ? await readBody(request)
+            : undefined;
         const { posture, coordinator } = await resolveRuntime();
         const handled = await handleClarificationApi({
           method: request.method,

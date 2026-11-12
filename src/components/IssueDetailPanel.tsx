@@ -4,7 +4,7 @@ import { Check, Copy, ExternalLink, Network, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { ClarificationConversation } from "@/components/ClarificationConversation";
+import { ClarificationRunSection } from "@/components/ClarificationRunInspection";
 import { ClarificationDraftPanel } from "@/components/ClarificationDraftPanel";
 import { PhaseMoveSelect } from "@/components/PhaseMoveSelect";
 import { deriveDisplayState } from "@/lib/display-state";
@@ -216,22 +216,20 @@ function IssueRecordSections({
         clarificationPosture?.posture === "enabled" && (
           // The clarification entry point (spec #221, ticket #222): visible
           // the moment the posture answers enabled, honest about the runtime
-          // not shipping yet — the affordance is present, not pretend-enabled.
-          // The conversation surface (ticket #232) renders below whenever the
-          // issue has a run; with no run it renders nothing at all. The
-          // draft (ticket #233) hangs under the conversation: the attempt's
-          // proposal, editable, persisted locally, never an approval.
+          // not shipping yet. The run section (ticket #237) carries the
+          // start as a fresh approval on the rendered manifest, then the run
+          // inspection — status per axis, return card, timeline, action
+          // matrix — and the conversation surface (ticket #232) over one
+          // shared read. The draft (ticket #233) hangs under it: the
+          // attempt's proposal, editable, persisted locally, never an
+          // approval. The phase-move section below stays GitHub's: no run
+          // event moves a workflow phase.
           <section data-slot="panel-clarification" className="flex flex-col gap-2">
             <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
               Clarification
             </p>
             <p className="text-xs text-muted-foreground">{clarificationPosture.message}</p>
-            <div>
-              <Button size="sm" disabled aria-label={`Clarify ${record.id}`}>
-                Clarify
-              </Button>
-            </div>
-            <ClarificationConversation issueNumber={Number(number)} />
+            <ClarificationRunSection issueNumber={Number(number)} issueLabel={record.id} />
             <ClarificationDraftPanel issueNumber={Number(number)} />
           </section>
         )}

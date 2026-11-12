@@ -47,6 +47,16 @@
 // handoff that names the next human decision. The outcome result, the
 // lifecycle move it drives, and its operational event commit as one store
 // transaction, so evidence and record cannot disagree.
+//
+// Secret-bearing content (ticket #238, ADR 0016) stops where it is found
+// and stays local: a runtime frame carrying a credential shape stops the
+// run — the live session leaves this process's control map and is
+// disposed, the attempt closes terminal with the detected kinds as its
+// evidence, the run parks awaiting-human — and the ledger keeps the frame
+// with the secret's bytes redacted. A Developer input, a draft save, or a
+// publication body carrying one is a typed refusal before anything is
+// recorded, dispatched, or written. The scan is defense in depth, never
+// proof of absence.
 
 import { noApprovalLine, noPublishingLine } from "../../../src/types.ts";
 import {
@@ -61,7 +71,8 @@ import {
   renderIssueBodyDiff,
   validateClarificationDraft,
 } from "./draft.mjs";
-import { NO_DRAFT_GAP } from "./context-packet.mjs";
+import { NO_DRAFT_GAP, readinessFor } from "./context-packet.mjs";
+import { redactSecrets, secretKindsIn } from "./secrets.mjs";
 import { EVENT_ENVELOPE_VERSION } from "./store.mjs";
 import {
   FAILURE_SIGNATURE_HALT,
@@ -90,6 +101,9 @@ const EGRESS_STATEMENT =
 const BUDGET_LINE =
   "provider-reported usage is recorded verbatim; estimates and unknown " +
   "subscription availability stay labeled and never silently convert";
+
+// The attempt results a spent publication approval leaves behind.
+const PUBLICATION_OUTCOME_KINDS = ["published", "publication-failed", "publication-unknown"];
 
 export const clarificationError = (code, message, extra = {}) =>
   Object.assign(new Error(message), { code, ...extra });
@@ -186,7 +200,31 @@ export const createClarificationCoordinator = ({
         "context_unavailable",
         `the tracker context for issue ${issueNumber} is incomplete — the manifest and start withhold rather than guess`,
       );
+    // Repository identity (ticket #238): a read that answers for another
+    // repository or another issue — a transferred issue, a crossed port —
+    // is not this issue's evidence, and nothing may be approved or started
+    // on it.
+    if (
+      collected.issue.number !== issueNumber ||
+      (hostRepo !== undefined && collected.repo !== hostRepo)
+    )
+      throw clarificationError(
+        "context_identity_mismatch",
+        `the tracker answered for ${collected.repo ?? "an unnamed repository"}#${collected.issue.number}, not ${hostRepo ?? "this host repo"}#${issueNumber} — evidence for another identity is never this issue's`,
+      );
     return collected;
+  };
+
+  // The typed refusal for secret-bearing content on a path that would
+  // carry it off this machine: nothing is recorded, dispatched, or written.
+  const refuseSecretBearing = (value, what) => {
+    const kinds = secretKindsIn(value);
+    if (kinds.length > 0)
+      throw clarificationError(
+        "secret_bearing_content",
+        `${what} carries secret-bearing content (${kinds.join(", ")}) — it stays local and goes no further`,
+        { kinds },
+      );
   };
 
   // One start at a time per issue, in process: racing submissions
@@ -233,6 +271,21 @@ export const createClarificationCoordinator = ({
     return envelope;
   };
 
+  // The last-resort evidence write of an asynchronous path — a lost ack, a
+  // pump whose stream died — where no caller is waiting to receive a
+  // rejection. When the ledger itself refuses the failure record (a disk
+  // gone full, ticket #239), there is nothing durable to say: the event is
+  // not published (it never committed, so no viewer is served it), and the
+  // refusal must not escape as an unhandled rejection that takes the
+  // controller down with every other run it holds.
+  const publishFailureEvidence = (args) => {
+    try {
+      publishEvent(args);
+    } catch {
+      // Nothing committed, nothing is claimed.
+    }
+  };
+
   // The fenced append with the same viewer contract: command evidence is
   // durable first, then live viewers learn about it — a fenced write never
   // leaves a connected viewer waiting for an unrelated publish.
@@ -257,6 +310,14 @@ export const createClarificationCoordinator = ({
   // record intact and the conversation honestly unavailable; re-driving it
   // is reconciliation's explicit work, never a silent re-dispatch.
   const liveSessions = new Map();
+
+  // The controller leases this process acquired, by run (ticket #237): a
+  // run with no live session — a denied start, a parked attempt, a
+  // recovery state — still has exactly one legitimate writer here, and its
+  // next fenced write renews the token it holds instead of colliding with
+  // its own unexpired lease. Never the authority on who holds a lease: the
+  // store decides that at every renewal and acquisition.
+  const heldLeases = new Map();
 
   // The conversation commands' shared gate: validate the request, find the
   // visible attempt, refuse what this process cannot drive, prove the
@@ -330,7 +391,7 @@ export const createClarificationCoordinator = ({
       try {
         const result = sessionCall(session);
         result?.accepted?.catch((error) => {
-          publishEvent({
+          publishFailureEvidence({
             runId,
             event: {
               type: "operational",
@@ -392,7 +453,7 @@ export const createClarificationCoordinator = ({
   // genuinely holds fences the write typed — never a silent adoption, never
   // a queue.
   const ensureLease = ({ runId, attemptId }) => {
-    const held = liveSessions.get(attemptId)?.leaseToken;
+    const held = liveSessions.get(attemptId)?.leaseToken ?? heldLeases.get(runId);
     if (held !== undefined) {
       try {
         store.renewLease({ runId, token: held });
@@ -408,6 +469,7 @@ export const createClarificationCoordinator = ({
       // renew through the token it holds, so the handle follows the lease.
       const live = liveSessions.get(attemptId);
       if (live !== undefined) live.leaseToken = lease.token;
+      heldLeases.set(runId, lease.token);
       return lease.token;
     } catch (error) {
       if (error?.code === "lease_held")
@@ -532,6 +594,7 @@ export const createClarificationCoordinator = ({
     if (typeof attemptId !== "string" || attemptId === "")
       throw clarificationError("invalid_request", "a draft save names an attempt id");
     const validated = validateClarificationDraft(draft);
+    refuseSecretBearing(validated, "the Clarification draft");
     const run = store.getRun(runId);
     if (!run)
       throw clarificationError(
@@ -721,6 +784,24 @@ export const createClarificationCoordinator = ({
           "no Clarification draft is saved on this attempt — nothing has been proposed to approve",
         );
       const body = publicationBodyFor(saved.draft);
+      refuseSecretBearing(body, "the publication body");
+      // The crash window (ticket #238): an approval already spent on this
+      // attempt whose outcome never landed is an uncertain write — the
+      // command that spent it died between the nonce and the record. A
+      // fresh approval would publish again on top of a write nobody can
+      // rule out; reconciliation answers first.
+      // (A spent approval whose outcome DID land closed the attempt, and
+      // the store refuses a new approval on it as not active.)
+      const prior = store.latestApproval?.(attemptId) ?? null;
+      if (
+        prior !== null &&
+        prior.status === "consumed" &&
+        !PUBLICATION_OUTCOME_KINDS.includes(store.getAttempt(attemptId)?.result?.kind)
+      )
+        throw clarificationError(
+          "publication_uncertain",
+          `attempt "${attemptId}" already spent approval ${prior.nonce} and no outcome was ever recorded — the write may have landed; reconcile the attempt before anything is published again`,
+        );
       if (bodyDigestFor(body) !== bodyDigest)
         throw clarificationError(
           "approval_stale",
@@ -776,8 +857,14 @@ export const createClarificationCoordinator = ({
         freshContextDigest: contextDigestFor(preWrite),
       });
       if (!verdict.ok) {
+        // The gate's verdict is the refusal; the lease must not turn it into
+        // another one. An approval that died of old age outlived the
+        // command's lease too (its window is far longer), so the marking
+        // re-arms this process's lease first — the typed verdict below is
+        // what the Developer is told, never a lease expiry.
+        const blockToken = holdLease({ runId, attemptId }, leaseToken);
         try {
-          store.markApprovalStale({ nonce: approval.nonce, leaseToken });
+          store.markApprovalStale({ nonce: approval.nonce, leaseToken: blockToken });
         } catch (error) {
           // A concurrent consumption beat the marking: the approval is
           // already dead, which is the marking's whole purpose.
@@ -786,7 +873,7 @@ export const createClarificationCoordinator = ({
         recordEvent(runId, {
           kind: "publication.blocked",
           data: { attemptId, requestId, nonce: approval.nonce, reason: verdict.code },
-          leaseToken,
+          leaseToken: blockToken,
         });
         throw clarificationError(verdict.code, verdict.message);
       }
@@ -941,6 +1028,155 @@ export const createClarificationCoordinator = ({
     });
   };
 
+  // The one side effect, behind durable intent (the start's, and a manual
+  // retry's — ticket #237): the managed session dispatch for an attempt
+  // that is already durable under the live lease `token`.
+  // Ends a live session this process drives: out of the control map first,
+  // so no command can reach it again, then disposed. Disposal failure is the
+  // runtime's own evidence; the caller's record still stands.
+  const disposeLive = async (attemptId) => {
+    const live = liveSessions.get(attemptId);
+    if (live === undefined) return;
+    liveSessions.delete(attemptId);
+    try {
+      await live.session.dispose?.();
+    } catch {
+      // Already out of this process's control map.
+    }
+  };
+
+  // The crash window guard shared by cancel and retry (ticket #237 review):
+  // an approval consumed on any attempt of the run with no publication
+  // outcome recorded is an uncertain write. Cancelling that attempt or
+  // opening a fresh one would let a new approval publish on top of a write
+  // nobody can rule out — reconciliation answers first.
+  const refuseUncertainPublication = (runId) => {
+    for (const attempt of store.listAttempts(runId)) {
+      const approval = store.latestApproval?.(attempt.attemptId) ?? null;
+      if (
+        approval !== null &&
+        approval.status === "consumed" &&
+        !PUBLICATION_OUTCOME_KINDS.includes(store.getAttempt(attempt.attemptId)?.result?.kind)
+      )
+        throw clarificationError(
+          "publication_uncertain",
+          `attempt "${attempt.attemptId}" spent approval ${approval.nonce} and no publication outcome was recorded — the issue body may already be written; reconcile before cancelling or retrying`,
+        );
+    }
+  };
+
+  const dispatchSession = async ({ run, attempt, issueNumber, token }) => {
+    // A denial here is known failure evidence, recorded under
+    // the live lease — the attempt closes terminal, the run parks
+    // awaiting-human, and the Developer's decision is the only next
+    // move. A fencing refusal while recording that evidence surfaces
+    // typed: a stale writer records nothing quietly.
+    try {
+      const session = await sessions.start({
+        runId: run.runId,
+        attemptId: attempt.attemptId,
+        issueNumber,
+      });
+      // The one live handle: commands drive this session, fenced by the
+      // lease the start holds. Its frames pump into the ledger only once
+      // the dispatch mark below is durable.
+      liveSessions.set(attempt.attemptId, { session, leaseToken: token });
+    } catch (error) {
+      const code = error?.code ?? "unknown";
+      // A handshake may outlast the lease's TTL: the denial's evidence
+      // travels under the start's lease renewed — or re-armed when it lapsed
+      // and nobody else took it — never under a raw token that expired.
+      const leaseToken = holdLease({ runId: run.runId, attemptId: attempt.attemptId }, token);
+      store.recordAttemptResult({
+        attemptId: attempt.attemptId,
+        result: {
+          kind: "start-denied",
+          code,
+          message: redactSecrets(String(error?.message ?? error)),
+          deniedAt: clock(),
+        },
+        leaseToken,
+      });
+      store.appendEvent({
+        runId: run.runId,
+        kind: "attempt.start-denied",
+        data: { attemptId: attempt.attemptId, code },
+        leaseToken,
+      });
+      store.updateAttemptState({
+        attemptId: attempt.attemptId,
+        to: "terminal",
+        leaseToken,
+      });
+      store.updateRunState({ runId: run.runId, to: "awaiting-human", leaseToken });
+      publishEvent({
+        runId: run.runId,
+        event: {
+          type: "lifecycle",
+          scope: "attempt",
+          id: attempt.attemptId,
+          state: "terminal",
+          at: clock(),
+        },
+      });
+      throw clarificationError(
+        "start_denied",
+        `the managed session for issue ${issueNumber} was denied before it could start: ${redactSecrets(
+          String(error?.message ?? error),
+        )}`,
+        { runId: run.runId, attemptId: attempt.attemptId },
+      );
+    }
+    // The handshake acked: the runtime is ready and the dispatch window
+    // is open, so the record carries the dispatch mark from here on —
+    // "no dispatch occurred" can never be proven for this attempt again,
+    // and no later outcome (even one claiming a start denial) can open
+    // the one coordinator retry onto a second execution (ticket #239).
+    // The mark travels under the start's lease, renewed — or re-armed
+    // when it lapsed during the handshake and nobody else holds it.
+    const session = liveSessions.get(attempt.attemptId)?.session;
+    try {
+      store.markAttemptDispatched({
+        attemptId: attempt.attemptId,
+        evidence: {
+          signal: "session-started",
+          ...(typeof session?.sessionId === "string" ? { sessionId: session.sessionId } : {}),
+        },
+        leaseToken: holdLease({ runId: run.runId, attemptId: attempt.attemptId }, token),
+      });
+    } catch (error) {
+      // No session runs without its dispatch mark (ticket #237 review): the
+      // acked runtime is disposed and leaves the control map, and the loss
+      // is recorded the lease-free way — the dispatch window may have
+      // opened, so the outcome is Unknown, never a start denial.
+      await disposeLive(attempt.attemptId);
+      try {
+        store.recordProcessDeath({ runId: run.runId, attemptId: attempt.attemptId, exit: null });
+        wakeAfterStore(run.runId);
+      } catch {
+        // The record moved on under another writer; the typed error stands.
+      }
+      throw clarificationError(
+        "dispatch_unrecorded",
+        `the managed session for issue ${issueNumber} started, but its dispatch mark could not be recorded (${
+          error?.code ?? "unknown"
+        }) — the session was stopped and the attempt is Unknown until reconciled`,
+        { runId: run.runId, attemptId: attempt.attemptId },
+      );
+    }
+    pumpAttempt({ runId: run.runId, attemptId: attempt.attemptId, session });
+    publishEvent({
+      runId: run.runId,
+      event: {
+        type: "lifecycle",
+        scope: "attempt",
+        id: attempt.attemptId,
+        state: "active",
+        at: clock(),
+      },
+    });
+  };
+
   // The evidence pump: the runtime's frames become durable conversation
   // events as they land — ledger first, viewer fan-out second, so what a
   // live viewer sees is always already evidence. One pump per live attempt,
@@ -948,23 +1184,66 @@ export const createClarificationCoordinator = ({
   // stream ends. A session whose port cannot stream records everything
   // else; the runtime's own history still reads back. A pump that dies with
   // its stream records that too — the silence would claim a live runtime.
+  // Secret-bearing output stops the run (ticket #238, ADR 0016): the live
+  // handle leaves the control map first, so no command can reach the
+  // runtime again; the runtime is disposed; then the stop's evidence — the
+  // detected kinds and the frame's cursor, never the bytes — commits as the
+  // attempt's terminal outcome and the run parks awaiting-human for the
+  // human's decision (rotate, discard, or start fresh).
+  const stopOnSecret = async ({ runId, attemptId, cursor, kinds }) => {
+    const live = liveSessions.get(attemptId);
+    liveSessions.delete(attemptId);
+    // Disposal begins at once (the adapter ends the session and kills the
+    // child synchronously); its cleanup is awaited after the record.
+    let disposed;
+    try {
+      disposed = live?.session.dispose?.();
+    } catch {
+      // A runtime that cannot be disposed is already out of this process's
+      // control map; the record below still stops the run.
+    }
+    const leaseToken = holdLease({ runId, attemptId }, live?.leaseToken);
+    store.recordAttemptOutcome({
+      attemptId,
+      to: "terminal",
+      result: { kind: "secret-detected", kinds, cursor, detectedAt: clock() },
+      event: { kind: "attempt.secret-detected", data: { attemptId, kinds, cursor } },
+      leaseToken,
+    });
+    store.updateRunState({ runId, to: "awaiting-human", leaseToken });
+    publishEvent({
+      runId,
+      event: { type: "lifecycle", scope: "attempt", id: attemptId, state: "terminal", at: clock() },
+    });
+    await Promise.resolve(disposed).catch(() => {});
+  };
+
   const pumpAttempt = ({ runId, attemptId, session }) => {
     if (typeof session?.subscribe !== "function") return;
     void (async () => {
       try {
         for await (const frame of session.subscribe(0)) {
           if (frame === null || typeof frame !== "object" || Array.isArray(frame)) continue;
+          const kinds = secretKindsIn(frame.event);
           publishEvent({
             runId,
             event: {
               type: "conversation",
               attemptId,
-              session: { cursor: frame.cursor, envelope: frame.envelope, event: frame.event },
+              session: {
+                cursor: frame.cursor,
+                envelope: frame.envelope,
+                event: kinds.length > 0 ? redactSecrets(frame.event) : frame.event,
+              },
             },
           });
+          if (kinds.length > 0) {
+            await stopOnSecret({ runId, attemptId, cursor: frame.cursor, kinds });
+            return;
+          }
         }
       } catch (error) {
-        publishEvent({
+        publishFailureEvidence({
           runId,
           event: {
             type: "operational",
@@ -977,7 +1256,7 @@ export const createClarificationCoordinator = ({
     })();
   };
 
-  return {
+  const api = {
     publish: publishEvent,
 
     // Recovery (ticket #236, ADR 0020): process death ends in an explicit
@@ -1127,6 +1406,7 @@ export const createClarificationCoordinator = ({
           throw error;
         }
         const token = lease.lease.token;
+        heldLeases.set(run.runId, token);
         if (created)
           store.appendEvent({
             runId: run.runId,
@@ -1154,74 +1434,7 @@ export const createClarificationCoordinator = ({
           leaseToken: token,
         });
 
-        // The one side effect, behind durable intent: the managed session
-        // dispatch. A denial here is known failure evidence, recorded under
-        // the live lease — the attempt closes terminal, the run parks
-        // awaiting-human, and the Developer's decision is the only next
-        // move. A fencing refusal while recording that evidence surfaces
-        // typed: a stale writer records nothing quietly.
-        try {
-          const session = await sessions.start({
-            runId: run.runId,
-            attemptId: attempt.attemptId,
-            issueNumber,
-          });
-          // The one live handle: commands drive this session, fenced by the
-          // lease the start holds — and its frames pump into the ledger.
-          liveSessions.set(attempt.attemptId, { session, leaseToken: token });
-          pumpAttempt({ runId: run.runId, attemptId: attempt.attemptId, session });
-        } catch (error) {
-          const code = error?.code ?? "unknown";
-          store.recordAttemptResult({
-            attemptId: attempt.attemptId,
-            result: {
-              kind: "start-denied",
-              code,
-              message: String(error?.message ?? error),
-              deniedAt: clock(),
-            },
-            leaseToken: token,
-          });
-          store.appendEvent({
-            runId: run.runId,
-            kind: "attempt.start-denied",
-            data: { attemptId: attempt.attemptId, code },
-            leaseToken: token,
-          });
-          store.updateAttemptState({
-            attemptId: attempt.attemptId,
-            to: "terminal",
-            leaseToken: token,
-          });
-          store.updateRunState({ runId: run.runId, to: "awaiting-human", leaseToken: token });
-          publishEvent({
-            runId: run.runId,
-            event: {
-              type: "lifecycle",
-              scope: "attempt",
-              id: attempt.attemptId,
-              state: "terminal",
-              at: clock(),
-            },
-          });
-          throw clarificationError(
-            "start_denied",
-            `the managed session for issue ${issueNumber} was denied before it could start: ${
-              error?.message ?? error
-            }`,
-            { runId: run.runId, attemptId: attempt.attemptId },
-          );
-        }
-        publishEvent({
-          runId: run.runId,
-          event: {
-            type: "lifecycle",
-            scope: "attempt",
-            id: attempt.attemptId,
-            state: "active",
-            at: clock(),
-          },
-        });
+        await dispatchSession({ run, attempt, issueNumber, token });
         return { started: true, run: projectRun(run), attempt: projectAttempt(attempt) };
       });
     },
@@ -1493,6 +1706,7 @@ export const createClarificationCoordinator = ({
     sendPrompt({ runId, attemptId, requestId, text }) {
       if (typeof text !== "string" || text.trim() === "")
         throw clarificationError("invalid_request", "a prompt needs a non-empty text");
+      refuseSecretBearing(text, "the conversation input");
       return dispatchTurnCommand(
         { runId, attemptId, requestId, kind: "conversation.prompt", data: { text } },
         (session) => session.sendPrompt(text),
@@ -1504,6 +1718,7 @@ export const createClarificationCoordinator = ({
     steer({ runId, attemptId, requestId, text }) {
       if (typeof text !== "string" || text.trim() === "")
         throw clarificationError("invalid_request", "a steer needs a non-empty text");
+      refuseSecretBearing(text, "the conversation input");
       return dispatchTurnCommand(
         { runId, attemptId, requestId, kind: "conversation.steer", data: { text } },
         (session) => session.steer(text),
@@ -1514,6 +1729,7 @@ export const createClarificationCoordinator = ({
     queueFollowUp({ runId, attemptId, requestId, text }) {
       if (typeof text !== "string" || text.trim() === "")
         throw clarificationError("invalid_request", "a follow-up needs a non-empty text");
+      refuseSecretBearing(text, "the conversation input");
       return dispatchTurnCommand(
         { runId, attemptId, requestId, kind: "conversation.follow-up-queued", data: { text } },
         (session) => session.queueFollowUp(text),
@@ -1579,6 +1795,7 @@ export const createClarificationCoordinator = ({
         throw clarificationError("invalid_request", "a dialog answer names the dialog");
       if (value === undefined)
         throw clarificationError("invalid_request", "a dialog answer carries a value");
+      refuseSecretBearing(value, "the dialog answer");
       return dispatchRecordedCommand(
         {
           runId,
@@ -1713,5 +1930,301 @@ export const createClarificationCoordinator = ({
         },
       };
     },
+
+    // --- Inspection (spec #221, ticket #237, Factory 11): the display
+    // projection's reads and the action matrix's run-level acts. ---
+
+    // One row per issue — its latest run — for the In flight run-status
+    // chips: the lifecycle word and the identities, nothing to act on.
+    listRunStates() {
+      const latest = new Map();
+      for (const run of store.listRuns()) {
+        const seen = latest.get(run.issueId);
+        if (seen === undefined || seen.createdAt < run.createdAt) latest.set(run.issueId, run);
+      }
+      return {
+        runs: [...latest.values()].map((run) => ({
+          runId: run.runId,
+          issueId: run.issueId,
+          state: run.state,
+          updatedAt: run.updatedAt,
+        })),
+      };
+    },
+
+    // The status axes the run section does not carry, each in its owner's
+    // vocabulary: the lease's ownership and expiry arithmetic (never the
+    // token), the durable usage budget with its honest totals, the
+    // escalation records, and readiness as five independent axes over a
+    // fresh tracker read — a read that fails withholds the tracker axis as
+    // unknown instead of guessing. An open read, like every read.
+    async inspection({ runId, posture = null }) {
+      if (typeof runId !== "string" || runId === "")
+        throw clarificationError("invalid_request", "an inspection read names a run id");
+      const run = store.getRun(runId);
+      if (!run)
+        throw clarificationError(
+          "run_not_found",
+          `no clarification run "${runId}" is visible to this host repo`,
+        );
+      const lease = store.getLease(runId);
+      const { lines } = store.usageBudgetFor(runId);
+      const escalations = store.listEscalations(runId);
+
+      const attempts = store.listAttempts(runId);
+      const latest = attempts.at(-1) ?? null;
+      const saved = latest === null ? null : store.getDraft(latest.attemptId);
+      const draft = saved?.draft ? { gaps: briefCompletenessFor(saved.draft).gaps } : null;
+
+      let collected = null;
+      const issueNumber = Number(run.issueId);
+      if (Number.isInteger(issueNumber) && issueNumber > 0) {
+        try {
+          collected = await tracker.readContext({ issueNumber });
+        } catch (error) {
+          collected = {
+            failed: true,
+            warnings: [
+              `the tracker read failed (${error instanceof Error ? error.message : "read failed"}); readiness is withheld`,
+            ],
+          };
+        }
+      } else {
+        collected = {
+          failed: true,
+          warnings: [`the run's issue id "${run.issueId}" is not an issue number`],
+        };
+      }
+      // The data-flow manifest the Developer approved is the attempt's own
+      // durable intent: the declared provider and data destination.
+      const intent = latest?.dispatchIntent ?? null;
+      const manifest =
+        typeof intent?.provider === "string" && typeof intent?.dataDestination === "string"
+          ? { provider: intent.provider, dataDestination: intent.dataDestination }
+          : null;
+
+      return {
+        runId,
+        lease,
+        usage: { lines, totals: summarizeUsageBudget(lines) },
+        escalations,
+        readiness: readinessFor({ collected, posture, draft, manifest }),
+      };
+    },
+
+    // The action matrix's run-level acts. Each carries a client request id:
+    // a replay answers `done: false` from the durable record and acts
+    // nothing twice.
+    async runAction({ runId, requestId, action }) {
+      if (typeof runId !== "string" || runId === "")
+        throw clarificationError("invalid_request", "a run action names a run id");
+      if (typeof requestId !== "string" || requestId.trim() === "")
+        throw clarificationError("invalid_request", "a run action carries a request id");
+      const run = store.getRun(runId);
+      if (!run)
+        throw clarificationError(
+          "run_not_found",
+          `no clarification run "${runId}" is visible to this host repo`,
+        );
+      const replayed = (kind) =>
+        store
+          .readEvents({ runId, afterCursor: 0 })
+          .events.some(
+            ({ event }) =>
+              event.type === "operational" &&
+              event.kind === kind &&
+              event.data?.requestId === requestId,
+          );
+      const answer = (kind, done, extra = {}) => ({
+        kind,
+        done,
+        requestId,
+        run: store.getRun(runId),
+        ...extra,
+      });
+
+      switch (action?.kind) {
+        // Two-step confirm: the attempt stops, classified a cancellation
+        // through the failure policy — terminal, the Developer's manual
+        // fresh attempt the only continuation. A live session is disposed
+        // first; the run itself stays as the policy leaves it.
+        case "cancel-attempt": {
+          if (replayed("attempt.cancelled")) return answer("cancel-attempt", false);
+          const attempt = store.getAttempt(action.attemptId);
+          if (attempt === null || attempt.runId !== runId)
+            throw clarificationError(
+              "attempt_not_found",
+              `no attempt "${action.attemptId}" is visible on run "${runId}" in this host repo`,
+            );
+          if (attempt.state !== "active" && attempt.state !== "awaiting-human")
+            throw clarificationError(
+              "attempt_not_active",
+              `attempt "${attempt.attemptId}" is ${attempt.state} — only an active or parked attempt can be cancelled; uncertainty is reconciled, never cancelled away`,
+            );
+          refuseUncertainPublication(runId);
+          const live = liveSessions.get(attempt.attemptId);
+          if (live !== undefined) heldLeases.set(runId, live.leaseToken);
+          await disposeLive(attempt.attemptId);
+          // An active attempt's outcome IS the cancellation; a parked one
+          // already carries its outcome evidence, which a cancel never
+          // rewrites — it only closes the attempt.
+          if (attempt.state === "active")
+            api.recordOutcome({
+              runId,
+              attemptId: attempt.attemptId,
+              outcome: { kind: "cancelled" },
+            });
+          const leaseToken = ensureLease({ runId, attemptId: attempt.attemptId });
+          if (attempt.state === "awaiting-human")
+            store.updateAttemptState({ attemptId: attempt.attemptId, to: "terminal", leaseToken });
+          recordEvent(runId, {
+            kind: "attempt.cancelled",
+            data: { attemptId: attempt.attemptId, requestId },
+            leaseToken,
+          });
+          publishEvent({
+            runId,
+            event: {
+              type: "lifecycle",
+              scope: "attempt",
+              id: attempt.attemptId,
+              state: "terminal",
+              at: clock(),
+            },
+          });
+          return answer("cancel-attempt", true, { attemptId: attempt.attemptId });
+        }
+
+        // Two-step confirm: the Developer's decision to keep the run's
+        // evidence for inspection, recorded. Nothing moves and nothing is
+        // deleted — the record says the evidence was kept on purpose.
+        case "retain-evidence": {
+          if (replayed("run.evidence-retained")) return answer("retain-evidence", false);
+          if (!["awaiting-human", "unknown", "quarantined"].includes(run.state))
+            throw clarificationError(
+              "illegal_transition",
+              `a run in state "${run.state}" has no retained evidence to decide on`,
+            );
+          const leaseToken = ensureLease({ runId, attemptId: undefined });
+          recordEvent(runId, {
+            kind: "run.evidence-retained",
+            data: { requestId, state: run.state },
+            leaseToken,
+          });
+          return answer("retain-evidence", true);
+        }
+
+        // The single destructive act: typed confirmation echoing the run
+        // id, the store's one commit. The ledger it purges cannot carry the
+        // replay, so a discarded run answers a replay from its stamp.
+        case "discard-evidence": {
+          if (run.discardedAt) return answer("discard-evidence", false);
+          store.discardRunEvidence({ runId, confirmation: action.confirmation });
+          // A discarded run's ledger takes no events: any runtime still
+          // driven for it stops now, instead of spending until its pump dies.
+          for (const { attemptId } of store.listAttempts(runId)) await disposeLive(attemptId);
+          heldLeases.delete(runId);
+          wakeAfterStore(runId);
+          return answer("discard-evidence", true);
+        }
+
+        // Fresh approval: the same explicit act as a start, on the
+        // re-rendered manifest's pinned revision — a new attempt identity,
+        // a parked attempt superseded, the managed session dispatched
+        // behind the durable intent. Only a run parked for the human (or
+        // active with nothing live) retries; uncertainty reconciles first.
+        case "retry":
+          // One retry at a time per issue, like a start: racing retries
+          // serialize, and the loser re-reads the record the winner wrote —
+          // a typed busy rejection, never a second dispatch.
+          return serializedFor(run.issueId, async () => {
+            const fresh = store.getRun(runId);
+            const prior = store.listAttempts(runId).find((a) => a.requestId === requestId);
+            if (prior) return answer("retry", false, { attemptId: prior.attemptId });
+            if (fresh.state !== "awaiting-human" && fresh.state !== "active")
+              throw clarificationError(
+                "run_not_active",
+                `run "${runId}" is ${fresh.state} — reconcile it before a fresh attempt`,
+              );
+            const attempts = store.listAttempts(runId);
+            if (attempts.some((a) => !["terminal", "awaiting-human"].includes(a.state)))
+              throw clarificationError(
+                "busy",
+                `run "${runId}" has an attempt in flight — stop or cancel it before a fresh attempt`,
+              );
+            const issueNumber = Number(fresh.issueId);
+            if (!Number.isInteger(issueNumber) || issueNumber <= 0)
+              throw clarificationError(
+                "invalid_request",
+                `the run's issue id "${fresh.issueId}" is not an issue number`,
+              );
+            const revision = action.revision;
+            if (
+              !revision ||
+              typeof revision.updatedAt !== "string" ||
+              typeof revision.bodyHash !== "string"
+            )
+              throw clarificationError(
+                "invalid_request",
+                "a retry presents the re-rendered manifest's pinned issue revision",
+              );
+            const collected = await requireCollectedContext(issueNumber);
+            if (!revisionMatches(revision, collected.revision))
+              throw clarificationError(
+                "manifest_stale",
+                `issue ${issueNumber} moved past the revision the manifest showed — a fresh manifest is required before retrying`,
+              );
+            refuseUncertainPublication(runId);
+            const token = ensureLease({ runId, attemptId: undefined });
+            for (const parked of attempts.filter((a) => a.state === "awaiting-human")) {
+              // A superseded attempt's runtime stops with it: one live
+              // execution per run, never an orphan still pumping and spending.
+              await disposeLive(parked.attemptId);
+              store.updateAttemptState({
+                attemptId: parked.attemptId,
+                to: "terminal",
+                leaseToken: token,
+              });
+              store.appendEvent({
+                runId,
+                kind: "attempt.superseded",
+                data: { attemptId: parked.attemptId, requestId },
+                leaseToken: token,
+              });
+            }
+            if (fresh.state === "awaiting-human")
+              store.updateRunState({ runId, to: "active", leaseToken: token });
+            const { attempt } = store.createAttempt({
+              runId,
+              requestId,
+              intent: {
+                kind: "clarification-start",
+                issueNumber,
+                revision,
+                provider,
+                dataDestination,
+              },
+              origin: "manual",
+              leaseToken: token,
+            });
+            store.appendEvent({
+              runId,
+              kind: "attempt.recorded",
+              data: { attemptId: attempt.attemptId, issueNumber, revision, requestId, retry: true },
+              leaseToken: token,
+            });
+            wakeAfterStore(runId);
+            await dispatchSession({ run: store.getRun(runId), attempt, issueNumber, token });
+            return answer("retry", true, { attemptId: attempt.attemptId });
+          });
+
+        default:
+          throw clarificationError(
+            "invalid_request",
+            `"${String(action?.kind)}" is not a run action`,
+          );
+      }
+    },
   };
+  return api;
 };

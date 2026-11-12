@@ -164,11 +164,11 @@ describe("the clarification conversation surface", () => {
     expect(container.textContent).toContain("provider · openai-codex-oauth");
     expect(container.textContent).toContain("destination · https://api.openai.com");
 
-    // The timeline references the conversation without repeating it: the
-    // run's operational frames appear, the conversation's do not.
-    const timeline = container.querySelector("[data-slot='clarification-timeline']");
-    expect(timeline?.textContent).toContain("run · started");
-    expect(timeline?.textContent).not.toContain("first question");
+    // The run's operational timeline lives in the run inspection (ticket
+    // #237): the conversation surface neither renders it nor any run
+    // lifecycle word, and the run's operational frames stay off the stream.
+    expect(container.querySelector("[data-slot='clarification-timeline']")).toBeNull();
+    expect(stream?.textContent).not.toContain("run · started");
 
     // One live stream subscription, on the newest attempt.
     strictEqual(FakeEventSource.instances.length, 1);

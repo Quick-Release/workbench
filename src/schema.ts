@@ -28,7 +28,11 @@ import {
   clarificationPostures,
   clarificationPublicationFailureReasons,
   clarificationPublicationResults,
+  clarificationReadinessAxes,
+  clarificationReadinessVerdicts,
+  clarificationRunActionKinds,
   clarificationTaskProfiles,
+  clarificationUsageLineKinds,
   clientTicketKinds,
   decisionTicketKinds,
   startDenialReasons,
@@ -1379,6 +1383,142 @@ export const parseClarificationPublicationResult: (
   ClarificationPublicationResultSchema,
   { onExcessProperty: "error" },
 );
+
+// The inspection read (spec #221, ticket #237, Factory 11): the run's
+// status axes the run section does not already carry — the controller
+// lease's ownership and expiry arithmetic (never the token, never a
+// liveness claim), the durable usage budget with its line kinds kept
+// distinct, the escalation records, and readiness as its five independent
+// axes. Each axis travels in its owner's own vocabulary; nothing here
+// merges them into one word.
+export const ClarificationLeaseViewSchema = Schema.Struct({
+  owner: Schema.String,
+  generation: Schema.Number,
+  acquiredAt: Schema.String,
+  expiresAt: Schema.String,
+  expired: Schema.Boolean,
+});
+
+export const ClarificationUsageLineViewSchema = Schema.Struct({
+  lineId: Schema.String,
+  attemptId: Schema.optional(Schema.String),
+  kind: Schema.Literals(clarificationUsageLineKinds),
+  unit: Schema.String,
+  value: Schema.NullOr(Schema.Number),
+  detail: Schema.optional(Schema.Unknown),
+  createdAt: Schema.String,
+});
+
+export const ClarificationUsageBudgetViewSchema = Schema.Struct({
+  lines: Schema.Array(ClarificationUsageLineViewSchema),
+  totals: Schema.Struct({
+    reported: Schema.Record(Schema.String, Schema.Number),
+    estimated: Schema.Record(Schema.String, Schema.Number),
+    unknownLines: Schema.Number,
+  }),
+});
+
+export const ClarificationEscalationViewSchema = Schema.Struct({
+  runId: Schema.optional(Schema.String),
+  attemptId: Schema.String,
+  signature: Schema.String,
+  repeats: Schema.Number,
+  classification: Schema.String,
+  kind: Schema.String,
+  reason: Schema.optional(Schema.String),
+  remainingAuthority: Schema.Array(Schema.String),
+  decision: Schema.String,
+  at: Schema.String,
+});
+
+export const ClarificationReadinessViewSchema = Schema.Struct({
+  axes: Schema.Array(
+    Schema.Struct({
+      axis: Schema.Literals(clarificationReadinessAxes),
+      verdict: Schema.Literals(clarificationReadinessVerdicts),
+      reasons: Schema.Array(Schema.String),
+    }),
+  ),
+});
+
+export const ClarificationInspectionResultSchema = Schema.Struct({
+  runId: Schema.String,
+  lease: Schema.NullOr(ClarificationLeaseViewSchema),
+  usage: ClarificationUsageBudgetViewSchema,
+  escalations: Schema.Array(ClarificationEscalationViewSchema),
+  readiness: ClarificationReadinessViewSchema,
+});
+
+export type ClarificationInspectionResult = Schema.Schema.Type<
+  typeof ClarificationInspectionResultSchema
+>;
+
+export const parseClarificationInspectionResult: (input: unknown) => ClarificationInspectionResult =
+  Schema.decodeUnknownSync(ClarificationInspectionResultSchema, { onExcessProperty: "error" });
+
+// The run list (ticket #237): one row per issue's latest run, the display
+// projection the In flight run-status chips read — the lifecycle word and
+// nothing a chip could act on.
+export const ClarificationRunListResultSchema = Schema.Struct({
+  runs: Schema.Array(
+    Schema.Struct({
+      runId: Schema.String,
+      issueId: Schema.String,
+      state: Schema.Literals(clarificationLifecycleStates),
+      updatedAt: Schema.String,
+    }),
+  ),
+});
+
+export type ClarificationRunListResult = Schema.Schema.Type<
+  typeof ClarificationRunListResultSchema
+>;
+
+export const parseClarificationRunListResult: (input: unknown) => ClarificationRunListResult =
+  Schema.decodeUnknownSync(ClarificationRunListResultSchema, { onExcessProperty: "error" });
+
+// The run actions (ticket #237): the action matrix's run-level acts, a
+// kind-discriminated union. Discard carries its typed confirmation — the
+// run id, echoed — and retry presents the re-rendered manifest's pinned
+// revision, exactly like a start: a fresh approval, never a replay.
+export const ClarificationRunActionSchema = Schema.Union([
+  Schema.Struct({ kind: Schema.Literal("cancel-attempt"), attemptId: Schema.NonEmptyString }),
+  Schema.Struct({ kind: Schema.Literal("retain-evidence") }),
+  Schema.Struct({ kind: Schema.Literal("discard-evidence"), confirmation: Schema.String }),
+  Schema.Struct({ kind: Schema.Literal("retry"), revision: ClarificationRevisionSchema }),
+]);
+
+export type ClarificationRunAction = Schema.Schema.Type<typeof ClarificationRunActionSchema>;
+
+export const ClarificationRunActionRequestSchema = Schema.Struct({
+  requestId: Schema.NonEmptyString,
+  action: ClarificationRunActionSchema,
+});
+
+export type ClarificationRunActionRequest = Schema.Schema.Type<
+  typeof ClarificationRunActionRequestSchema
+>;
+
+export const parseClarificationRunActionRequest: (input: unknown) => ClarificationRunActionRequest =
+  Schema.decodeUnknownSync(ClarificationRunActionRequestSchema, { onExcessProperty: "error" });
+
+// An action's answer: whether this request performed the act (a replayed
+// request id answers `done: false` from the durable record), the run as it
+// now stands, and — for a retry — the fresh attempt.
+export const ClarificationRunActionResultSchema = Schema.Struct({
+  kind: Schema.Literals(clarificationRunActionKinds),
+  done: Schema.Boolean,
+  requestId: Schema.String,
+  run: ClarificationRunSnapshotSchema,
+  attemptId: Schema.optional(Schema.String),
+});
+
+export type ClarificationRunActionResult = Schema.Schema.Type<
+  typeof ClarificationRunActionResultSchema
+>;
+
+export const parseClarificationRunActionResult: (input: unknown) => ClarificationRunActionResult =
+  Schema.decodeUnknownSync(ClarificationRunActionResultSchema, { onExcessProperty: "error" });
 
 // The run's event stream (epic #20, ticket #26; issue #40): the runner's
 // typed events as the UI consumes them — a started echo of the request (the
