@@ -233,6 +233,21 @@ export const createClarificationCoordinator = ({
     return envelope;
   };
 
+  // The last-resort evidence write of an asynchronous path — a lost ack, a
+  // pump whose stream died — where no caller is waiting to receive a
+  // rejection. When the ledger itself refuses the failure record (a disk
+  // gone full, ticket #239), there is nothing durable to say: the event is
+  // not published (it never committed, so no viewer is served it), and the
+  // refusal must not escape as an unhandled rejection that takes the
+  // controller down with every other run it holds.
+  const publishFailureEvidence = (args) => {
+    try {
+      publishEvent(args);
+    } catch {
+      // Nothing committed, nothing is claimed.
+    }
+  };
+
   // The fenced append with the same viewer contract: command evidence is
   // durable first, then live viewers learn about it — a fenced write never
   // leaves a connected viewer waiting for an unrelated publish.
@@ -330,7 +345,7 @@ export const createClarificationCoordinator = ({
       try {
         const result = sessionCall(session);
         result?.accepted?.catch((error) => {
-          publishEvent({
+          publishFailureEvidence({
             runId,
             event: {
               type: "operational",
@@ -964,7 +979,7 @@ export const createClarificationCoordinator = ({
           });
         }
       } catch (error) {
-        publishEvent({
+        publishFailureEvidence({
           runId,
           event: {
             type: "operational",

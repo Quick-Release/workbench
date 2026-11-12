@@ -1158,6 +1158,36 @@ describe("Factory 07 injection: storage failures", () => {
       strictEqual(failed.event.data.code, "ERR_SQLITE_ERROR");
     });
   });
+
+  it("a ledger that refuses everything leaves the evidence paths silent, never crashing", async () => {
+    await withRig(async ({ controller, sessions }) => {
+      const { coordinator, faults, store } = controller();
+      const { run, attempt } = await coordinator.start(startArgs("start-1"));
+      const [session] = sessions.sessions;
+      coordinator.sendPrompt({
+        runId: run.runId,
+        attemptId: attempt.attemptId,
+        requestId: "prompt-1",
+        text: "what is the scope?",
+      });
+      const before = ledger(store, run.runId);
+      const unhandled = await collectingUnhandled(async () => {
+        // The disk is gone for every append: the frame, the pump's failure
+        // record, and the lost ack's failure record all refuse.
+        faults.arm("appendEvents");
+        session.emit({ type: "message_update", text: "lost?" });
+        session.prompts[0].accepted.reject(
+          Object.assign(new Error("no ack"), { code: "ack_timeout" }),
+        );
+        session.prompts[0].settled.reject(new Error("never settled"));
+        await settle();
+      });
+      deepStrictEqual(unhandled, []);
+      // Nothing undurable was presented as evidence, and nothing closed.
+      deepStrictEqual(ledger(store, run.runId), before);
+      strictEqual(store.getAttempt(attempt.attemptId).state, "active");
+    });
+  });
 });
 
 describe("Factory 07 injection: cursor gaps", () => {
